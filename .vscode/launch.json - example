@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Microcontroller",
+            "type": "cortex-debug",
+            "request": "attach",
+            
+            "executable": "./target/thumbv7em-none-eabihf/debug/synth-phone-e-v2-rust",
+            "gdbPath": "path to gdb",
+
+            "device": "stm32h750v", 
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32h7x.cfg"
+            ],
+            "preAttachCommands": [
+                "target remote :1337"
+            ],
+            "servertype": "external",
+            "gdbTarget": "localhost:1337",
+            "cwd": "${workspaceRoot}",
+        }
+    ]
+}

@@ -6,6 +6,7 @@ enabled = true
 
 [default.gdb]
 enabled = true
+gdb_connection_string = "localhost:1337"
 
-[default.reset]
-halt_afterwards = true
+# [default.reset]
+# halt_afterwards = true

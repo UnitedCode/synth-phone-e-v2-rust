@@ -5,12 +5,12 @@ use cortex_m::asm::nop;
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32h7xx_hal as hal;
-// use rtt_target::{rtt_init_print, rprintln};
+use rtt_target::{rtt_init_print, rprintln};
 
 #[entry]
 fn main() -> !{
-    // rtt_init_print!();
-    // rprintln!("Hello World");
+    rtt_init_print!();
+    rprintln!("Hello World");
     let mut x: usize = 0;
     loop {
         x += 1;
