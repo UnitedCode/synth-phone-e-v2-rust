@@ -6,11 +6,22 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+cfg-if = "1.0.0"
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-integration"] }
 cortex-m-rt = "0.7.3"
+lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+log = "0.4.21"
 panic-halt = "0.2.0"
+panic-itm = "0.4.2"
 rtt-target = "0.5.0"
 stm32h7xx-hal = { version = "0.16.0", features = ["stm32h750v","rt","rm0433"] }
+
+
+[profile.dev]
+codegen-units = 1 # better optimizations
+debug = true # symbols are nice and they don't increase the size in flash
+incremental = false
 
 [profile.release]
 codegen-units = 1
