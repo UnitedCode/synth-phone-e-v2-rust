@@ -1,6 +1,6 @@
 #![no_std]
 // Declare modules
-// pub mod config;
+pub mod config;
 // pub mod audio;
 pub mod hardware;
 pub mod utils;

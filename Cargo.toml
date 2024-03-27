@@ -1,5 +1,5 @@
 [package]
-name = "synth-phone-e-v2-rust"
+name = "synth_phone_e_v2_rust"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,8 +9,9 @@ edition = "2021"
 cfg-if = "1.0.0"
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-integration"] }
-cortex-m-rt = "0.7.3"
+cortex-m-rt = "0.6.15"
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+libdaisy = "0.1.0"
 log = "0.4.21"
 panic-halt = "0.2.0"
 panic-itm = "0.4.2"
