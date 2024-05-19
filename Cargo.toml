@@ -1,5 +1,5 @@
 [package]
-name = "synth-phone-e-v2-rust"
+name = "synth_phone_e_v2_rust"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,21 +7,29 @@ edition = "2021"
 
 [dependencies]
 cfg-if = "1.0.0"
+cortex-m-rtic = "1.0.0"
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
-cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-integration"] }
-cortex-m-rt = "0.7.3"
-lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+cortex-m-rt = "0.7.0"
+debouncr = "0.2.2"
 log = "0.4.21"
 panic-halt = "0.2.0"
-panic-itm = "0.4.2"
+stm32h7xx-hal = { version = "0.16.0", features = ["stm32h750v","rt","fmc", "xspi", "sdmmc", "sdmmc-fatfs", "usb_hs"] }
+stm32-fmc = "0.3.0"
 rtt-target = "0.5.0"
-stm32h7xx-hal = { version = "0.16.0", features = ["stm32h750v","rt","rm0433"] }
+lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+panic-itm = "0.4.2"
+cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-integration"] }
+
+libdaisy = {git = "https://github.com/mtthw-meyer/libdaisy-rust.git", commit= "5a8520e09cd7367fd7e607c83fec22efd90a9854"}
+
+
 
 
 [profile.dev]
 codegen-units = 1 # better optimizations
 debug = true # symbols are nice and they don't increase the size in flash
 incremental = false
+opt-level = "s" #
 
 [profile.release]
 codegen-units = 1
