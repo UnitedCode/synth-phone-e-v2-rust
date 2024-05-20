@@ -36,3 +36,8 @@ codegen-units = 1
 opt-level = "s"
 lto = true
 debug = true
+
+[features]
+default = ["daisy_seed"]
+daisy_seed = []
+qemu = []

@@ -96,7 +96,11 @@ To start a debug session, you need a GDB server running for your specific microc
 
 You're now ready to debug your program using GDB commands!
 
+## QEMU 
+QEMU is a way to test the program without having a physical device. You must have already gone through the prerequisites before starting this part. For complete instructions go [here](https://docs.rust-embedded.org/book/intro/install.html).
+
 ## Further Learning
 
 - The [Embedded Rust Book](https://docs.rust-embedded.org/book/) is an excellent resource for learning more about embedded development with Rust.
 - Check out [The Discovery Book](https://docs.rust-embedded.org/discovery/) for hands-on projects aimed at beginners.
+- Learn [RTIC](https://rtic.rs/2/book/en/starting_a_project.html)

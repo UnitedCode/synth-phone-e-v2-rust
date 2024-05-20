@@ -18,6 +18,8 @@
     "Monotonics",
     "rtic",
     "sinf",
-    "SYSCFG"
+    "SYSCFG",
+    "binutils",
+    "rustup"
 ],
 }
