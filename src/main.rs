@@ -57,11 +57,43 @@ mod app {
         let buffer = ctx.local.buffer;
 
         if audio.get_stereo(buffer) {
+            process_audio_buffer(buffer);
+
             for (left, right) in buffer {
                 audio.push_stereo((*left, *right)).unwrap();
             }
         } else {
             rprintln!("Error reading data!");
         }
+    }
+
+    fn process_audio_buffer(buffer: &mut audio::AudioBuffer){
+        for (left, right) in buffer.iter_mut() {
+            let new_left = auto_tune(*left);
+            let new_right = auto_tune(*right);
+            *left = new_left;
+            *right = new_right;
+        }
+    }
+
+    fn auto_tune(sample: f32) -> f32 {
+        let pitch = detect_pitch(sample);
+        let corrected_pitch = correct_pitch(pitch);
+        apply_pitch_correction(sample, corrected_pitch)
+    }
+
+    fn detect_pitch(sample: f32) -> f32{
+        // TODO detect pitch
+        sample
+    }
+
+    fn correct_pitch(pitch: f32) -> f32{
+        // TODO correct pitch
+        pitch
+    }
+
+    fn apply_pitch_correction(sample: f32, corrected_pitch: f32) -> f32 {
+        // TODO apply corrected pitch
+        corrected_pitch
     }
 }
