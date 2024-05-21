@@ -20,6 +20,7 @@ mod app {
     struct Local {
         audio: audio::Audio,
         buffer: audio::AudioBuffer,
+        pitch_buffer: [f32; audio::BLOCK_SIZE_MAX],
     }
 
     #[init]
@@ -28,6 +29,7 @@ mod app {
         rtt_init_print!();
         let system = system::System::init(ctx.core, ctx.device);
         let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
+        let pitch_buffer = [0.0; audio::BLOCK_SIZE_MAX];
         rprintln!("Program Started");
 
 
@@ -36,6 +38,7 @@ mod app {
             Local {
                 audio: system.audio,
                 buffer,
+                pitch_buffer 
             },
             init::Monotonics(),
         )
@@ -51,49 +54,57 @@ mod app {
     }
 
     // Interrupt handler for audio
-    #[task(binds = DMA1_STR1, local = [audio, buffer], priority = 8)]
+    #[task(binds = DMA1_STR1, local = [audio, buffer, pitch_buffer], priority = 8)]
     fn audio_handler(ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
         let buffer = ctx.local.buffer;
+        let pitch_buffer = ctx.local.pitch_buffer;
 
         if audio.get_stereo(buffer) {
-            process_audio_buffer(buffer);
-
-            for (left, right) in buffer {
+            // Extract audio samples for processing
+            for (left, right) in buffer.iter_mut() {
+                let processed_sample = process_sample(*left, *right, pitch_buffer);
+                *left = processed_sample.0;
+                *right = processed_sample.1;
+            }
+            // Push processed audio back to the audio buffer
+            for (left, right) in buffer.iter() {
                 audio.push_stereo((*left, *right)).unwrap();
             }
         } else {
             rprintln!("Error reading data!");
         }
     }
+    // Process a single audio sample for pitch detection and autotune
+    fn process_sample(left: f32, right: f32, pitch_buffer: &mut [f32]) -> (f32, f32) {
+        // Stub: Add sample to pitch buffer (left channel as example)
+        add_sample_to_pitch_buffer(left, pitch_buffer);
 
-    fn process_audio_buffer(buffer: &mut audio::AudioBuffer){
-        for (left, right) in buffer.iter_mut() {
-            let new_left = auto_tune(*left);
-            let new_right = auto_tune(*right);
-            *left = new_left;
-            *right = new_right;
-        }
+        // Stub: Detect pitch from the pitch buffer
+        let detected_pitch = detect_pitch(pitch_buffer);
+
+        // Stub: Shift pitch to the desired pitch
+        let (shifted_left, shifted_right) = shift_pitch(left, right, detected_pitch);
+
+        (shifted_left, shifted_right)
     }
 
-    fn auto_tune(sample: f32) -> f32 {
-        let pitch = detect_pitch(sample);
-        let corrected_pitch = correct_pitch(pitch);
-        apply_pitch_correction(sample, corrected_pitch)
+    // Stub: Add sample to pitch buffer
+    fn add_sample_to_pitch_buffer(sample: f32, pitch_buffer: &mut [f32]) {
+        // Shift the buffer to the left and add the new sample at the end
+        pitch_buffer.rotate_left(1);
+        pitch_buffer[pitch_buffer.len() - 1] = sample;
     }
 
-    fn detect_pitch(sample: f32) -> f32{
-        // TODO detect pitch
-        sample
+    // Stub: Detect pitch from the pitch buffer
+    fn detect_pitch(pitch_buffer: &[f32]) -> f32 {
+        // Example: Return a fixed pitch (you need to implement actual pitch detection)
+        440.0
     }
 
-    fn correct_pitch(pitch: f32) -> f32{
-        // TODO correct pitch
-        pitch
-    }
-
-    fn apply_pitch_correction(sample: f32, corrected_pitch: f32) -> f32 {
-        // TODO apply corrected pitch
-        corrected_pitch
+    // Stub: Shift pitch to the desired pitch
+    fn shift_pitch(left: f32, right: f32, detected_pitch: f32) -> (f32, f32) {
+        // Example: Return the original samples (you need to implement actual pitch shifting)
+        (left, right)
     }
 }
