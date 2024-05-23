@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 cfg-if = "1.0.0"
-cortex-m-rtic = "1.0.0"
+cortex-m-rtic = "1.1.4"
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.0"
 debouncr = "0.2.2"
@@ -19,8 +19,8 @@ rtt-target = "0.5.0"
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
 panic-itm = "0.4.2"
 cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-integration"] }
-
-libdaisy = {git = "https://github.com/mtthw-meyer/libdaisy-rust.git", commit= "5a8520e09cd7367fd7e607c83fec22efd90a9854"}
+micromath = "2.1.0"
+libdaisy = {git = "https://github.com/CorvusPrudens/libdaisy-rust.git", commit= "d7e0ca9aca6bba61c1802b26d9f60510a087a756"}
 
 
 

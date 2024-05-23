@@ -1,17 +1,14 @@
-#![no_std]
+//! examples/passthru.rs
 #![no_main]
-use panic_halt as _;
-
+#![no_std]
 #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
 )]
 mod app {
-    use libdaisy::audio;
-    use libdaisy::system;
-    use rtt_target::rprintln;
-    use rtt_target::rtt_init_print;
-    use synth_phone_e_v2_rust::logger;
+    use libdaisy::{audio, logger, system};
+    use log::{info, warn};
+    use rtt_target::rtt_init_default;
 
     #[shared]
     struct Shared {}
@@ -25,11 +22,19 @@ mod app {
     #[init]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         logger::init();
-        rtt_init_print!();
-        let system = system::System::init(ctx.core, ctx.device);
-        let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
-        rprintln!("Program Started");
+        rtt_init_default!();
 
+        // Latest changes here. This approach allows you to
+        // access peripherals and resources that were simply
+        // moved out of the function in the previous implementation.
+        let mut core = ctx.core;
+        let device = ctx.device;
+        let ccdr = system::System::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
+        let system = libdaisy::system_init!(core, device, ccdr);
+
+        let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
+
+        info!("Startup done!!");
 
         (
             Shared {},
@@ -46,6 +51,7 @@ mod app {
     #[idle]
     fn idle(_ctx: idle::Context) -> ! {
         loop {
+            // info!("Idling");
             cortex_m::asm::nop();
         }
     }
@@ -55,13 +61,21 @@ mod app {
     fn audio_handler(ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
         let buffer = ctx.local.buffer;
+        info!("calling interrupt");
 
         if audio.get_stereo(buffer) {
+            
             for (left, right) in buffer {
-                audio.push_stereo((*left, *right)).unwrap();
+        //    info!("Writing {:?}", (right.clone(), left.clone()));
+                if audio.push_stereo((*left, *right)).is_err()
+                {
+                    warn!("tried to write {:?} {:?}",     *left, *right)
+                } else {
+                    info!("wrote {:?} {:?}",     *left, *right)
+                }
             }
         } else {
-            rprintln!("Error reading data!");
+            info!("Error reading data!");
         }
     }
 }

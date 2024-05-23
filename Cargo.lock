@@ -39,12 +39,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46afbd2983a5d5a7bd740ccb198caf5b82f45c40c09c0eed36052d91cb92e719"
 
 [[package]]
-name = "bitflags"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf4b9d6a944f767f8e5e0db018570623c85f3d925ac718db4e06d0187adb21c1"
-
-[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -55,12 +49,6 @@ name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
-
-[[package]]
-name = "cfg-if"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
 name = "cfg-if"
@@ -191,17 +179,6 @@ dependencies = [
 
 [[package]]
 name = "embedded-sdmmc"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b4ae38d27afe8ffb1c31f82ebe4960f099ac55bbdc35e813a45cade676f2600"
-dependencies = [
- "byteorder",
- "embedded-hal",
- "log",
-]
-
-[[package]]
-name = "embedded-sdmmc"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4d14180a76a8af24a45a0e1a4f9c97491b05a3b962d59d5e4ce0e6ab103736"
@@ -301,9 +278,9 @@ dependencies = [
 [[package]]
 name = "libdaisy"
 version = "0.1.0"
-source = "git+https://github.com/mtthw-meyer/libdaisy-rust.git#5a8520e09cd7367fd7e607c83fec22efd90a9854"
+source = "git+https://github.com/CorvusPrudens/libdaisy-rust.git#d7e0ca9aca6bba61c1802b26d9f60510a087a756"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if",
  "cortex-m",
  "cortex-m-rtic",
  "debouncr",
@@ -311,7 +288,7 @@ dependencies = [
  "micromath",
  "panic-halt",
  "stm32-fmc",
- "stm32h7xx-hal 0.14.0",
+ "stm32h7xx-hal 0.15.1",
 ]
 
 [[package]]
@@ -332,9 +309,9 @@ checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
 
 [[package]]
 name = "micromath"
-version = "1.1.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc4010833aea396656c2f91ee704d51a6f1329ec2ab56ffd00bfd56f7481ea94"
+checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
 
 [[package]]
 name = "nb"
@@ -549,17 +526,16 @@ dependencies = [
 
 [[package]]
 name = "stm32h7xx-hal"
-version = "0.14.0"
+version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fe4a709ccbccd9994d2363e27104933561ef170f892c950ffe939546c2ece1d"
+checksum = "e08bcfbdbe4458133f2fd55994a5c4f1b4bf28084f0218e93cdbc19d7c70219f"
 dependencies = [
  "bare-metal 1.0.0",
- "bitflags",
  "cast",
  "cortex-m",
  "embedded-dma",
  "embedded-hal",
- "embedded-sdmmc 0.4.0",
+ "embedded-sdmmc",
  "embedded-storage",
  "fugit",
  "nb 1.1.0",
@@ -582,7 +558,7 @@ dependencies = [
  "cortex-m",
  "embedded-dma",
  "embedded-hal",
- "embedded-sdmmc 0.5.0",
+ "embedded-sdmmc",
  "embedded-storage",
  "fugit",
  "nb 1.1.0",
@@ -633,7 +609,7 @@ dependencies = [
 name = "synth_phone_e_v2_rust"
 version = "0.1.0"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
  "cortex-m",
  "cortex-m-log",
  "cortex-m-rt",
@@ -642,6 +618,7 @@ dependencies = [
  "lazy_static",
  "libdaisy",
  "log",
+ "micromath",
  "panic-halt",
  "panic-itm",
  "rtt-target",
