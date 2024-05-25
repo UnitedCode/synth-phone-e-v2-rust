@@ -6,6 +6,8 @@ This guide will help you set up your environment for embedded development using 
 
 Ensure you have Rust installed on your system. If not, you can install it from the [official Rust website](https://www.rust-lang.org/tools/install).
 
+Ensure that CMake is installed. 
+
 ## Required Libraries and Tools
 
 1. **Add the Rust Target for ARM Cortex-M microcontrollers:**
@@ -34,6 +36,15 @@ Ensure you have Rust installed on your system. If not, you can install it from t
 
    `cargo-embed` is used for flashing your program to the microcontroller and provides a basic debugger.
 
+5. **Get DaisySp submodule**
+   ```sh
+   git submodule update --init --recursive
+   ```
+6. **Build DaisySP**
+   ```sh
+   cd daisysp
+   make
+   ```
 ## Flashing Your Program
 
 To flash your program to a microcontroller, navigate to your project directory in the terminal and run:
