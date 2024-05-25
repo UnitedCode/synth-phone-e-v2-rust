@@ -6,7 +6,7 @@ This guide will help you set up your environment for embedded development using 
 
 Ensure you have Rust installed on your system. If not, you can install it from the [official Rust website](https://www.rust-lang.org/tools/install).
 
-Ensure that CMake is installed. 
+Ensure that CLang is installed [Instructions can be found here](https://rust-lang.github.io/rust-bindgen/requirements.html). 
 
 ## Required Libraries and Tools
 
