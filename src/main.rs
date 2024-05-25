@@ -8,7 +8,6 @@
 mod app {
     use libdaisy::{audio, logger, system};
     use log::{info, warn};
-    use rtt_target::rtt_init_default;
 
     #[shared]
     struct Shared {}
@@ -22,7 +21,6 @@ mod app {
     #[init]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         logger::init();
-        rtt_init_default!();
 
         // Latest changes here. This approach allows you to
         // access peripherals and resources that were simply
