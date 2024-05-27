@@ -26,11 +26,9 @@ Ensure you have Rust installed on your system. If not, you can install it from t
    cargo install cargo-binutils
    ```
 
-4. **Install cargo-embed:**
-
-   ```sh
-   cargo install cargo-embed
-   ```
+4. **Install cargo-embed (actually probe-rs):**
+   
+   https://probe.rs/docs/getting-started/installation/
 
    `cargo-embed` is used for flashing your program to the microcontroller and provides a basic debugger.
 
