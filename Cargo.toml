@@ -23,6 +23,7 @@ cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-inte
 micromath = "2.1.0"
 microfft = "0.6"
 libdaisy = {git = "https://github.com/CorvusPrudens/libdaisy-rust.git", commit= "d7e0ca9aca6bba61c1802b26d9f60510a087a756",  features = ["log-rtt"]}
+libm = "0.2.8"
 
 [profile.dev]
 codegen-units = 1 # better optimizations
