@@ -1,16 +1,24 @@
 //! examples/passthru.rs
 #![no_main]
 #![no_std]
+
+const DESIRED_FREQ: f32 = 440.0;
+const SAMPLE_RATE: f32 = 48_014.312;
+
 #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
 )]
 mod app {
     use libdaisy::{audio, logger, system};
-    use libm::sinf;
+    use libm::{sinf, cosf};
     use log::{info, warn};
-    use microfft::complex::cfft_256;
+    use microfft::complex::{cfft_256};
+    use microfft::inverse::ifft_256;
     use microfft::Complex32;
+
+    use crate::{DESIRED_FREQ, SAMPLE_RATE};
+
     #[shared]
     struct Shared {}
 
@@ -29,13 +37,11 @@ mod app {
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         logger::init();
 
-        // Latest changes here. This approach allows you to
-        // access peripherals and resources that were simply
-        // moved out of the function in the previous implementation.
         let mut core = ctx.core;
         let device = ctx.device;
         let ccdr = system::System::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
         let system = libdaisy::system_init!(core, device, ccdr);
+
         let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
         let fft_input = [Complex32::new(0.0, 0.0); 256];
         let fft_output = [Complex32::new(0.0, 0.0); 256];
@@ -44,8 +50,8 @@ mod app {
         let mut carrier = [Complex32::new(0.0, 0.0); 256];
 
         for (i, c) in carrier.iter_mut().enumerate() {
-            let phase = 2.0 * core::f32::consts::PI * i as f32 / 256.0;
-            *c = Complex32::new(sinf(phase), 0.0);
+            let phase = 2.0 * core::f32::consts::PI * DESIRED_FREQ * i as f32 / SAMPLE_RATE;
+            *c = Complex32::new(sinf(phase), cosf(phase));
         }
 
         info!("Startup done!!");
@@ -65,8 +71,6 @@ mod app {
         )
     }
 
-    // Non-default idle ensures chip doesn't go to sleep which causes issues for
-    // probe.rs currently
     #[idle]
     fn idle(_ctx: idle::Context) -> ! {
         loop {
@@ -74,7 +78,6 @@ mod app {
         }
     }
 
-    // Interrupt handler for audio
     #[task(binds = DMA1_STR1, local = [audio, buffer, fft_input, fft_output, ifft_output, envelope, carrier], priority = 8)]
     fn audio_handler(ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
@@ -102,25 +105,22 @@ mod app {
 
             // Apply filtering and modulation on fft_output
             for i in 0..256 {
-                // Example processing: zero out imaginary parts (you will replace this with actual vocoder logic)
-                fft_output[i] =
-                    Complex32::new(carrier[i].re * envelope[i], carrier[i].im * envelope[i]);
+                fft_output[i] = Complex32::new(carrier[i].re * envelope[i], carrier[i].im * envelope[i]);
             }
 
             // Perform inverse FFT to get the time-domain signal
-            let ifft_result = cfft_256( fft_output);
+            let ifft_result = ifft_256(fft_output);
             ifft_output.copy_from_slice(ifft_result);
 
             // Update buffer with processed FFT data
             for (i, (left, right)) in buffer.iter_mut().enumerate().take(256) {
-                *left = fft_output[i].re;
-                *right = fft_output[i].re;
+                *left = ifft_output[i].re;
+                *right = ifft_output[i].re;
             }
-
 
             // Push the processed audio back
             for (left, right) in buffer.iter() {
-            info!("{} {}",*left, *right );
+                info!("{} {}", *left, *right);
 
                 if audio.push_stereo((*left, *right)).is_err() {
                     warn!("Failed to write audio data");
