@@ -109,7 +109,7 @@ dependencies = [
  "bare-metal 1.0.0",
  "cortex-m",
  "cortex-m-rtic-macros",
- "heapless 0.7.17",
+ "heapless",
  "rtic-core",
  "rtic-monotonic",
  "version_check",
@@ -219,15 +219,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hash32"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -240,19 +231,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdc6457c0eb62c71aac4bc17216026d8410337c4126773b9c5daba343f17964f"
 dependencies = [
  "atomic-polyfill",
- "hash32 0.2.1",
+ "hash32",
  "rustc_version 0.4.0",
  "spin 0.9.8",
- "stable_deref_trait",
-]
-
-[[package]]
-name = "heapless"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
-dependencies = [
- "hash32 0.3.1",
  "stable_deref_trait",
 ]
 
@@ -290,7 +271,7 @@ dependencies = [
  "panic-rtt-target",
  "rtt-target 0.4.0",
  "stm32-fmc",
- "stm32h7xx-hal 0.15.1",
+ "stm32h7xx-hal",
 ]
 
 [[package]]
@@ -395,12 +376,6 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
-name = "portable-atomic"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
 
 [[package]]
 name = "proc-macro-error"
@@ -615,30 +590,7 @@ dependencies = [
  "sdio-host",
  "stm32-fmc",
  "stm32h7",
- "synopsys-usb-otg 0.3.2",
- "void",
-]
-
-[[package]]
-name = "stm32h7xx-hal"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bd869329be25440b24e2b3583a1c016151b4a54bc36d96d82af7fcd9d010b98"
-dependencies = [
- "bare-metal 1.0.0",
- "cast",
- "cortex-m",
- "embedded-dma",
- "embedded-hal",
- "embedded-sdmmc",
- "embedded-storage",
- "fugit",
- "nb 1.1.0",
- "paste",
- "sdio-host",
- "stm32-fmc",
- "stm32h7",
- "synopsys-usb-otg 0.4.0",
+ "synopsys-usb-otg",
  "void",
 ]
 
@@ -661,19 +613,7 @@ checksum = "678f3707a7b1fd4863023292c42f73c6bab0e9b0096f41ae612d1af0ff221b45"
 dependencies = [
  "cortex-m",
  "embedded-hal",
- "usb-device 0.2.9",
- "vcell",
-]
-
-[[package]]
-name = "synopsys-usb-otg"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e948d523b316939545d8b21a48c27aef150ce25321b9f95ff7978647a806a6fe"
-dependencies = [
- "cortex-m",
- "embedded-hal",
- "usb-device 0.3.2",
+ "usb-device",
  "vcell",
 ]
 
@@ -697,7 +637,7 @@ dependencies = [
  "panic-rtt-target",
  "rtt-target 0.5.0",
  "stm32-fmc",
- "stm32h7xx-hal 0.16.0",
+ "stm32h7xx-hal",
 ]
 
 [[package]]
@@ -717,16 +657,6 @@ name = "usb-device"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f6cc3adc849b5292b4075fc0d5fdcf2f24866e88e336dd27a8943090a520508"
-
-[[package]]
-name = "usb-device"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98816b1accafbb09085168b90f27e93d790b4bfa19d883466b5e53315b5f06a6"
-dependencies = [
- "heapless 0.8.0",
- "portable-atomic",
-]
 
 [[package]]
 name = "vcell"
