@@ -14,7 +14,7 @@ panic-rtt-target = { version = "0.1.2", features = ["cortex-m"]}
 debouncr = "0.2.2"
 log = "0.4.21"
 panic-halt = "0.2.0"
-stm32h7xx-hal = { version = "0.15.0", features = ["stm32h750v","rt","fmc", "xspi", "sdmmc", "sdmmc-fatfs", "usb_hs"] }
+stm32h7xx-hal = { version = "0.16.0", features = ["stm32h750v","rt","fmc", "xspi", "sdmmc", "sdmmc-fatfs", "usb_hs"] }
 stm32-fmc = "0.3.0"
 rtt-target = "0.5.0"
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
@@ -22,7 +22,7 @@ panic-itm = "0.4.2"
 cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-integration"] }
 micromath = "2.1.0"
 microfft = "0.6"
-libdaisy = {git = "https://github.com/CorvusPrudens/libdaisy-rust.git", commit= "d7e0ca9aca6bba61c1802b26d9f60510a087a756",  features = ["log-rtt"]}
+libdaisy = {git = "https://github.com/nathansbradshaw/libdaisy-rust.git",features = ["log-rtt"]}
 libm = "0.2.8"
 
 [profile.dev]

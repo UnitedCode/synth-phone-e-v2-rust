@@ -2,7 +2,7 @@
 #![no_main]
 #![no_std]
 
-const DESIRED_FREQ: f32 = 440.0;
+const DESIRED_FREQ: f32 = 880.0;
 const SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 256;
 const HOP_SIZE: usize = FFT_SIZE / 2; // 50% overlap
@@ -13,16 +13,18 @@ const HOP_SIZE: usize = FFT_SIZE / 2; // 50% overlap
 )]
 mod app {
     use libdaisy::{audio, logger, system};
-    use libm::{sinf, cosf};
+    use libm::{sinf, cosf, atan2f};
     use log::{info, warn};
     use microfft::complex::cfft_256;
     use microfft::inverse::ifft_256;
     use microfft::Complex32;
+    
 
     use crate::{DESIRED_FREQ, SAMPLE_RATE, FFT_SIZE, HOP_SIZE};
 
     #[shared]
-    struct Shared {}
+    struct Shared {
+    }
 
     #[local]
     struct Local {
@@ -35,6 +37,7 @@ mod app {
         carrier: [Complex32; FFT_SIZE],
         window: [f32; FFT_SIZE],
         overlap_buffer: [f32; FFT_SIZE - HOP_SIZE],
+        last_phase: [f32; FFT_SIZE],
     }
 
     #[init]
@@ -46,6 +49,8 @@ mod app {
         let ccdr = system::System::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
         let system = libdaisy::system_init!(core, device, ccdr);
 
+
+
         let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
         let fft_input = [Complex32::new(0.0, 0.0); FFT_SIZE];
         let fft_output = [Complex32::new(0.0, 0.0); FFT_SIZE];
@@ -54,6 +59,7 @@ mod app {
         let mut carrier = [Complex32::new(0.0, 0.0); FFT_SIZE];
         let window = generate_hanning_window();
         let overlap_buffer = [0.0; FFT_SIZE - HOP_SIZE];
+        let last_phase = [0.0; FFT_SIZE];
 
         for (i, c) in carrier.iter_mut().enumerate() {
             let phase = 2.0 * core::f32::consts::PI * DESIRED_FREQ * i as f32 / SAMPLE_RATE;
@@ -63,7 +69,7 @@ mod app {
         info!("Startup done!!");
 
         (
-            Shared {},
+            Shared { }, 
             Local {
                 audio: system.audio,
                 buffer,
@@ -74,6 +80,7 @@ mod app {
                 carrier,
                 window,
                 overlap_buffer,
+                last_phase,
             },
             init::Monotonics(),
         )
@@ -86,7 +93,7 @@ mod app {
         }
     }
 
-    #[task(binds = DMA1_STR1, local = [audio, buffer, fft_input, fft_output, ifft_output, envelope, carrier, window, overlap_buffer], priority = 8)]
+    #[task(binds = DMA1_STR1, local = [audio, buffer, fft_input, fft_output, ifft_output, envelope, carrier, window, overlap_buffer, last_phase], priority = 8)]
     fn audio_handler(ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
         let buffer = ctx.local.buffer;
@@ -97,16 +104,14 @@ mod app {
         let carrier = ctx.local.carrier;
         let window = ctx.local.window;
         let overlap_buffer = ctx.local.overlap_buffer;
-
+        let last_phase = ctx.local.last_phase;
+    
         if audio.get_stereo(buffer) {
-            // Process the buffer in chunks with overlap
             for chunk_start in (0..audio::BLOCK_SIZE_MAX).step_by(HOP_SIZE) {
                 if chunk_start + FFT_SIZE > audio::BLOCK_SIZE_MAX {
-                    info!("BREAK");
                     break; // Avoid out of bounds
                 }
-
-                // Fill FFT input with overlapping data
+    
                 for i in 0..FFT_SIZE {
                     let sample_index = chunk_start + i;
                     let sample = if sample_index < FFT_SIZE - HOP_SIZE {
@@ -116,26 +121,28 @@ mod app {
                     };
                     fft_input[i] = Complex32::new(sample * window[i], 0.0);
                 }
-
-                // Perform FFT
+    
                 let fft_result = cfft_256(fft_input);
                 fft_output.copy_from_slice(fft_result);
-
-                // Extract the envelope of the modulator signal
+    
                 for (i, &value) in fft_output.iter().enumerate() {
-                    envelope[i] = value.norm_sqr();
+                    let current_phase = phase(&value);
+                    let phase_difference = current_phase - last_phase[i];
+                    let true_freq = DESIRED_FREQ + phase_difference * SAMPLE_RATE / (2.0 * core::f32::consts::PI * HOP_SIZE as f32);
+    
+                    last_phase[i] = current_phase; // Update last phase
+    
+                    envelope[i] = value.norm_sqr(); // Magnitude squared for envelope
+                    carrier[i] = Complex32::new(cosf(true_freq), sinf(true_freq)); // Adjust carrier frequency based on true frequency
                 }
-
-                // Apply filtering and modulation on fft_output
+    
                 for i in 0..FFT_SIZE {
                     fft_output[i] = Complex32::new(carrier[i].re * envelope[i], carrier[i].im * envelope[i]);
                 }
-
-                // Perform inverse FFT to get the time-domain signal
+    
                 let ifft_result = ifft_256(fft_output);
                 ifft_output.copy_from_slice(ifft_result);
-
-                // Update buffer with processed FFT data
+    
                 for i in 0..FFT_SIZE {
                     let output_index = chunk_start + i;
                     if output_index < FFT_SIZE - HOP_SIZE {
@@ -146,10 +153,8 @@ mod app {
                     }
                 }
             }
-
-            // Push the processed audio back
+    
             for (left, right) in buffer.iter() {
-                info!("{:?} {:?}", left, right );
                 if audio.push_stereo((*left, *right)).is_err() {
                     warn!("Failed to write audio data");
                 }
@@ -159,6 +164,9 @@ mod app {
         }
     }
 
+
+
+    
     fn generate_hanning_window() -> [f32; FFT_SIZE] {
         let mut window = [0.0; FFT_SIZE];
         for i in 0..FFT_SIZE {
@@ -166,4 +174,9 @@ mod app {
         }
         window
     }
+
+    fn phase(c: &Complex32) -> f32 {
+        atan2f(c.im, c.re)
+    }
+    
 }
