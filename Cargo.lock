@@ -82,9 +82,9 @@ dependencies = [
 
 [[package]]
 name = "cortex-m-rt"
-version = "0.7.4"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2722f5b7d6ea8583cffa4d247044e280ccbb9fe501bed56552e2ba48b02d5f3d"
+checksum = "ee84e813d593101b1723e13ec38b6ab6abbdbaaa4546553f5395ed274079ddb1"
 dependencies = [
  "cortex-m-rt-macros",
 ]
@@ -278,7 +278,7 @@ dependencies = [
 [[package]]
 name = "libdaisy"
 version = "0.1.0"
-source = "git+https://github.com/CorvusPrudens/libdaisy-rust.git#d7e0ca9aca6bba61c1802b26d9f60510a087a756"
+source = "git+https://github.com/nathansbradshaw/libdaisy-rust.git?branch=main#1592872abcf5d88ce5cee532eb23265ac85392ce"
 dependencies = [
  "cfg-if",
  "cortex-m",
@@ -288,10 +288,16 @@ dependencies = [
  "micromath",
  "panic-halt",
  "panic-rtt-target",
- "rtt-target 0.4.0",
+ "rtt-target 0.5.0",
  "stm32-fmc",
- "stm32h7xx-hal 0.15.1",
+ "stm32h7xx-hal",
 ]
+
+[[package]]
+name = "libm"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 
 [[package]]
 name = "lock_api"
@@ -308,6 +314,17 @@ name = "log"
 version = "0.4.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
+
+[[package]]
+name = "microfft"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2b6673eb0cc536241d6734c2ca45abfdbf90e9e7791c66a36a7ba3c315b76cf"
+dependencies = [
+ "cfg-if",
+ "num-complex",
+ "static_assertions",
+]
 
 [[package]]
 name = "micromath"
@@ -329,6 +346,24 @@ name = "nb"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
+
+[[package]]
+name = "num-complex"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-traits"
+version = "0.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+dependencies = [
+ "autocfg",
+]
 
 [[package]]
 name = "panic-halt"
@@ -393,9 +428,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.82"
+version = "1.0.84"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ad3d49ab951a01fbaafe34f2ec74122942fe18a3f9814c3268f1bb72042131b"
+checksum = "ec96c6a92621310b51366f1e28d05ef11489516e93be030060e5fc12024a49d6"
 dependencies = [
  "unicode-ident",
 ]
@@ -439,16 +474,6 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "065d6058bb1204f51a562a67209e1817cf714759d5cf845aa45c75fa7b0b9d9b"
 dependencies = [
- "ufmt-write",
-]
-
-[[package]]
-name = "rtt-target"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3afa12c77ba1b9bf560e4039a9b9a08bb9cde0e9e6923955eeb917dd8d5cf303"
-dependencies = [
- "critical-section",
  "ufmt-write",
 ]
 
@@ -535,6 +560,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
 name = "stm32-fmc"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -557,29 +588,6 @@ dependencies = [
 
 [[package]]
 name = "stm32h7xx-hal"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e08bcfbdbe4458133f2fd55994a5c4f1b4bf28084f0218e93cdbc19d7c70219f"
-dependencies = [
- "bare-metal 1.0.0",
- "cast",
- "cortex-m",
- "embedded-dma",
- "embedded-hal",
- "embedded-sdmmc",
- "embedded-storage",
- "fugit",
- "nb 1.1.0",
- "paste",
- "sdio-host",
- "stm32-fmc",
- "stm32h7",
- "synopsys-usb-otg 0.3.2",
- "void",
-]
-
-[[package]]
-name = "stm32h7xx-hal"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bd869329be25440b24e2b3583a1c016151b4a54bc36d96d82af7fcd9d010b98"
@@ -597,7 +605,7 @@ dependencies = [
  "sdio-host",
  "stm32-fmc",
  "stm32h7",
- "synopsys-usb-otg 0.4.0",
+ "synopsys-usb-otg",
  "void",
 ]
 
@@ -614,25 +622,13 @@ dependencies = [
 
 [[package]]
 name = "synopsys-usb-otg"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "678f3707a7b1fd4863023292c42f73c6bab0e9b0096f41ae612d1af0ff221b45"
-dependencies = [
- "cortex-m",
- "embedded-hal",
- "usb-device 0.2.9",
- "vcell",
-]
-
-[[package]]
-name = "synopsys-usb-otg"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e948d523b316939545d8b21a48c27aef150ce25321b9f95ff7978647a806a6fe"
 dependencies = [
  "cortex-m",
  "embedded-hal",
- "usb-device 0.3.2",
+ "usb-device",
  "vcell",
 ]
 
@@ -647,14 +643,16 @@ dependencies = [
  "debouncr",
  "lazy_static",
  "libdaisy",
+ "libm",
  "log",
+ "microfft",
  "micromath",
  "panic-halt",
  "panic-itm",
  "panic-rtt-target",
  "rtt-target 0.5.0",
  "stm32-fmc",
- "stm32h7xx-hal 0.16.0",
+ "stm32h7xx-hal",
 ]
 
 [[package]]
@@ -668,12 +666,6 @@ name = "unicode-ident"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
-
-[[package]]
-name = "usb-device"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f6cc3adc849b5292b4075fc0d5fdcf2f24866e88e336dd27a8943090a520508"
 
 [[package]]
 name = "usb-device"
