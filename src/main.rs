@@ -1,17 +1,21 @@
 #![no_main]
 #![no_std]
+// #![deny(warnings)]
+#![deny(unsafe_code)]
+// #![deny(missing_docs)]
 
 const SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE + 1024;
-const HOP_SIZE: usize = 128; // 50% overlap
-const PITCH_SHIFT: f32 = 1.0;
+const HOP_SIZE: usize = 64; // 50% overlap
+const PITCH_SHIFT: f32 = 0.5;
 mod circular_buffer;
 mod hann_window;
 
 #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
+    dispatchers = [DMA1_STR0]
 )]
 mod app {
 
@@ -33,7 +37,7 @@ mod app {
         last_input_phases: [f32; FFT_SIZE],
         last_output_phases: [f32; FFT_SIZE],
         bin_frequencies: [f32; FFT_SIZE / 2],
-        process_fft: bool, 
+        process_fft: bool,
     }
 
     #[shared]
@@ -77,7 +81,6 @@ mod app {
             last_output_phases: [0.0; FFT_SIZE],
             bin_frequencies: [0.0; FFT_SIZE / 2],
             process_fft: false,
-            
         };
 
         info!("Startup done!!");
@@ -110,10 +113,29 @@ mod app {
         }
     }
 
+    #[task( shared = [audio_resources])]
+    fn dma1_stream0_software_task(ctx:  dma1_stream0_software_task::Context) {
+        info!("running task");
+        let mut audio_resources = ctx.shared.audio_resources;
+        audio_resources.lock(|res| {
+            if res.process_fft {
+                process_fft(
+                    &mut res.in_buffer,
+                    &mut res.out_buffer,
+                    &mut res.last_input_phases,
+                    &mut res.last_output_phases,
+                    &mut res.bin_frequencies,
+                );
+                res.process_fft = false; // Reset the flag
+            }
+        });
+    }
 
     #[task(binds = DMA1_STR1, local = [audio, buffer, button], shared = [audio_resources], priority = 8)]
     fn audio_handler(mut ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
+
+        
         let buffer = ctx.local.buffer;
         let switch1 = ctx.local.button;
 
@@ -133,20 +155,23 @@ mod app {
                         out_sample = audio_res.out_buffer.read_and_reset();
 
                         // Scale the output dow by the overlap factor
-                        out_sample = out_sample * HOP_SIZE as f32 / FFT_SIZE as f32;
+                        // out_sample = out_sample * HOP_SIZE as f32 / FFT_SIZE as f32;
                         if hop_counter >= HOP_SIZE {
                             hop_counter = 0;
 
+                            if dma1_stream0_software_task::spawn().is_err()
+                            {
+                                info!("Could not unwrap software task");
+                            }
                             // Run the FFT processing (THIS TAKES TOO LONG)
-                            process_fft(
-                                &mut audio_res.in_buffer,
-                                &mut audio_res.out_buffer,
-                                &mut audio_res.last_input_phases,
-                                &mut audio_res.last_output_phases,
-                                &mut audio_res.bin_frequencies,
-                            );
+                            // process_fft(
+                            //     &mut audio_res.in_buffer,
+                            //     &mut audio_res.out_buffer,
+                            //     &mut audio_res.last_input_phases,
+                            //     &mut audio_res.last_output_phases,
+                            //     &mut audio_res.bin_frequencies,
+                            // );
                             audio_res.process_fft = true;
-                            
                         }
                         audio_res.out_buffer.next_hop();
                     }
