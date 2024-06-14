@@ -7,7 +7,7 @@
 const _SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE + 1024;
-const HOP_SIZE: usize = 64; // 50% overlap
+const HOP_SIZE: usize = 256; //GOAL hop size
 mod circular_buffer;
 mod hann_window;
 
@@ -23,12 +23,14 @@ mod app {
     use libdaisy::{audio, gpio, hid, logger, system};
     use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
     use log::{info, warn};
-    use stm32h7xx_hal::{adc,stm32, gpio::{ Analog, Input}, time::MilliSeconds};
-
-    use crate::{
-        circular_buffer:: CircularBuffer,
-        hann_window, BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
+    use stm32h7xx_hal::{
+        adc,
+        gpio::{Analog, Input},
+        stm32,
+        time::MilliSeconds,
     };
+
+    use crate::{circular_buffer::CircularBuffer, hann_window, BUFFER_SIZE, FFT_SIZE, HOP_SIZE};
 
     pub struct Resources {
         in_buffer: CircularBuffer<f32, BUFFER_SIZE>,
@@ -49,7 +51,7 @@ mod app {
         audio: audio::Audio,
         buffer: audio::AudioBuffer,
         button: hid::Switch<gpio::Daisy28<Input>>,
-        pot_input:  hid::AnalogControl<gpio::Daisy15<Analog>>,
+        pot_input: hid::AnalogControl<gpio::Daisy15<Analog>>,
         adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
     }
 
@@ -72,10 +74,11 @@ mod app {
             .into_pull_up_input();
 
         let daisy15 = system
-        .gpio
-        .daisy15
-        .take()
-        .expect("Failed to get pin daisy29!").into_analog();
+            .gpio
+            .daisy15
+            .take()
+            .expect("Failed to get pin daisy29!")
+            .into_analog();
 
         let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
         switch1.set_double_thresh(Some(500));
@@ -128,8 +131,8 @@ mod app {
         }
     }
 
-    #[task( shared = [audio_resources], local = [adc1, pot_input])]
-    fn dma1_stream0_software_task(ctx:  dma1_stream0_software_task::Context) {
+    #[task( shared = [audio_resources], local = [adc1, pot_input],priority = 7)]
+    fn dma1_stream0_software_task(ctx: dma1_stream0_software_task::Context) {
         info!("running task");
         let adc1 = ctx.local.adc1;
         let pot = ctx.local.pot_input;
@@ -138,7 +141,7 @@ mod app {
         adc1.start_conversion(pot.get_pin());
 
         let adc_result = adc1.read_sample().unwrap_or(1);
-        let pitch_shift =    0.15 * adc_result as f32 - 1.15;
+        let pitch_shift = 0.15 * adc_result as f32 - 1.15;
         info!("ADC result: {}, pitch shift: {}", adc_result, pitch_shift);
 
         audio_resources.lock(|res| {
@@ -149,7 +152,7 @@ mod app {
                     &mut res.last_input_phases,
                     &mut res.last_output_phases,
                     &mut res.bin_frequencies,
-                    pitch_shift
+                    pitch_shift,
                 );
                 res.process_fft = false; // Reset the flag
             }
@@ -160,7 +163,6 @@ mod app {
     fn audio_handler(mut ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
 
-        
         let buffer = ctx.local.buffer;
         let switch1 = ctx.local.button;
 
@@ -185,9 +187,8 @@ mod app {
                             hop_counter = 0;
 
                             // Run FFT Process in new software task
-                            if dma1_stream0_software_task::spawn().is_err()
-                            {
-                                info!("Could not unwrap software task");
+                            if dma1_stream0_software_task::spawn().is_err() {
+                                warn!("Could not unwrap software task - underrun error");
                             }
 
                             audio_res.process_fft = true;
@@ -216,9 +217,10 @@ mod app {
         _bin_frequencies: &mut [f32; FFT_SIZE / 2],
         pitch_shift: f32,
     ) {
+        let start_cycles = cortex_m::peripheral::DWT::cycle_count();
         let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
-        let mut unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
+        let mut unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
         let mut full_spectrum: [microfft::Complex32; FFT_SIZE] =
             [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
         let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];
@@ -230,7 +232,7 @@ mod app {
         // copy buffer into FFT input, starting one window ago
         in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
         for n in 0..FFT_SIZE {
-            unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n]
+            unwrapped_buffer[n] *= in_buffer.read();
         }
 
         // Process the FFT based on the time domain input
@@ -316,6 +318,12 @@ mod app {
             let windowed_val = val.re * analysis_window_buffer[n]; // Window again and scale
             out_buffer.add_value(windowed_val);
         }
+
+        let end_cycle = cortex_m::peripheral::DWT::cycle_count();
+
+        let elapsed = start_cycles.wrapping_sub(end_cycle);
+        info!("FFT Process Time{elapsed}");
+
     }
 
     fn wrap_phase(phase_in: f32) -> f32 {
