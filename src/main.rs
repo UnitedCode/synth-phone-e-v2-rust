@@ -4,11 +4,10 @@
 #![deny(unsafe_code)]
 // #![deny(missing_docs)]
 
-const SAMPLE_RATE: f32 = 48_014.312;
+const _SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE + 1024;
 const HOP_SIZE: usize = 64; // 50% overlap
-const PITCH_SHIFT: f32 = 0.5;
 mod circular_buffer;
 mod hann_window;
 
@@ -24,11 +23,11 @@ mod app {
     use libdaisy::{audio, gpio, hid, logger, system};
     use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
     use log::{info, warn};
-    use stm32h7xx_hal::{gpio::Input, time::MilliSeconds};
+    use stm32h7xx_hal::{adc,stm32, gpio::{ Analog, Input}, time::MilliSeconds};
 
     use crate::{
-        circular_buffer::{self, CircularBuffer},
-        hann_window, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, PITCH_SHIFT, SAMPLE_RATE,
+        circular_buffer:: CircularBuffer,
+        hann_window, BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
     };
 
     pub struct Resources {
@@ -50,6 +49,8 @@ mod app {
         audio: audio::Audio,
         buffer: audio::AudioBuffer,
         button: hid::Switch<gpio::Daisy28<Input>>,
+        pot_input:  hid::AnalogControl<gpio::Daisy15<Analog>>,
+        adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
     }
 
     #[init]
@@ -70,9 +71,21 @@ mod app {
             .expect("Failed to get pin daisy28!")
             .into_pull_up_input();
 
+        let daisy15 = system
+        .gpio
+        .daisy15
+        .take()
+        .expect("Failed to get pin daisy29!").into_analog();
+
         let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
         switch1.set_double_thresh(Some(500));
         switch1.set_held_thresh(Some(150));
+
+        let mut adc1 = system.adc1.enable();
+        adc1.set_resolution(adc::Resolution::EightBit);
+        let adc1_max = adc1.slope() as f32;
+
+        let pot_input = hid::AnalogControl::new(daisy15, adc1_max);
 
         let resources = Resources {
             in_buffer: CircularBuffer::new(0.0, None),
@@ -98,6 +111,8 @@ mod app {
                 audio_resources: resources,
             },
             Local {
+                pot_input,
+                adc1,
                 audio: system.audio,
                 buffer,
                 button: switch1,
@@ -113,10 +128,19 @@ mod app {
         }
     }
 
-    #[task( shared = [audio_resources])]
+    #[task( shared = [audio_resources], local = [adc1, pot_input])]
     fn dma1_stream0_software_task(ctx:  dma1_stream0_software_task::Context) {
         info!("running task");
+        let adc1 = ctx.local.adc1;
+        let pot = ctx.local.pot_input;
         let mut audio_resources = ctx.shared.audio_resources;
+
+        adc1.start_conversion(pot.get_pin());
+
+        let adc_result = adc1.read_sample().unwrap_or(1);
+        let pitch_shift =    0.15 * adc_result as f32 - 1.15;
+        info!("ADC result: {}, pitch shift: {}", adc_result, pitch_shift);
+
         audio_resources.lock(|res| {
             if res.process_fft {
                 process_fft(
@@ -125,6 +149,7 @@ mod app {
                     &mut res.last_input_phases,
                     &mut res.last_output_phases,
                     &mut res.bin_frequencies,
+                    pitch_shift
                 );
                 res.process_fft = false; // Reset the flag
             }
@@ -159,18 +184,12 @@ mod app {
                         if hop_counter >= HOP_SIZE {
                             hop_counter = 0;
 
+                            // Run FFT Process in new software task
                             if dma1_stream0_software_task::spawn().is_err()
                             {
                                 info!("Could not unwrap software task");
                             }
-                            // Run the FFT processing (THIS TAKES TOO LONG)
-                            // process_fft(
-                            //     &mut audio_res.in_buffer,
-                            //     &mut audio_res.out_buffer,
-                            //     &mut audio_res.last_input_phases,
-                            //     &mut audio_res.last_output_phases,
-                            //     &mut audio_res.bin_frequencies,
-                            // );
+
                             audio_res.process_fft = true;
                         }
                         audio_res.out_buffer.next_hop();
@@ -195,6 +214,7 @@ mod app {
         last_input_phases: &mut [f32; FFT_SIZE],
         last_output_phases: &mut [f32; FFT_SIZE],
         _bin_frequencies: &mut [f32; FFT_SIZE / 2],
+        pitch_shift: f32,
     ) {
         let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
@@ -248,12 +268,12 @@ mod app {
         // Handle the pitch shift, storing frequencies into new bins
         for i in 0..FFT_SIZE / 2 {
             // find the nearest bin to the shifted frequency
-            let new_bin = floorf(i as f32 * PITCH_SHIFT + 0.5) as usize;
+            let new_bin = floorf(i as f32 * pitch_shift + 0.5) as usize;
 
             // Ignore any bins that have shifted above Nyquist
             if new_bin < FFT_SIZE / 2 {
                 synthesis_magnitudes[new_bin] += analysis_magnitudes[i];
-                synthesis_frequencies[new_bin] = analysis_frequencies[i] * PITCH_SHIFT;
+                synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift;
             }
         }
 
