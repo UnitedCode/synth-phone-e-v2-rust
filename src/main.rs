@@ -162,44 +162,50 @@ mod app {
     #[task(binds = DMA1_STR1, local = [audio, buffer, button], shared = [audio_resources], priority = 8)]
     fn audio_handler(mut ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
-
         let buffer = ctx.local.buffer;
         let switch1 = ctx.local.button;
-
         let mut hop_counter = 0;
         let button_pressed = switch1.is_held() || switch1.is_pressed();
-
+    
         if audio.get_stereo(buffer) {
             for (left, _right) in buffer.iter() {
                 let mut out_sample = *left;
-                // Lock the shared resources to safely access them
-                ctx.shared.audio_resources.lock(|audio_res| {
-                    if button_pressed {
-                        // Store the sample in the input buffer
+    
+                if button_pressed {
+                    // Lock to write to in_buffer
+                    ctx.shared.audio_resources.lock(|audio_res| {
                         audio_res.in_buffer.write(*left);
-
-                        // Read from the output buffer and reset the value
+                    });
+    
+                    // Lock to read from out_buffer and reset the value
+                    ctx.shared.audio_resources.lock(|audio_res| {
                         out_sample = audio_res.out_buffer.read_and_reset();
-
-                        // Scale the output dow by the overlap factor
-                        // out_sample = out_sample * HOP_SIZE as f32 / FFT_SIZE as f32;
-                        if hop_counter >= HOP_SIZE {
-                            hop_counter = 0;
-
-                            // Run FFT Process in new software task
-                            if dma1_stream0_software_task::spawn().is_err() {
-                                warn!("Could not unwrap software task - underrun error");
-                            }
-
-                            audio_res.process_fft = true;
+                    });
+    
+                    // Check and handle hop counter
+                    if hop_counter >= HOP_SIZE {
+                        hop_counter = 0;
+    
+                        // Run FFT Process in new software task
+                        if dma1_stream0_software_task::spawn().is_err() {
+                            warn!("Could not unwrap software task - underrun error");
                         }
-                        audio_res.out_buffer.next_hop();
+    
+                        // Lock to set process_fft flag
+                        ctx.shared.audio_resources.lock(|audio_res| {
+                            audio_res.process_fft = true;
+                        });
                     }
-                    hop_counter += 1;
-
-                    // Output the processed audio or further processing
-                });
-
+    
+                    // Lock to advance the output buffer's hop
+                    ctx.shared.audio_resources.lock(|audio_res| {
+                        audio_res.out_buffer.next_hop();
+                    });
+                }
+    
+                hop_counter += 1;
+    
+                // Output the processed audio or further processing
                 if audio.push_stereo((out_sample, out_sample)).is_err() {
                     warn!("Failed to write audio data");
                 }
@@ -208,6 +214,7 @@ mod app {
             warn!("Error reading data!");
         }
     }
+    
 
     fn process_fft(
         in_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>,
