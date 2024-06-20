@@ -1,3 +1,5 @@
+use log::info;
+
 pub struct CircularBuffer<T, const N: usize> {
     buffer: [T; N],
     read_index: usize,
@@ -44,6 +46,7 @@ where
 
     pub fn read_and_reset(&mut self) -> T {
         // Check that read isn't past hop pointer
+        info!("read {:?} hop_pointer {:?} write {:?}",self.read_index, self.hop_pointer, self.write_index);
         let value = self.buffer[self.read_index];
         self.buffer[self.read_index] = self.default_value;
 
@@ -53,12 +56,14 @@ where
     }
 
     pub fn add_value(&mut self, value: T) {
+        info!("Adding values {}", self.write_index);
         self.buffer[self.write_index] += value;
         self.write_index = self.increment_index(self.write_index);
     }
 
     pub fn next_hop(&mut self) {
       let hop_index = (self.hop_pointer + self.hop_size) % self.buffer.len();
+      info!("Next hop index: {hop_index}");
       self.hop_pointer = hop_index;
       self.write_index = hop_index;
 

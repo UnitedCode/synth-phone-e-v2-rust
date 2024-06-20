@@ -641,6 +641,7 @@ dependencies = [
  "cortex-m-log",
  "cortex-m-rtic",
  "debouncr",
+ "heapless 0.8.0",
  "lazy_static",
  "libdaisy",
  "libm",
