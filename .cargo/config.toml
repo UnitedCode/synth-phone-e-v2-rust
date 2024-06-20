@@ -1,8 +1,13 @@
 [target.thumbv7em-none-eabihf]
+#Linux GDB runner
 # runner = "gdb-multiarch"
+#QEMU Runner
+# runner = "qemu-system-arm -cpu cortex-m4 -machine mps2-an386 -nographic -semihosting-config enable=on,target=native -kernel"
 rustflags = [
     "-C", "link-arg=-Tlink.x"
 ]
+
+
 
 [build]
 target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)[build]
