@@ -278,7 +278,7 @@ dependencies = [
 [[package]]
 name = "libdaisy"
 version = "0.1.0"
-source = "git+https://github.com/nathansbradshaw/libdaisy-rust.git?branch=main#1592872abcf5d88ce5cee532eb23265ac85392ce"
+source = "git+https://github.com/nathansbradshaw/libdaisy-rust.git#cec6c1c985efdbb6a57c707e35786813e75134e5"
 dependencies = [
  "cfg-if",
  "cortex-m",

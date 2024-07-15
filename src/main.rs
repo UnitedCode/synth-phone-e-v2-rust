@@ -8,6 +8,7 @@ const _SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 8;
 const HOP_SIZE: usize = 512; //GOAL hop size
+const BLOCK_SIZE: usize = HOP_SIZE / 4;
 mod circular_buffer;
 mod hann_window;
 
@@ -28,7 +29,7 @@ mod app {
         time::MilliSeconds,
     };
 
-    use crate::{circular_buffer::CircularBuffer, hann_window, BUFFER_SIZE, FFT_SIZE, HOP_SIZE};
+    use crate::{circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE};
 
     #[shared]
     struct Shared {
@@ -43,7 +44,7 @@ mod app {
     #[local]
     struct Local {
         audio: audio::Audio,
-        buffer: audio::AudioBuffer,
+        buffer: audio::AudioBuffer<{BLOCK_SIZE}>,
         button: hid::Switch<gpio::Daisy28<Input>>,
         pot_input: hid::AnalogControl<gpio::Daisy15<Analog>>,
         adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
@@ -58,7 +59,7 @@ mod app {
         let ccdr = system::System::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
         let mut system = libdaisy::system_init!(core, device, ccdr);
 
-        let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
+        let buffer = audio::AudioBuffer::new();
 
         let daisy28 = system
             .gpio

@@ -22,7 +22,7 @@ panic-itm = "0.4.2"
 cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-integration"] }
 micromath = "2.1.0"
 microfft = "0.6"
-libdaisy = {git = "https://github.com/nathansbradshaw/libdaisy-rust.git", features = ["log-rtt"], branch = "main"}
+libdaisy = {git = "https://github.com/nathansbradshaw/libdaisy-rust.git", features = ["log-rtt"], commit = "cec6c1c985efdbb6a57c707e35786813e75134e5"}
 libm = "0.2.8"
 heapless = "0.8.0"
 
