@@ -8,7 +8,7 @@ const _SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 8;
 const HOP_SIZE: usize = 512; //GOAL hop size
-const BLOCK_SIZE: usize = HOP_SIZE / 4;
+const BLOCK_SIZE: usize = HOP_SIZE / 8;
 mod circular_buffer;
 mod hann_window;
 
@@ -22,6 +22,7 @@ mod app {
     use libdaisy::{audio, gpio, hid, logger, system};
     use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
     use log::{info, warn};
+    use shared_resources::hop_counter_that_needs_to_be_locked;
     use stm32h7xx_hal::{
         adc,
         gpio::{Analog, Input},
@@ -39,12 +40,13 @@ mod app {
         last_output_phases: [f32; FFT_SIZE],
         bin_frequencies: [f32; FFT_SIZE / 2],
         process_fft: bool,
+        hop_counter: u32,
     }
 
     #[local]
     struct Local {
         audio: audio::Audio,
-        buffer: audio::AudioBuffer<{BLOCK_SIZE}>,
+        buffer: audio::AudioBuffer,
         button: hid::Switch<gpio::Daisy28<Input>>,
         pot_input: hid::AnalogControl<gpio::Daisy15<Analog>>,
         adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
@@ -57,9 +59,9 @@ mod app {
         let mut core = ctx.core;
         let device = ctx.device;
         let ccdr = system::System::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
-        let mut system = libdaisy::system_init!(core, device, ccdr);
+        let mut system = libdaisy::system_init!(core, device, ccdr, BLOCK_SIZE);
 
-        let buffer = audio::AudioBuffer::new();
+        let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
 
         let daisy28 = system
             .gpio
@@ -103,6 +105,7 @@ mod app {
                 last_output_phases: [0.0; FFT_SIZE],
                 bin_frequencies: [0.0; FFT_SIZE / 2],
                 process_fft: false,
+                hop_counter: 0,
             },
             Local {
                 pot_input,
@@ -130,18 +133,19 @@ mod app {
         last_output_phases,
         bin_frequencies,
         process_fft,
+        hop_counter,
 
     ], priority = 8)]
     fn audio_handler(mut ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
         let buffer = ctx.local.buffer;
         let switch1 = ctx.local.button;
-        let mut hop_counter = 0;
         let button_pressed = switch1.is_held() || switch1.is_pressed();
 
         if audio.get_stereo(buffer) {
-            for (left, _right) in buffer.iter() {
+            for (left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
                 let mut out_sample = *left;
+                // info!("{out_sample}");
 
                 if button_pressed {
                     // Lock to write to in_buffer
@@ -155,8 +159,16 @@ mod app {
                     });
 
                     // Check and handle hop counter
-                    if hop_counter >= HOP_SIZE {
-                        hop_counter = 0;
+
+                    let mut local_hop_counter: u32 = 0;
+
+                    ctx.shared.hop_counter.lock(|count| {
+                        local_hop_counter = *count;
+                    });
+                    if local_hop_counter >= HOP_SIZE as u32{
+                        ctx.shared.hop_counter.lock(|count| {
+                            *count = 0;
+                        });
 
                         // Run FFT Process in new software task
                         if dma1_stream0_software_task::spawn().is_err() {
@@ -174,8 +186,9 @@ mod app {
                         });
                     }
                 }
-
-                hop_counter += 1;
+                ctx.shared.hop_counter.lock(|count| {
+                    *count += 1;
+                });
 
                 // Output the processed audio or further processing
                 if audio.push_stereo((out_sample, out_sample)).is_err() {
