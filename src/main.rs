@@ -6,9 +6,9 @@
 
 const _SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
-const BUFFER_SIZE: usize = FFT_SIZE * 8;
-const HOP_SIZE: usize = 512; //GOAL hop size
-const BLOCK_SIZE: usize = HOP_SIZE / 8;
+const BUFFER_SIZE: usize = FFT_SIZE * 2;
+const HOP_SIZE: usize = 256;
+const BLOCK_SIZE: usize = HOP_SIZE / 128;
 mod circular_buffer;
 mod hann_window;
 
@@ -22,7 +22,6 @@ mod app {
     use libdaisy::{audio, gpio, hid, logger, system};
     use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
     use log::{info, warn};
-    use shared_resources::hop_counter_that_needs_to_be_locked;
     use stm32h7xx_hal::{
         adc,
         gpio::{Analog, Input},
@@ -30,7 +29,9 @@ mod app {
         time::MilliSeconds,
     };
 
-    use crate::{circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE};
+    use crate::{
+        circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
+    };
 
     #[shared]
     struct Shared {
@@ -143,55 +144,57 @@ mod app {
         let button_pressed = switch1.is_held() || switch1.is_pressed();
 
         if audio.get_stereo(buffer) {
-            for (left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
+            for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
                 let mut out_sample = *left;
                 // info!("{out_sample}");
 
-                if button_pressed {
-                    // Lock to write to in_buffer
-                    ctx.shared.in_buffer.lock(|in_buffer| {
-                        in_buffer.write(*left);
-                    });
+                // Lock to write to in_buffer
+                ctx.shared.in_buffer.lock(|in_buffer| {
+                    in_buffer.write(*left);
+                });
 
-                    // Lock to read from out_buffer and reset the value
-                    ctx.shared.out_buffer.lock(|out_buffer| {
+                // Lock to read from out_buffer and reset the value
+                ctx.shared.out_buffer.lock(|out_buffer| {
+                    if button_pressed {
                         out_sample = out_buffer.read_and_reset();
-                    });
-
-                    // Check and handle hop counter
-
-                    let mut local_hop_counter: u32 = 0;
-
-                    ctx.shared.hop_counter.lock(|count| {
-                        local_hop_counter = *count;
-                    });
-                    if local_hop_counter >= HOP_SIZE as u32{
-                        ctx.shared.hop_counter.lock(|count| {
-                            *count = 0;
-                        });
-
-                        // Run FFT Process in new software task
-                        if dma1_stream0_software_task::spawn().is_err() {
-                            warn!("Could not unwrap software task - underrun error");
-                        }
-
-                        // Lock to set process_fft flag
-                        ctx.shared.process_fft.lock(|process_fft| {
-                            *process_fft = true;
-                        });
-
-                        // Lock to advance the output buffer's hop
-                        ctx.shared.out_buffer.lock(|out_buffer| {
-                            out_buffer.next_hop();
-                        });
+                    } else {
+                        _ = out_buffer.read_and_reset();
                     }
+                });
+
+                // Check and handle hop counter
+
+                let mut local_hop_counter: u32 = 0;
+
+                ctx.shared.hop_counter.lock(|count| {
+                    local_hop_counter = *count;
+                });
+                if local_hop_counter >= HOP_SIZE as u32 {
+                    ctx.shared.hop_counter.lock(|count| {
+                        *count = 0;
+                    });
+
+                    // Run FFT Process in new software task
+                    if dma1_stream0_software_task::spawn().is_err() {
+                        warn!("Could not unwrap software task - underrun error");
+                    }
+
+                    // Lock to set process_fft flag
+                    ctx.shared.process_fft.lock(|process_fft| {
+                        *process_fft = true;
+                    });
+
+                    // Lock to advance the output buffer's hop
+                    ctx.shared.out_buffer.lock(|out_buffer| {
+                        out_buffer.next_hop();
+                    });
                 }
                 ctx.shared.hop_counter.lock(|count| {
                     *count += 1;
                 });
 
                 // Output the processed audio or further processing
-                if audio.push_stereo((out_sample, out_sample)).is_err() {
+                if audio.push_stereo((out_sample, *right)).is_err() {
                     warn!("Failed to write audio data");
                 }
             }
@@ -210,7 +213,7 @@ mod app {
         process_fft,
     ], local = [adc1, pot_input],priority = 7)]
     fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
-        info!("running task");
+        // info!("running task");
         let adc1 = ctx.local.adc1;
         let pot = ctx.local.pot_input;
 
@@ -339,8 +342,6 @@ mod app {
                 out_buffer.add_value(windowed_val);
             });
         }
-
-
 
         let end_cycle = cortex_m::peripheral::DWT::cycle_count();
 

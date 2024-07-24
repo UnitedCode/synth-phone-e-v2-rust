@@ -278,7 +278,7 @@ dependencies = [
 [[package]]
 name = "libdaisy"
 version = "0.1.0"
-source = "git+https://github.com/nathansbradshaw/libdaisy-rust.git?branch=main#72b801d31c077610823510b84facc76588a349b6"
+source = "git+https://github.com/nathansbradshaw/libdaisy-rust.git#cff24384018e585e755f9949c25677d4b1f76c04"
 dependencies = [
  "cfg-if",
  "cortex-m",
@@ -398,9 +398,9 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "portable-atomic"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
+checksum = "da544ee218f0d287a911e9c99a39a8c9bc8fcad3cb8db5959940044ecfc67265"
 
 [[package]]
 name = "proc-macro-error"
