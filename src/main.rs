@@ -1,42 +1,56 @@
 #![no_main]
 #![no_std]
+// #![deny(warnings)]
+#![deny(unsafe_code)]
+// #![deny(missing_docs)]
 
-const DESIRED_FREQ: f32 = 880.0;
-const SAMPLE_RATE: f32 = 48_014.312;
-const FFT_SIZE: usize = 256;
-const HOP_SIZE: usize = FFT_SIZE / 2; // 50% overlap
+const _SAMPLE_RATE: f32 = 48_014.312;
+const FFT_SIZE: usize = 1024;
+const BUFFER_SIZE: usize = FFT_SIZE * 2;
+const HOP_SIZE: usize = 256;
+const BLOCK_SIZE: usize = HOP_SIZE / 128;
+mod circular_buffer;
+mod hann_window;
 
 #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
+    dispatchers = [DMA1_STR0]
 )]
 mod app {
+    use core::f32::consts::PI;
     use libdaisy::{audio, gpio, hid, logger, system};
-    use libm::{atan2f, cosf, sinf};
+    use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
     use log::{info, warn};
-    use microfft::complex::cfft_256;
-    use microfft::inverse::ifft_256;
-    use microfft::Complex32;
-    use stm32h7xx_hal::{gpio::Input, time::MilliSeconds};
+    use stm32h7xx_hal::{
+        adc,
+        gpio::{Analog, Input},
+        stm32,
+        time::MilliSeconds,
+    };
 
-    use crate::{DESIRED_FREQ, FFT_SIZE, HOP_SIZE, SAMPLE_RATE};
+    use crate::{
+        circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
+    };
 
     #[shared]
-    struct Shared {}
+    struct Shared {
+        in_buffer: CircularBuffer<f32, BUFFER_SIZE>,
+        out_buffer: CircularBuffer<f32, BUFFER_SIZE>,
+        last_input_phases: [f32; FFT_SIZE],
+        last_output_phases: [f32; FFT_SIZE],
+        bin_frequencies: [f32; FFT_SIZE / 2],
+        process_fft: bool,
+        hop_counter: u32,
+    }
 
     #[local]
     struct Local {
         audio: audio::Audio,
         buffer: audio::AudioBuffer,
-        fft_input: [Complex32; FFT_SIZE],
-        fft_output: [Complex32; FFT_SIZE],
-        ifft_output: [Complex32; FFT_SIZE],
-        envelope: [f32; FFT_SIZE],
-        carrier: [Complex32; FFT_SIZE],
-        window: [f32; FFT_SIZE],
-        overlap_buffer: [f32; FFT_SIZE - HOP_SIZE],
-        last_phase: [f32; FFT_SIZE],
         button: hid::Switch<gpio::Daisy28<Input>>,
+        pot_input: hid::AnalogControl<gpio::Daisy15<Analog>>,
+        adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
     }
 
     #[init]
@@ -46,17 +60,9 @@ mod app {
         let mut core = ctx.core;
         let device = ctx.device;
         let ccdr = system::System::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
-        let mut system = libdaisy::system_init!(core, device, ccdr);
+        let mut system = libdaisy::system_init!(core, device, ccdr, BLOCK_SIZE);
 
         let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
-        let fft_input = [Complex32::new(0.0, 0.0); FFT_SIZE];
-        let fft_output = [Complex32::new(0.0, 0.0); FFT_SIZE];
-        let ifft_output = [Complex32::new(0.0, 0.0); FFT_SIZE];
-        let envelope = [0.0; FFT_SIZE];
-        let mut carrier = [Complex32::new(0.0, 0.0); FFT_SIZE];
-        let window = generate_hanning_window();
-        let overlap_buffer = [0.0; FFT_SIZE - HOP_SIZE];
-        let last_phase = [0.0; FFT_SIZE];
 
         let daisy28 = system
             .gpio
@@ -65,14 +71,22 @@ mod app {
             .expect("Failed to get pin daisy28!")
             .into_pull_up_input();
 
+        let daisy15 = system
+            .gpio
+            .daisy15
+            .take()
+            .expect("Failed to get pin daisy29!")
+            .into_analog();
+
         let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
         switch1.set_double_thresh(Some(500));
         switch1.set_held_thresh(Some(150));
 
-        for (i, c) in carrier.iter_mut().enumerate() {
-            let phase = 2.0 * core::f32::consts::PI * DESIRED_FREQ * i as f32 / SAMPLE_RATE;
-            *c = Complex32::new(cosf(phase), sinf(phase)); // Correct phase calculation
-        }
+        let mut adc1 = system.adc1.enable();
+        adc1.set_resolution(adc::Resolution::EightBit);
+        let adc1_max = adc1.slope() as f32;
+
+        let pot_input = hid::AnalogControl::new(daisy15, adc1_max);
 
         info!("Startup done!!");
         let mut timer2 = stm32h7xx_hal::timer::TimerExt::timer(
@@ -85,18 +99,20 @@ mod app {
 
         timer2.set_freq(MilliSeconds::from_ticks(500).into_rate());
         (
-            Shared {},
+            Shared {
+                in_buffer: CircularBuffer::new(0.0, None),
+                out_buffer: CircularBuffer::new(0.0, Some(HOP_SIZE)),
+                last_input_phases: [0.0; FFT_SIZE],
+                last_output_phases: [0.0; FFT_SIZE],
+                bin_frequencies: [0.0; FFT_SIZE / 2],
+                process_fft: false,
+                hop_counter: 0,
+            },
             Local {
+                pot_input,
+                adc1,
                 audio: system.audio,
                 buffer,
-                fft_input,
-                fft_output,
-                ifft_output,
-                envelope,
-                carrier,
-                window,
-                overlap_buffer,
-                last_phase,
                 button: switch1,
             },
             init::Monotonics(),
@@ -110,80 +126,75 @@ mod app {
         }
     }
 
-    #[task(binds = DMA1_STR1, local = [audio, buffer, fft_input, fft_output, ifft_output, envelope, carrier, window, overlap_buffer, last_phase, button], priority = 8)]
-    fn audio_handler(ctx: audio_handler::Context) {
+    #[task(binds = DMA1_STR1, local = [audio, buffer, button], shared = [
+
+        in_buffer,
+        out_buffer,
+        last_input_phases,
+        last_output_phases,
+        bin_frequencies,
+        process_fft,
+        hop_counter,
+
+    ], priority = 8)]
+    fn audio_handler(mut ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
         let buffer = ctx.local.buffer;
-        let fft_input = ctx.local.fft_input;
-        let fft_output = ctx.local.fft_output;
-        let ifft_output = ctx.local.ifft_output;
-        let envelope = ctx.local.envelope;
-        let carrier = ctx.local.carrier;
-        let window = ctx.local.window;
-        let overlap_buffer = ctx.local.overlap_buffer;
-        let last_phase = ctx.local.last_phase;
-
         let switch1 = ctx.local.button;
         let button_pressed = switch1.is_held() || switch1.is_pressed();
 
         if audio.get_stereo(buffer) {
-            if button_pressed {
-                for chunk_start in (0..audio::BLOCK_SIZE_MAX).step_by(HOP_SIZE) {
-                    if chunk_start + FFT_SIZE > audio::BLOCK_SIZE_MAX {
-                        break; // Avoid out of bounds
+            for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
+                let mut out_sample = *left;
+                // info!("{out_sample}");
+
+                // Lock to write to in_buffer
+                ctx.shared.in_buffer.lock(|in_buffer| {
+                    in_buffer.write(*left);
+                });
+
+                // Lock to read from out_buffer and reset the value
+                ctx.shared.out_buffer.lock(|out_buffer| {
+                    if button_pressed {
+                        out_sample = out_buffer.read_and_reset();
+                    } else {
+                        _ = out_buffer.read_and_reset();
+                    }
+                });
+
+                // Check and handle hop counter
+
+                let mut local_hop_counter: u32 = 0;
+
+                ctx.shared.hop_counter.lock(|count| {
+                    local_hop_counter = *count;
+                });
+                if local_hop_counter >= HOP_SIZE as u32 {
+                    ctx.shared.hop_counter.lock(|count| {
+                        *count = 0;
+                    });
+
+                    // Run FFT Process in new software task
+                    if dma1_stream0_software_task::spawn().is_err() {
+                        warn!("Could not unwrap software task - underrun error");
                     }
 
-                    for i in 0..FFT_SIZE {
-                        let sample_index = chunk_start + i;
-                        let sample = if sample_index < FFT_SIZE - HOP_SIZE {
-                            overlap_buffer[sample_index] // Use overlap buffer for initial samples
-                        } else {
-                            buffer[sample_index - (FFT_SIZE - HOP_SIZE)].0 // Left channel
-                        };
-                        fft_input[i] = Complex32::new(sample * window[i], 0.0);
-                    }
+                    // Lock to set process_fft flag
+                    ctx.shared.process_fft.lock(|process_fft| {
+                        *process_fft = true;
+                    });
 
-                    let fft_result = cfft_256(fft_input);
-                    fft_output.copy_from_slice(fft_result);
-
-                    for (i, &value) in fft_output.iter().enumerate() {
-                        let current_phase = phase(&value);
-                        let phase_difference = current_phase - last_phase[i];
-                        let true_freq = DESIRED_FREQ
-                            + phase_difference * SAMPLE_RATE
-                                / (2.0 * core::f32::consts::PI * HOP_SIZE as f32);
-
-                        last_phase[i] = current_phase; // Update last phase
-
-                        envelope[i] = value.norm_sqr(); // Magnitude squared for envelope
-                        carrier[i] = Complex32::new(cosf(true_freq), sinf(true_freq));
-                        // Adjust carrier frequency based on true frequency
-                    }
-
-                    for i in 0..FFT_SIZE {
-                        fft_output[i] = Complex32::new(
-                            carrier[i].re * envelope[i],
-                            carrier[i].im * envelope[i],
-                        );
-                    }
-
-                    let ifft_result = ifft_256(fft_output);
-                    ifft_output.copy_from_slice(ifft_result);
-
-                    for i in 0..FFT_SIZE {
-                        let output_index = chunk_start + i;
-                        if output_index < FFT_SIZE - HOP_SIZE {
-                            overlap_buffer[output_index] = ifft_output[i].re; // Update overlap buffer
-                        } else if output_index - (FFT_SIZE - HOP_SIZE) < audio::BLOCK_SIZE_MAX {
-                            buffer[output_index - (FFT_SIZE - HOP_SIZE)].0 = ifft_output[i].re;
-                            buffer[output_index - (FFT_SIZE - HOP_SIZE)].1 = ifft_output[i].re;
-                        }
-                    }
+                    // Lock to advance the output buffer's hop
+                    ctx.shared.out_buffer.lock(|out_buffer| {
+                        out_buffer.next_hop();
+                    });
                 }
-            }
+                ctx.shared.hop_counter.lock(|count| {
+                    *count += 1;
+                });
 
-            for (left, right) in buffer.iter() {
-                if audio.push_stereo((*left, *right)).is_err() {
+                // Output the processed audio or further processing
+                if audio.push_stereo((out_sample, *right)).is_err() {
                     warn!("Failed to write audio data");
                 }
             }
@@ -192,16 +203,156 @@ mod app {
         }
     }
 
-    fn generate_hanning_window() -> [f32; FFT_SIZE] {
-        let mut window = [0.0; FFT_SIZE];
-        for i in 0..FFT_SIZE {
-            window[i] = 0.5
-                * (1.0 - libm::cosf(2.0 * core::f32::consts::PI * i as f32 / (FFT_SIZE as f32)));
+    /// FFT TASK
+    #[task( shared = [
+        in_buffer,
+        out_buffer,
+        last_input_phases,
+        last_output_phases,
+        bin_frequencies,
+        process_fft,
+    ], local = [adc1, pot_input],priority = 7)]
+    fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
+        // info!("running task");
+        let adc1 = ctx.local.adc1;
+        let pot = ctx.local.pot_input;
+
+        adc1.start_conversion(pot.get_pin());
+
+        let adc_result = adc1.read_sample().unwrap_or(1);
+        let pitch_shift = 0.15 * adc_result as f32 - 1.15;
+        info!("ADC result: {}, pitch shift: {}", adc_result, pitch_shift);
+
+        // START ACTUAL FFT PROCESSING
+        // let start_cycles = cortex_m::peripheral::DWT::cycle_count();
+        let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+
+        let mut unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+        let mut full_spectrum: [microfft::Complex32; FFT_SIZE] =
+            [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+        let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];
+        let mut analysis_frequencies = [0.0; FFT_SIZE / 2];
+        let mut synthesis_magnitudes = [0.0; FFT_SIZE / 2];
+        let mut synthesis_frequencies = [0.0; FFT_SIZE / 2];
+        let mut _synthesis_count = [0; FFT_SIZE / 2];
+
+        // copy buffer into FFT input, starting one window ago
+        ctx.shared.in_buffer.lock(|in_buffer| {
+            in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
+        });
+
+        for n in 0..FFT_SIZE {
+            ctx.shared.in_buffer.lock(|in_buffer| {
+                unwrapped_buffer[n] *= in_buffer.read();
+            });
         }
-        window
+
+        // Process the FFT based on the time domain input
+        let fft = microfft::real::rfft_1024(&mut unwrapped_buffer);
+
+        // ANALYSIS
+        for i in 0..fft.len() {
+            // Turn real and imaginary components into amplitude and phase
+            let amplitude = sqrtf(fft[i].re * fft[i].re + fft[i].im * fft[i].im);
+            let phase = atan2f(fft[i].im, fft[i].re);
+
+            // Calculate the phase difference in this bin between the last
+            // hop and this one, which will indirectly give us the exact frequency
+            let mut phase_diff = 0.0;
+            ctx.shared.last_input_phases.lock(|last_input_phases| {
+                phase_diff = phase - last_input_phases[i];
+            });
+
+            // Subtract the amount of phase increment we'd expect to see based
+            // on the centre frequency of this bin (2*pi*n/gFftSize) for this
+            // hop size, then wrap to the range -pi to pi
+            let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
+
+            phase_diff = wrap_phase(phase_diff - bin_centre_frequency * HOP_SIZE as f32);
+            // Find deviation from the centre frequency
+            let bin_deviation = phase_diff * FFT_SIZE as f32 / HOP_SIZE as f32 / (2.0 * PI);
+
+            // Add the original bin number to get the fractional bin where this partial belongs
+            analysis_frequencies[i] = i as f32 + bin_deviation;
+            // Save the magnitude for later
+            analysis_magnitudes[i] = amplitude;
+            // Save the phase for next hop
+            ctx.shared.last_input_phases.lock(|last_input_phases| {
+                last_input_phases[i] = phase;
+            });
+        }
+
+        // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
+
+        // Handle the pitch shift, storing frequencies into new bins
+        for i in 0..FFT_SIZE / 2 {
+            // find the nearest bin to the shifted frequency
+            let new_bin = floorf(i as f32 * pitch_shift + 0.5) as usize;
+
+            // Ignore any bins that have shifted above Nyquist
+            if new_bin < FFT_SIZE / 2 {
+                synthesis_magnitudes[new_bin] += analysis_magnitudes[i];
+                synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift;
+            }
+        }
+
+        // SYNTHESIS
+        for i in 0..FFT_SIZE / 2 {
+            let amplitude = synthesis_magnitudes[i];
+            // Get the fractional offset from the bin centre frequency
+
+            let bin_deviation = synthesis_frequencies[i] - i as f32;
+            // Multiply to get back to a phase value
+            let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
+            // Add the expected phase increment based on the bin centre frequency
+            let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
+            phase_diff += bin_centre_frequency * HOP_SIZE as f32;
+            // Advance the phase from the previous hop
+            let mut out_phase = 0.0;
+            ctx.shared.last_output_phases.lock(|last_output_phases| {
+                out_phase = wrap_phase(last_output_phases[i] + phase_diff);
+            });
+
+            // Now convert magnitude and phase back to real and imaginary components
+            fft[i].re = amplitude * cosf(out_phase);
+            fft[i].im = amplitude * sinf(out_phase);
+            // Also store the complex conjugate in the upper half of the spectrum
+
+            // Save the phase for the next hop
+            ctx.shared.last_output_phases.lock(|last_output_phases| {
+                last_output_phases[i] = out_phase;
+            });
+        }
+
+        // Reconstruct the full spectrum for the IFFT
+        for i in 0..(FFT_SIZE / 2) {
+            full_spectrum[i] = fft[i]; // First half directly
+            if i > 0 && i < (FFT_SIZE / 2) {
+                full_spectrum[FFT_SIZE - i] = fft[i].conj(); // Conjugate symmetry for the second half
+            }
+        }
+
+        // Run the inverse FFT
+        let res = microfft::inverse::ifft_1024(&mut full_spectrum);
+
+        // Add time domain into the output buffer
+        for (n, val) in res.iter().enumerate() {
+            let windowed_val = val.re * analysis_window_buffer[n]; // Window again and scale
+            ctx.shared.out_buffer.lock(|out_buffer| {
+                out_buffer.add_value(windowed_val);
+            });
+        }
+
+        let end_cycle = cortex_m::peripheral::DWT::cycle_count();
+
+        // let elapsed = start_cycles.wrapping_sub(end_cycle);
+        // info!("FFT Process Time{elapsed}");
     }
 
-    fn phase(c: &Complex32) -> f32 {
-        atan2f(c.im, c.re)
+    fn wrap_phase(phase_in: f32) -> f32 {
+        if phase_in >= 0.0 {
+            return fmodf(phase_in + PI, 2.0 * PI) - PI;
+        }
+        fmodf(phase_in - PI, -2.0 * PI) + PI
     }
 }
