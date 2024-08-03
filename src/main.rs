@@ -7,10 +7,11 @@
 const _SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 2;
-const HOP_SIZE: usize = 256;
-const BLOCK_SIZE: usize = HOP_SIZE / 128;
+const HOP_SIZE: usize = 512;
+const BLOCK_SIZE: usize = 2;
 mod circular_buffer;
 mod hann_window;
+mod frequencies;
 
 #[rtic::app(
     device = stm32h7xx_hal::stm32,
@@ -20,7 +21,7 @@ mod hann_window;
 mod app {
     use core::f32::consts::PI;
     use libdaisy::{audio, gpio, hid, logger, system};
-    use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
+    use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf, pow, fabsf};
     use log::{info, warn};
     use stm32h7xx_hal::{
         adc,
@@ -30,7 +31,7 @@ mod app {
     };
 
     use crate::{
-        circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
+        circular_buffer::CircularBuffer, frequencies, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE
     };
 
     #[shared]
@@ -127,7 +128,6 @@ mod app {
     }
 
     #[task(binds = DMA1_STR1, local = [audio, buffer, button], shared = [
-
         in_buffer,
         out_buffer,
         last_input_phases,
@@ -135,7 +135,6 @@ mod app {
         bin_frequencies,
         process_fft,
         hop_counter,
-
     ], priority = 8)]
     fn audio_handler(mut ctx: audio_handler::Context) {
         let audio = ctx.local.audio;
@@ -163,9 +162,7 @@ mod app {
                 });
 
                 // Check and handle hop counter
-
                 let mut local_hop_counter: u32 = 0;
-
                 ctx.shared.hop_counter.lock(|count| {
                     local_hop_counter = *count;
                 });
@@ -194,7 +191,7 @@ mod app {
                 });
 
                 // Output the processed audio or further processing
-                if audio.push_stereo((out_sample, *right)).is_err() {
+                if audio.push_stereo((out_sample, out_sample)).is_err() {
                     warn!("Failed to write audio data");
                 }
             }
@@ -204,14 +201,14 @@ mod app {
     }
 
     /// FFT TASK
-    #[task( shared = [
+    #[task(shared = [
         in_buffer,
         out_buffer,
         last_input_phases,
         last_output_phases,
         bin_frequencies,
         process_fft,
-    ], local = [adc1, pot_input],priority = 7)]
+    ], local = [adc1, pot_input], priority = 7)]
     fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
         // info!("running task");
         let adc1 = ctx.local.adc1;
@@ -224,7 +221,6 @@ mod app {
         info!("ADC result: {}, pitch shift: {}", adc_result, pitch_shift);
 
         // START ACTUAL FFT PROCESSING
-        // let start_cycles = cortex_m::peripheral::DWT::cycle_count();
         let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
         let mut unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
@@ -236,7 +232,7 @@ mod app {
         let mut synthesis_frequencies = [0.0; FFT_SIZE / 2];
         let mut _synthesis_count = [0; FFT_SIZE / 2];
 
-        // copy buffer into FFT input, starting one window ago
+        // Copy buffer into FFT input, starting one window ago
         ctx.shared.in_buffer.lock(|in_buffer| {
             in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
         });
@@ -287,12 +283,16 @@ mod app {
         // Handle the pitch shift, storing frequencies into new bins
         for i in 0..FFT_SIZE / 2 {
             // find the nearest bin to the shifted frequency
+            let exact_frequency = analysis_frequencies[i];
+            let target_frequency = find_nearest_note_frequency(exact_frequency);
+            let pitch_shift = target_frequency / exact_frequency;
+
             let new_bin = floorf(i as f32 * pitch_shift + 0.5) as usize;
 
             // Ignore any bins that have shifted above Nyquist
             if new_bin < FFT_SIZE / 2 {
                 synthesis_magnitudes[new_bin] += analysis_magnitudes[i];
-                synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift;
+                synthesis_frequencies[new_bin] = exact_frequency * pitch_shift;
             }
         }
 
@@ -300,7 +300,6 @@ mod app {
         for i in 0..FFT_SIZE / 2 {
             let amplitude = synthesis_magnitudes[i];
             // Get the fractional offset from the bin centre frequency
-
             let bin_deviation = synthesis_frequencies[i] - i as f32;
             // Multiply to get back to a phase value
             let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
@@ -354,5 +353,16 @@ mod app {
             return fmodf(phase_in + PI, 2.0 * PI) - PI;
         }
         fmodf(phase_in - PI, -2.0 * PI) + PI
+    }
+
+    fn find_nearest_note_frequency(frequency: f32) -> f32 {
+        *frequencies::FREQUENCIES
+            .iter()
+            .min_by(|a, b| {
+                fabsf(*a - frequency)
+                    .partial_cmp(&fabsf(*b - frequency))
+                    .unwrap()
+            })
+            .unwrap()
     }
 }
