@@ -7,11 +7,11 @@
 const _SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 2;
-const HOP_SIZE: usize = 512;
+const HOP_SIZE: usize = 256;
 const BLOCK_SIZE: usize = 2;
 mod circular_buffer;
-mod hann_window;
 mod frequencies;
+mod hann_window;
 
 #[rtic::app(
     device = stm32h7xx_hal::stm32,
@@ -21,7 +21,7 @@ mod frequencies;
 mod app {
     use core::f32::consts::PI;
     use libdaisy::{audio, gpio, hid, logger, system};
-    use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf, pow, fabsf};
+    use libm::{atan2f, cosf, fabsf, floorf, fmodf, pow, sinf, sqrtf};
     use log::{info, warn};
     use stm32h7xx_hal::{
         adc,
@@ -31,7 +31,8 @@ mod app {
     };
 
     use crate::{
-        circular_buffer::CircularBuffer, frequencies, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE
+        circular_buffer::CircularBuffer, frequencies, hann_window, BLOCK_SIZE, BUFFER_SIZE,
+        FFT_SIZE, HOP_SIZE,
     };
 
     #[shared]
@@ -281,15 +282,23 @@ mod app {
         // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
 
         // Handle the pitch shift, storing frequencies into new bins
+        let transition_speed = 0.1; // Smaller values mean smoother transitions
+
+        // Handle the pitch shift, storing frequencies into new bins
         for i in 0..FFT_SIZE / 2 {
-            // find the nearest bin to the shifted frequency
             let exact_frequency = analysis_frequencies[i];
             let target_frequency = find_nearest_note_frequency(exact_frequency);
+
+            if target_frequency == 0.0 {
+                continue; // Skip invalid frequencies
+            }
+
             let pitch_shift = target_frequency / exact_frequency;
 
-            let new_bin = floorf(i as f32 * pitch_shift + 0.5) as usize;
+            // Calculate the new bin index
+            let new_bin = floorf(i as f32 * pitch_shift + 0.5)as usize;
 
-            // Ignore any bins that have shifted above Nyquist
+            // Ensure new_bin is within bounds
             if new_bin < FFT_SIZE / 2 {
                 synthesis_magnitudes[new_bin] += analysis_magnitudes[i];
                 synthesis_frequencies[new_bin] = exact_frequency * pitch_shift;
@@ -327,7 +336,8 @@ mod app {
         for i in 0..(FFT_SIZE / 2) {
             full_spectrum[i] = fft[i]; // First half directly
             if i > 0 && i < (FFT_SIZE / 2) {
-                full_spectrum[FFT_SIZE - i] = fft[i].conj(); // Conjugate symmetry for the second half
+                // Conjugate symmetry for the second half
+                full_spectrum[FFT_SIZE - i] = fft[i].conj();
             }
         }
 
@@ -342,12 +352,11 @@ mod app {
             });
         }
 
-        let end_cycle = cortex_m::peripheral::DWT::cycle_count();
-
         // let elapsed = start_cycles.wrapping_sub(end_cycle);
         // info!("FFT Process Time{elapsed}");
     }
 
+    #[inline(always)]
     fn wrap_phase(phase_in: f32) -> f32 {
         if phase_in >= 0.0 {
             return fmodf(phase_in + PI, 2.0 * PI) - PI;
@@ -355,14 +364,34 @@ mod app {
         fmodf(phase_in - PI, -2.0 * PI) + PI
     }
 
+    #[inline(always)]
     fn find_nearest_note_frequency(frequency: f32) -> f32 {
-        *frequencies::FREQUENCIES
-            .iter()
-            .min_by(|a, b| {
-                fabsf(*a - frequency)
-                    .partial_cmp(&fabsf(*b - frequency))
-                    .unwrap()
-            })
-            .unwrap()
+        if frequencies::FREQUENCIES.is_empty() {
+            warn!("COULDN'T FIND FREQUENCY");
+            return frequency;
+        }
+    
+        let mut low = 0;
+        let mut high = frequencies::FREQUENCIES.len() - 1;
+    
+        while low < high {
+            let mid = (low + high) / 2;
+            let mid_freq = frequencies::FREQUENCIES[mid];
+    
+            if mid_freq < frequency {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+    
+        // After the loop, 'low' should be the index of the closest frequency or the next higher frequency.
+        // Check if the previous frequency is closer.
+        if low > 0 && fabsf(frequencies::FREQUENCIES[low] - frequency) > fabsf(frequencies::FREQUENCIES[low - 1] - frequency) {
+            low -= 1;
+        }
+    
+        frequencies::FREQUENCIES[low]
     }
+    
 }
