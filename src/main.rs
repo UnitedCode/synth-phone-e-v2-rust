@@ -41,9 +41,10 @@ mod app {
         out_buffer: CircularBuffer<f32, BUFFER_SIZE>,
         last_input_phases: [f32; FFT_SIZE],
         last_output_phases: [f32; FFT_SIZE],
-        bin_frequencies: [f32; FFT_SIZE / 2],
-        process_fft: bool,
+        synthesis_magnitudes: [f32; FFT_SIZE],
+        synthesis_frequencies: [f32; FFT_SIZE],
         hop_counter: u32,
+        process_fft: bool,
     }
 
     #[local]
@@ -106,9 +107,10 @@ mod app {
                 out_buffer: CircularBuffer::new(0.0, Some(HOP_SIZE)),
                 last_input_phases: [0.0; FFT_SIZE],
                 last_output_phases: [0.0; FFT_SIZE],
-                bin_frequencies: [0.0; FFT_SIZE / 2],
-                process_fft: false,
+                synthesis_magnitudes: [0.0; FFT_SIZE],
+                synthesis_frequencies: [0.0; FFT_SIZE],
                 hop_counter: 0,
+                process_fft: false,
             },
             Local {
                 pot_input,
@@ -133,7 +135,6 @@ mod app {
         out_buffer,
         last_input_phases,
         last_output_phases,
-        bin_frequencies,
         process_fft,
         hop_counter,
     ], priority = 8)]
@@ -207,7 +208,8 @@ mod app {
         out_buffer,
         last_input_phases,
         last_output_phases,
-        bin_frequencies,
+        synthesis_magnitudes,
+        synthesis_frequencies,
         process_fft,
     ], local = [adc1, pot_input], priority = 7)]
     fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
@@ -229,8 +231,6 @@ mod app {
             [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
         let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];
         let mut analysis_frequencies = [0.0; FFT_SIZE / 2];
-        let mut synthesis_magnitudes = [0.0; FFT_SIZE / 2];
-        let mut synthesis_frequencies = [0.0; FFT_SIZE / 2];
         let mut _synthesis_count = [0; FFT_SIZE / 2];
 
         // Copy buffer into FFT input, starting one window ago
@@ -282,51 +282,52 @@ mod app {
         // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
 
         // Handle the pitch shift, storing frequencies into new bins
-        let transition_speed = 0.1; // Smaller values mean smoother transitions
-
-        // Handle the pitch shift, storing frequencies into new bins
+        let transition_speed = 0.000000001; // Adjust this value for smoother transitions
         for i in 0..FFT_SIZE / 2 {
             let exact_frequency = analysis_frequencies[i];
             let target_frequency = find_nearest_note_frequency(exact_frequency);
-
-            if target_frequency == 0.0 {
-                continue; // Skip invalid frequencies
-            }
-
             let pitch_shift = target_frequency / exact_frequency;
 
-            // Calculate the new bin index
-            let new_bin = floorf(i as f32 * pitch_shift + 0.5)as usize;
+            let new_bin = floorf(i as f32 * pitch_shift + 0.5) as usize;
 
-            // Ensure new_bin is within bounds
             if new_bin < FFT_SIZE / 2 {
-                synthesis_magnitudes[new_bin] += analysis_magnitudes[i];
-                synthesis_frequencies[new_bin] = exact_frequency * pitch_shift;
+                ctx.shared
+                    .synthesis_magnitudes
+                    .lock(|synthesis_magnitudes| {
+                        synthesis_magnitudes[new_bin] = transition_speed
+                            * synthesis_magnitudes[new_bin]
+                            + (1.0 - transition_speed) * analysis_magnitudes[i];
+                    });
+                ctx.shared
+                    .synthesis_frequencies
+                    .lock(|synthesis_frequencies| {
+                        synthesis_frequencies[new_bin] = exact_frequency * pitch_shift;
+                    });
             }
         }
 
         // SYNTHESIS
         for i in 0..FFT_SIZE / 2 {
-            let amplitude = synthesis_magnitudes[i];
-            // Get the fractional offset from the bin centre frequency
-            let bin_deviation = synthesis_frequencies[i] - i as f32;
-            // Multiply to get back to a phase value
+            let amplitude = ctx
+                .shared
+                .synthesis_magnitudes
+                .lock(|synthesis_magnitudes| synthesis_magnitudes[i]);
+            let bin_deviation = ctx
+                .shared
+                .synthesis_frequencies
+                .lock(|synthesis_frequencies| synthesis_frequencies[i] - i as f32);
             let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
-            // Add the expected phase increment based on the bin centre frequency
             let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
             phase_diff += bin_centre_frequency * HOP_SIZE as f32;
-            // Advance the phase from the previous hop
+
             let mut out_phase = 0.0;
             ctx.shared.last_output_phases.lock(|last_output_phases| {
                 out_phase = wrap_phase(last_output_phases[i] + phase_diff);
             });
 
-            // Now convert magnitude and phase back to real and imaginary components
             fft[i].re = amplitude * cosf(out_phase);
             fft[i].im = amplitude * sinf(out_phase);
-            // Also store the complex conjugate in the upper half of the spectrum
 
-            // Save the phase for the next hop
             ctx.shared.last_output_phases.lock(|last_output_phases| {
                 last_output_phases[i] = out_phase;
             });
@@ -370,28 +371,30 @@ mod app {
             warn!("COULDN'T FIND FREQUENCY");
             return frequency;
         }
-    
+
         let mut low = 0;
         let mut high = frequencies::FREQUENCIES.len() - 1;
-    
+
         while low < high {
             let mid = (low + high) / 2;
             let mid_freq = frequencies::FREQUENCIES[mid];
-    
+
             if mid_freq < frequency {
                 low = mid + 1;
             } else {
                 high = mid;
             }
         }
-    
+
         // After the loop, 'low' should be the index of the closest frequency or the next higher frequency.
         // Check if the previous frequency is closer.
-        if low > 0 && fabsf(frequencies::FREQUENCIES[low] - frequency) > fabsf(frequencies::FREQUENCIES[low - 1] - frequency) {
+        if low > 0
+            && fabsf(frequencies::FREQUENCIES[low] - frequency)
+                > fabsf(frequencies::FREQUENCIES[low - 1] - frequency)
+        {
             low -= 1;
         }
-    
+
         frequencies::FREQUENCIES[low]
     }
-    
 }
