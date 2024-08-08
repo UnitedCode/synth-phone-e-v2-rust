@@ -12,6 +12,7 @@ const BLOCK_SIZE: usize = 2;
 mod circular_buffer;
 mod frequencies;
 mod hann_window;
+mod process_frequencies;
 
 #[cfg(not(test))]
 mod rtic_app {
@@ -21,9 +22,10 @@ mod rtic_app {
     dispatchers = [DMA1_STR0]
 )]
     mod app {
+        use crate::process_frequencies::calculate_updates;
         use core::f32::consts::PI;
         use libdaisy::{audio, gpio, hid, logger, system};
-        use libm::{atan2f, cosf, fabsf, floorf, fmodf, pow, sinf, sqrtf};
+        use libm::{atan2f, cosf, fmodf, sinf, sqrtf};
         use log::{info, warn};
         use stm32h7xx_hal::{
             adc,
@@ -33,8 +35,8 @@ mod rtic_app {
         };
 
         use crate::{
-            circular_buffer::CircularBuffer, frequencies, hann_window, BLOCK_SIZE, BUFFER_SIZE,
-            FFT_SIZE, HOP_SIZE,
+            circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE,
+            HOP_SIZE,
         };
 
         #[shared]
@@ -147,7 +149,7 @@ mod rtic_app {
             let button_pressed = switch1.is_held() || switch1.is_pressed();
 
             if audio.get_stereo(buffer) {
-                for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
+                for (left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
                     let mut out_sample = *left;
                     // info!("{out_sample}");
 
@@ -286,24 +288,21 @@ mod rtic_app {
             // Handle the pitch shift, storing frequencies into new bins
             let transition_speed = 0.1; // Adjust this value for smoother transitions
             for i in 0..FFT_SIZE / 2 {
-                let exact_frequency = analysis_frequencies[i];
-                let target_frequency = find_nearest_note_frequency(exact_frequency);
-                let pitch_shift = target_frequency / exact_frequency;
-
-                let new_bin = floorf(i as f32 * pitch_shift + 0.5) as usize;
-
-                if new_bin < FFT_SIZE / 2 {
+                if let Some((new_bin, updated_magnitude, updated_frequency)) = calculate_updates(
+                    i,
+                    &analysis_frequencies,
+                    &analysis_magnitudes,
+                    transition_speed,
+                ) {
                     ctx.shared
                         .synthesis_magnitudes
                         .lock(|synthesis_magnitudes| {
-                            synthesis_magnitudes[new_bin] = transition_speed
-                                * synthesis_magnitudes[new_bin]
-                                + (1.0 - transition_speed) * analysis_magnitudes[i];
+                            synthesis_magnitudes[new_bin] = updated_magnitude;
                         });
                     ctx.shared
                         .synthesis_frequencies
                         .lock(|synthesis_frequencies| {
-                            synthesis_frequencies[new_bin] = exact_frequency * pitch_shift;
+                            synthesis_frequencies[new_bin] = updated_frequency;
                         });
                 }
             }
@@ -365,39 +364,6 @@ mod rtic_app {
                 return fmodf(phase_in + PI, 2.0 * PI) - PI;
             }
             fmodf(phase_in - PI, -2.0 * PI) + PI
-        }
-
-        #[inline(always)]
-        fn find_nearest_note_frequency(frequency: f32) -> f32 {
-            if frequencies::FREQUENCIES.is_empty() {
-                warn!("COULDN'T FIND FREQUENCY");
-                return frequency;
-            }
-
-            let mut low = 0;
-            let mut high = frequencies::FREQUENCIES.len() - 1;
-
-            while low < high {
-                let mid = (low + high) / 2;
-                let mid_freq = frequencies::FREQUENCIES[mid];
-
-                if mid_freq < frequency {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
-            }
-
-            // After the loop, 'low' should be the index of the closest frequency or the next higher frequency.
-            // Check if the previous frequency is closer.
-            if low > 0
-                && fabsf(frequencies::FREQUENCIES[low] - frequency)
-                    > fabsf(frequencies::FREQUENCIES[low - 1] - frequency)
-            {
-                low -= 1;
-            }
-
-            frequencies::FREQUENCIES[low]
         }
     }
 }
