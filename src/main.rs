@@ -257,6 +257,12 @@ mod rtic_app {
                 let amplitude = sqrtf(fft[i].re * fft[i].re + fft[i].im * fft[i].im);
                 let phase = atan2f(fft[i].im, fft[i].re);
 
+                //cut out noise
+                let magnitude_threshold = 0.05;  // Adjust this threshold as needed
+                if amplitude < magnitude_threshold {
+                    continue;  // Skip this bin if the magnitude is too low
+                }
+
                 // Calculate the phase difference in this bin between the last
                 // hop and this one, which will indirectly give us the exact frequency
                 let mut phase_diff = 0.0;
@@ -277,6 +283,7 @@ mod rtic_app {
                 analysis_frequencies[i] = i as f32 + bin_deviation;
                 // Save the magnitude for later
                 analysis_magnitudes[i] = amplitude;
+
                 // Save the phase for next hop
                 ctx.shared.last_input_phases.lock(|last_input_phases| {
                     last_input_phases[i] = phase;
