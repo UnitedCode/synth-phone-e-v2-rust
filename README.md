@@ -27,17 +27,22 @@ Ensure you have Rust installed on your system. If not, you can install it from t
    ```
 
 4. **Install cargo-embed (actually probe-rs):**
-   
+
    https://probe.rs/docs/getting-started/installation/
 
    `cargo-embed` is used for flashing your program to the microcontroller and provides a basic debugger.
+
+5. **Install Cargo Make**
+```sh
+cargo install cargo-make
+```
 
 ## Flashing Your Program
 
 To flash your program to a microcontroller, navigate to your project directory in the terminal and run:
 
 ```sh
-cargo embed
+cargo make embed
 ```
 
 This command reads your `Embed.toml` configuration file (if present) and flashes the program accordingly.
