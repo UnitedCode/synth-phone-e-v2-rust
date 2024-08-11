@@ -292,6 +292,12 @@ mod rtic_app {
 
             // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
 
+            //TODO: maybe do this before analysis since (i believe) we should only shift the fundamental and harmonics
+            //and if that is then we should not analyze noise/non-important freqs
+            let fundamental_index = find_fundamental_frequency(analysis_magnitudes);
+            let harmonics = collect_harmonics(fundamental_index);
+
+            //TODO: just pitch shift the fundamental and the harmonics by the same amount
             // Handle the pitch shift, storing frequencies into new bins
             let transition_speed = 0.1; // Adjust this value for smoother transitions
             for i in 0..FFT_SIZE / 2 {
@@ -371,6 +377,25 @@ mod rtic_app {
                 return fmodf(phase_in + PI, 2.0 * PI) - PI;
             }
             fmodf(phase_in - PI, -2.0 * PI) + PI
+        }
+
+        //find the fundamental by the highest amplitude 
+        fn find_fundamental_frequency(amplitudes: &[f32]) -> usize {
+            amplitudes.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i)
+                .unwrap_or(0)
+        }
+
+        //find a n number of harmonics by the fundamental index
+        fn collect_harmonics(fundamental_index: usize) -> [usize; 4] {
+            let mut harmonics = [0; 4];
+            for n in 1..= 4 {
+                let harmonic_index = fundamental_index * n;
+                harmonics.push(harmonic_index);
+            }
+            harmonics
         }
     }
 }
