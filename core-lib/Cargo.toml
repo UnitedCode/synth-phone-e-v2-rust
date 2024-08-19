@@ -1,0 +1,8 @@
+[package]
+name = "core-lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libm = "0.2.8"
+log = "0.4.21"

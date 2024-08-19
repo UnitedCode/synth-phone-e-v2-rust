@@ -1,5 +1,5 @@
-#![cfg_attr(not(test), no_main)]
-#![cfg_attr(not(test), no_std)]
+#![no_main]
+#![no_std]
 // #![deny(warnings)]
 #![deny(unsafe_code)]
 // #![deny(missing_docs)]
@@ -14,7 +14,6 @@ mod frequencies;
 mod hann_window;
 mod process_frequencies;
 
-#[cfg(not(test))]
 mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
@@ -228,9 +227,9 @@ mod rtic_app {
             // info!("ADC result: {}, pitch shift: {}", adc_result, pitch_shift);
 
             // START ACTUAL FFT PROCESSING
-            let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+            let analysis_window_buffer: [f32; FFT_SIZE] = core_lib::hann_window::HANN_WINDOW;
 
-            let mut unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+            let mut unwrapped_buffer: [f32; FFT_SIZE] = core_lib::hann_window::HANN_WINDOW;
             let mut full_spectrum: [microfft::Complex32; FFT_SIZE] =
                 [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
             let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];

@@ -1,8 +1,15 @@
+resolver = "2"
+
+[build]
+# target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)[build]
+
 [target.thumbv7em-none-eabihf]
 # runner = "gdb-multiarch"
 rustflags = [
     "-C", "link-arg=-Tlink.x"
 ]
 
-[build]
-# target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)[build]
+# Override the test target for the core-lib crate to a generic x86_64 target
+[package]
+name = "core-lib"
+test = { target = "x86_64-unknown-unknown" }

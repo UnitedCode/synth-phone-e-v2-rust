@@ -105,3 +105,9 @@ You're now ready to debug your program using GDB commands!
 
 - The [Embedded Rust Book](https://docs.rust-embedded.org/book/) is an excellent resource for learning more about embedded development with Rust.
 - Check out [The Discovery Book](https://docs.rust-embedded.org/discovery/) for hands-on projects aimed at beginners.
+
+
+Runing test
+```
+cargo test -p core-lib
+```
