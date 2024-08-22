@@ -10,9 +10,6 @@ const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 256;
 const BLOCK_SIZE: usize = 2;
 mod circular_buffer;
-mod frequencies;
-mod hann_window;
-mod process_frequencies;
 
 mod rtic_app {
     #[rtic::app(
@@ -21,8 +18,8 @@ mod rtic_app {
     dispatchers = [DMA1_STR0]
 )]
     mod app {
-        use crate::process_frequencies::calculate_updates;
         use core::f32::consts::PI;
+        use core_lib::process_frequencies::calculate_updates;
         use libdaisy::{audio, gpio, hid, logger, system};
         use libm::{atan2f, cosf, fmodf, sinf, sqrtf};
         use log::{info, warn};
@@ -34,7 +31,7 @@ mod rtic_app {
         };
 
         use crate::{
-            circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE,
+            circular_buffer::CircularBuffer,  BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE,
             HOP_SIZE,
         };
 
@@ -292,6 +289,7 @@ mod rtic_app {
                     &analysis_frequencies,
                     &analysis_magnitudes,
                     transition_speed,
+                    FFT_SIZE
                 ) {
                     ctx.shared
                         .synthesis_magnitudes

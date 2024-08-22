@@ -1,6 +1,6 @@
 use libm::floorf;
 
-use crate::{frequencies::find_nearest_note_frequency};
+use crate::frequencies::find_nearest_note_frequency;
 
 #[inline(always)]
 pub fn calculate_updates(
@@ -32,6 +32,7 @@ pub fn calculate_updates(
 #[cfg(test)]
 mod tests {
     use super::*;
+    const FFT_SIZE: usize = 1024;
 
     #[test]
     fn test_find_nearest_note_frequency_exact_match() {
