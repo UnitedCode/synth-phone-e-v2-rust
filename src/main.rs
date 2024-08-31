@@ -294,7 +294,7 @@ mod rtic_app {
 
             //TODO: maybe do this before analysis since (i believe) we should only shift the fundamental and harmonics
             //and if that is then we should not analyze noise/non-important freqs
-            let fundamental_index = find_fundamental_frequency(analysis_magnitudes);
+            let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
             let harmonics = collect_harmonics(fundamental_index);
 
             //TODO: just pitch shift the fundamental and the harmonics by the same amount
@@ -391,9 +391,9 @@ mod rtic_app {
         //find a n number of harmonics by the fundamental index
         fn collect_harmonics(fundamental_index: usize) -> [usize; 4] {
             let mut harmonics = [0; 4];
-            for n in 1..= 4 {
+            for n in 1..=4 {
                 let harmonic_index = fundamental_index * n;
-                harmonics.push(harmonic_index);
+                harmonics[n - 1] = harmonic_index;
             }
             harmonics
         }
