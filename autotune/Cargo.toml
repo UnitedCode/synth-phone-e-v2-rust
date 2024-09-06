@@ -1,0 +1,9 @@
+[package]
+authors = ["Nathan Bradshaw"]
+edition = "2021"
+name = "autotune"
+version = "0.1.0"
+
+[dependencies]
+
+[dev-dependencies]

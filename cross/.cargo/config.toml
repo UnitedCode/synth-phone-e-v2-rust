@@ -1,0 +1,10 @@
+[target.thumbv7em-none-eabihf]
+# runner = "gdb-multiarch"
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    # I am not sure what these doe yet...
+    # "-C", "link-arg=-Tdefmt.x"
+]
+
+[build]
+target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)[build]
