@@ -11,6 +11,7 @@
   "cosf",
   "hann",
   "microfft",
+  "rustfmt",
   "sinf"
 ],
 
