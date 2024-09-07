@@ -1,5 +1,5 @@
-#![cfg_attr(not(test), no_main)]
-#![cfg_attr(not(test), no_std)]
+#![no_std]
+#![no_main]
 // #![deny(warnings)]
 #![deny(unsafe_code)]
 // #![deny(missing_docs)]
@@ -9,12 +9,9 @@ const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 256;
 const BLOCK_SIZE: usize = 2;
-mod circular_buffer;
-mod frequencies;
 mod hann_window;
-mod process_frequencies;
+use autotune;
 
-#[cfg(not(test))]
 mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
@@ -22,8 +19,8 @@ mod rtic_app {
     dispatchers = [DMA1_STR0]
 )]
     mod app {
-        use crate::process_frequencies::calculate_updates;
         use core::f32::consts::PI;
+        use autotune::process_frequencies::calculate_updates;
         use libdaisy::{audio, gpio, hid, logger, system};
         use libm::{atan2f, cosf, fmodf, sinf, sqrtf};
         use log::{info, warn};
@@ -35,7 +32,7 @@ mod rtic_app {
         };
 
         use crate::{
-            circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE,
+            autotune::circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE,
             HOP_SIZE,
         };
 
@@ -293,7 +290,7 @@ mod rtic_app {
             // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
 
             //TODO: maybe do this before analysis since (i believe) we should only shift the fundamental and harmonics
-            //and if that is then we should not analyze noise/non-important freqs
+            //and if that is then we should not analyze noise/non-important freq
             let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
             let harmonics = collect_harmonics(fundamental_index);
 

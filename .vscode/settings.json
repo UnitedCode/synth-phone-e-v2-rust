@@ -7,28 +7,11 @@
     "cross/Cargo.toml",
   ],
 "cSpell.words": [
-    "ccdr",
-    "cfft",
-    "consts",
-    "cosf",
-    "Exti",
-    "floorf",
-    "fmodf",
-    "gpio",
-    "GPIOA",
-    "hann",
-    "hanning",
-    "ifft",
-    "libdaisy",
-    "libm",
-    "microfft",
-    "Monotonics",
-    "Nyquist",
-    "rfft",
-    "rtic",
-    "sinf",
-    "sqrtf",
-    "SYSCFG"
+  "autotune",
+  "cosf",
+  "hann",
+  "microfft",
+  "sinf"
 ],
 
 

@@ -5,5 +5,7 @@ name = "autotune"
 version = "0.1.0"
 
 [dependencies]
+libm = "0.2.8"
+log = "0.4.21"
 
 [dev-dependencies]
