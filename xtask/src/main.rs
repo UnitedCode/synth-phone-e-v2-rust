@@ -62,7 +62,11 @@ fn flash() -> Result<(), anyhow::Error> {
 fn build() -> Result<(), anyhow::Error> {
     let sh = Shell::new()?;
     let _p = sh.push_dir(root_dir().join("cross"));
-    cmd!(sh, "cargo build --verbose --release --target thumbv7em-none-eabihf").run()?;
+    cmd!(
+        sh,
+        "cargo build --verbose --release --target thumbv7em-none-eabihf"
+    )
+    .run()?;
     Ok(())
 }
 
