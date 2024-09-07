@@ -10,6 +10,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     match &args[..] {
         ["embed"] => flash(),
+        ["build"] => build(),
         ["test", "all"] => test_all(),
         ["test", "host"] => test_host(),
         ["test", "host-target"] => test_host_target(),
@@ -55,6 +56,13 @@ fn flash() -> Result<(), anyhow::Error> {
     let sh = Shell::new()?;
     let _p = sh.push_dir(root_dir().join("cross"));
     cmd!(sh, "cargo embed --chip stm32h750v --release").run()?;
+    Ok(())
+}
+
+fn build() -> Result<(), anyhow::Error> {
+    let sh = Shell::new()?;
+    let _p = sh.push_dir(root_dir().join("cross"));
+    cmd!(sh, "cargo build --verbose --release --target thumbv7em-none-eabihf").run()?;
     Ok(())
 }
 
