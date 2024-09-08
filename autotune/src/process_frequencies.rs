@@ -1,6 +1,9 @@
 use libm::floorf;
 
-use crate::{frequencies::find_nearest_note_frequency, FFT_SIZE};
+use crate::frequencies::find_nearest_note_frequency;
+
+//TODO this should be passed in
+const FFT_SIZE: usize = 1024;
 
 #[inline(always)]
 pub fn calculate_updates(

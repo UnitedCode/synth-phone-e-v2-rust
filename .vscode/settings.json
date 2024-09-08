@@ -1,29 +1,19 @@
 {
 "rust-analyzer.check.allTargets": false,
-"rust-analyzer.cargo.target": "thumbv7em-none-eabihf",
 "cortex-debug.liveWatchRefreshRate": 225,
+"rust-analyzer.linkedProjects": [
+    // order is important (rust-analyzer/rust-analyzer#7764)
+    "Cargo.toml",
+    "cross/Cargo.toml",
+  ],
 "cSpell.words": [
-    "ccdr",
-    "cfft",
-    "consts",
-    "cosf",
-    "Exti",
-    "floorf",
-    "fmodf",
-    "gpio",
-    "GPIOA",
-    "hann",
-    "hanning",
-    "ifft",
-    "libdaisy",
-    "libm",
-    "microfft",
-    "Monotonics",
-    "Nyquist",
-    "rfft",
-    "rtic",
-    "sinf",
-    "sqrtf",
-    "SYSCFG"
+  "autotune",
+  "cosf",
+  "hann",
+  "microfft",
+  "rustfmt",
+  "sinf"
 ],
+
+
 }
