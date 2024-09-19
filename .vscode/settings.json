@@ -9,6 +9,7 @@
 "cSpell.words": [
   "autotune",
   "cosf",
+  "floorf",
   "hann",
   "microfft",
   "rustfmt",

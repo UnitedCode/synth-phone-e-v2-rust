@@ -31,6 +31,19 @@ pub fn calculate_updates(
     }
 }
 
+#[inline(always)]
+pub fn find_fundamental_frequency(analysis_magnitudes: &[f32]) -> usize {
+    let mut max_magnitude = 0.0;
+    let mut fundamental_bin = 0;
+    for (i, &magnitude) in analysis_magnitudes.iter().enumerate() {
+        if magnitude > max_magnitude {
+            max_magnitude = magnitude;
+            fundamental_bin = i;
+        }
+    }
+    fundamental_bin
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +196,69 @@ mod tests {
         assert_eq!(new_bin, 1);
         assert!((updated_magnitude - 0.5).abs() < 1e-6);
         assert!((updated_frequency - 880.0).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod detect_fun_freq_tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_input() {
+        let analysis_magnitudes: [f32; 0] = [];
+        let result = find_fundamental_frequency(&analysis_magnitudes);
+        assert_eq!(result, 0, "Empty input should return index 0");
+    }
+
+    #[test]
+    fn test_single_element() {
+        let analysis_magnitudes = [1.0];
+        let result = find_fundamental_frequency(&analysis_magnitudes);
+        assert_eq!(result, 0, "Single element should return index 0");
+    }
+
+    #[test]
+    fn test_all_zeros() {
+        let analysis_magnitudes = [0.0, 0.0, 0.0];
+        let result = find_fundamental_frequency(&analysis_magnitudes);
+        assert_eq!(result, 0, "All zeros should return index 0");
+    }
+
+    #[test]
+    fn test_positive_magnitudes() {
+        let analysis_magnitudes = [0.1, 0.5, 0.3, 0.8, 0.2];
+        let result = find_fundamental_frequency(&analysis_magnitudes);
+        assert_eq!(result, 3, "Maximum magnitude at index 3");
+    }
+
+    #[test]
+    fn test_mixed_sign_magnitudes() {
+        let analysis_magnitudes = [-0.5, 0.2, 0.3, -0.1, 0.4];
+        let result = find_fundamental_frequency(&analysis_magnitudes);
+        assert_eq!(result, 4, "Maximum magnitude at index 4");
+    }
+
+    #[test]
+    fn test_multiple_maximums() {
+        let analysis_magnitudes = [0.5, 0.5, 0.5];
+        let result = find_fundamental_frequency(&analysis_magnitudes);
+        assert_eq!(
+            result, 0,
+            "First occurrence of maximum magnitude at index 0"
+        );
+    }
+
+    #[test]
+    fn test_max_at_start() {
+        let analysis_magnitudes = [0.9, 0.5, 0.3, 0.8, 0.2];
+        let result = find_fundamental_frequency(&analysis_magnitudes);
+        assert_eq!(result, 0, "Maximum magnitude at the start index 0");
+    }
+
+    #[test]
+    fn test_max_at_end() {
+        let analysis_magnitudes = [0.1, 0.5, 0.3, 0.8, 1.0];
+        let result = find_fundamental_frequency(&analysis_magnitudes);
+        assert_eq!(result, 4, "Maximum magnitude at the end index 4");
     }
 }

@@ -19,10 +19,10 @@ mod rtic_app {
     dispatchers = [DMA1_STR0]
 )]
     mod app {
+        use autotune::{frequencies::find_nearest_note_frequency, process_frequencies::{calculate_updates, find_fundamental_frequency}};
         use core::f32::consts::PI;
-        use autotune::process_frequencies::calculate_updates;
         use libdaisy::{audio, gpio, hid, logger, system};
-        use libm::{atan2f, cosf, fmodf, sinf, sqrtf};
+        use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
         use log::{info, warn};
         use stm32h7xx_hal::{
             adc,
@@ -32,8 +32,8 @@ mod rtic_app {
         };
 
         use crate::{
-            autotune::circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE,
-            HOP_SIZE,
+            autotune::circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE,
+            FFT_SIZE, HOP_SIZE,
         };
 
         #[shared]
@@ -45,7 +45,6 @@ mod rtic_app {
             synthesis_magnitudes: [f32; FFT_SIZE],
             synthesis_frequencies: [f32; FFT_SIZE],
             hop_counter: u32,
-            process_fft: bool,
         }
 
         #[local]
@@ -111,7 +110,6 @@ mod rtic_app {
                     synthesis_magnitudes: [0.0; FFT_SIZE],
                     synthesis_frequencies: [0.0; FFT_SIZE],
                     hop_counter: 0,
-                    process_fft: false,
                 },
                 Local {
                     pot_input,
@@ -136,7 +134,6 @@ mod rtic_app {
         out_buffer,
         last_input_phases,
         last_output_phases,
-        process_fft,
         hop_counter,
     ], priority = 8)]
         fn audio_handler(mut ctx: audio_handler::Context) {
@@ -160,7 +157,7 @@ mod rtic_app {
                         if button_pressed {
                             out_sample = out_buffer.read_and_reset();
                         } else {
-                            _ = out_buffer.read_and_reset();
+                            out_sample = *left
                         }
                     });
 
@@ -178,11 +175,6 @@ mod rtic_app {
                         if dma1_stream0_software_task::spawn().is_err() {
                             warn!("Could not unwrap software task - underrun error");
                         }
-
-                        // Lock to set process_fft flag
-                        ctx.shared.process_fft.lock(|process_fft| {
-                            *process_fft = true;
-                        });
 
                         // Lock to advance the output buffer's hop
                         ctx.shared.out_buffer.lock(|out_buffer| {
@@ -211,7 +203,6 @@ mod rtic_app {
         last_output_phases,
         synthesis_magnitudes,
         synthesis_frequencies,
-        process_fft,
     ], local = [adc1, pot_input], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // info!("running task");
@@ -255,9 +246,9 @@ mod rtic_app {
                 let phase = atan2f(fft[i].im, fft[i].re);
 
                 //cut out noise
-                let magnitude_threshold = 0.05;  // Adjust this threshold as needed
+                let magnitude_threshold = 0.05; // Adjust this threshold as needed
                 if amplitude < magnitude_threshold {
-                    continue;  // Skip this bin if the magnitude is too low
+                    continue; // Skip this bin if the magnitude is too low
                 }
 
                 // Calculate the phase difference in this bin between the last
@@ -296,24 +287,24 @@ mod rtic_app {
 
             //TODO: just pitch shift the fundamental and the harmonics by the same amount
             // Handle the pitch shift, storing frequencies into new bins
-            let transition_speed = 0.1; // Adjust this value for smoother transitions
+            let exact_frequency = analysis_frequencies[fundamental_index];
+            let target_frequency = find_nearest_note_frequency(exact_frequency);
+            let pitch_shift_ratio = target_frequency / exact_frequency;
+
             for i in 0..FFT_SIZE / 2 {
-                if let Some((new_bin, updated_magnitude, updated_frequency)) = calculate_updates(
-                    i,
-                    &analysis_frequencies,
-                    &analysis_magnitudes,
-                    transition_speed,
-                ) {
+                let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
+                if new_bin < FFT_SIZE / 2 {
                     ctx.shared
-                        .synthesis_magnitudes
-                        .lock(|synthesis_magnitudes| {
-                            synthesis_magnitudes[new_bin] = updated_magnitude;
-                        });
-                    ctx.shared
-                        .synthesis_frequencies
-                        .lock(|synthesis_frequencies| {
-                            synthesis_frequencies[new_bin] = updated_frequency;
-                        });
+                    .synthesis_magnitudes
+                    .lock(|synthesis_magnitudes| {
+                        synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
+                    });
+                ctx.shared
+                    .synthesis_frequencies
+                    .lock(|synthesis_frequencies| {
+                        synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio;
+                    });
+                    
                 }
             }
 
@@ -376,16 +367,8 @@ mod rtic_app {
             fmodf(phase_in - PI, -2.0 * PI) + PI
         }
 
-        //find the fundamental by the highest amplitude 
-        fn find_fundamental_frequency(amplitudes: &[f32]) -> usize {
-            amplitudes.iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .map(|(i, _)| i)
-                .unwrap_or(0)
-        }
-
         //find a n number of harmonics by the fundamental index
+        #[inline(always)]
         fn collect_harmonics(fundamental_index: usize) -> [usize; 4] {
             let mut harmonics = [0; 4];
             for n in 1..=4 {
