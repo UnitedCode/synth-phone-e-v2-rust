@@ -1,13 +1,12 @@
-use autotune::{circular_buffer::CircularBuffer, frequencies::find_nearest_note_frequency, hann_window, process_frequencies::{collect_harmonics, find_fundamental_frequency}};
+use autotune::{circular_buffer::CircularBuffer, frequencies::find_nearest_note_frequency, hann_window, process_frequencies::{collect_harmonics}};
 use hound::{WavReader, WavSpec, WavWriter};
 use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
 use std::error::Error;
 const PI: f32 = 3.14159265358979323846264338327950288f32;
-const BUFFER_SIZE: usize = 3000;
 const FFT_SIZE: usize = 1024;
-const HOP_SIZE: usize = 128;
-const SCALE_FACTOR: f32 = 0.5;
-const PITCH_SHIFT: f32 = -1.0;
+const BUFFER_SIZE: usize = FFT_SIZE * 2;
+const HOP_SIZE: usize = 256;
+
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = "5_notes.wav";
@@ -117,10 +116,10 @@ fn process_fft(
         let phase = atan2f(fft[i].im, fft[i].re);
 
         // //cut out noise
-        // let magnitude_threshold = 0.05;
-        // if amplitude < magnitude_threshold {
-        //     continue; // Skip this bin if the magnitude is too low
-        // }
+        let magnitude_threshold = 0.05;
+        if amplitude < magnitude_threshold {
+            continue; // Skip this bin if the magnitude is too low
+        }
 
         // Calculate the phase difference in this bin between the last
         // hop and this one, which will indirectly give us the exact frequency
@@ -148,24 +147,37 @@ fn process_fft(
 
     //TODO: maybe do this before analysis since (i believe) we should only shift the fundamental and harmonics
     //and if that is then we should not analyze noise/non-important freq
-    let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
+    // let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
+    let mut max_magnitude = 0.0;
+    let mut fundamental_index = 0;
+    for (i, &magnitude) in analysis_magnitudes.iter().enumerate() {
+        if magnitude > max_magnitude {
+            max_magnitude = magnitude;
+            fundamental_index = i;
+        }
+        // println!("i:{i:<10} current_mag:{magnitude:<20} max_mag:{max_magnitude:<20} bin: {fundamental_index:<10} freq::{:<10}", analysis_frequencies[i]);
+    }
     let harmonics = collect_harmonics(fundamental_index);
 
     //TODO: just pitch shift the fundamental and the harmonics by the same amount
     // Handle the pitch shift, storing frequencies into new bins
-    let exact_frequency = analysis_frequencies[fundamental_index];
-    let target_frequency = find_nearest_note_frequency(exact_frequency);
-    println!("Target {target_frequency} exact {exact_frequency} plig i {fundamental_index}  harm {harmonics:?}");
-    let pitch_shift_ratio = target_frequency / exact_frequency;
+    // let exact_frequency = analysis_frequencies[fundamental_index];
+    // let target_frequency = find_nearest_note_frequency(exact_frequency);
+    // println!("Target {target_frequency} exact {exact_frequency} fund_index {fundamental_index}");
+    // let pitch_shift_ratio = target_frequency / exact_frequency;
     
     
     for i in 0..FFT_SIZE/2 {
-        let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
-        if new_bin < FFT_SIZE / 2 {
-                synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
+        let new_bin = 0;
+        // let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
+        // if new_bin < FFT_SIZE / 2 {
+                // println!("pre bin: {new_bin:<6} am: {:<15} af: {:<15}",synthesis_magnitudes[i], analysis_frequencies[i]);
+                
+                synthesis_magnitudes[i] = analysis_magnitudes[i];
             
-                synthesis_frequencies[new_bin] = analysis_frequencies[i];
-        }
+                synthesis_frequencies[i] = analysis_frequencies[i];
+                println!("bin: {new_bin:<10} am: {:<15} af: {:<15}", analysis_magnitudes[i],analysis_frequencies[i]);
+        // }
     }
 
     // SYNTHESIS
@@ -214,4 +226,17 @@ fn wrap_phase(phase_in: f32) -> f32 {
         return fmodf(phase_in + PI, 2.0 * PI) - PI;
     }
     fmodf(phase_in - PI, -2.0 * PI) + PI
+}
+
+pub fn find_fundamental_frequency(analysis_magnitudes: &[f32]) -> usize {
+    let mut max_magnitude = 0.0;
+    let mut fundamental_bin = 0;
+    for (i, &magnitude) in analysis_magnitudes.iter().enumerate() {
+        if magnitude > max_magnitude {
+            max_magnitude = magnitude;
+            fundamental_bin = i;
+        }
+        println!("i:{i:<10} current_mag:{magnitude:<20} max_mag:{max_magnitude:<20} bin: {fundamental_bin:>10}");
+    }
+    fundamental_bin
 }
