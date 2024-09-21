@@ -44,6 +44,16 @@ pub fn find_fundamental_frequency(analysis_magnitudes: &[f32]) -> usize {
     fundamental_bin
 }
 
+#[inline(always)]
+pub fn collect_harmonics(fundamental_index: usize) -> [usize; 8] {
+    let mut harmonics = [0; 8];
+    for n in 1..=8 {
+        let harmonic_index = fundamental_index * n;
+        harmonics[n - 1] = harmonic_index;
+    }
+    harmonics
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

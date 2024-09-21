@@ -2,4 +2,5 @@
 pub mod circular_buffer;
 pub mod frequencies;
 pub mod process_frequencies;
-pub mod tests;
+pub mod prototype;
+pub mod hann_window;

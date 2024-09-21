@@ -9,9 +9,8 @@ const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 256;
 const BLOCK_SIZE: usize = 2;
-mod hann_window;
 use autotune;
-
+use autotune::hann_window;
 mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,

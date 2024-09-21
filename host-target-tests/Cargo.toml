@@ -5,5 +5,8 @@ name = "host-target-tests"
 publish = false
 version = "0.1.0"
 
-[dev-dependencies]
-autotune = {path = "../autotune"}
+[dependencies]
+microfft = "0.6.0"
+autotune = { path = "../autotune" }
+libm = "0.2.8"
+hound = "3.4"
