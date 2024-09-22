@@ -1,4 +1,7 @@
-use autotune::{circular_buffer::CircularBuffer, frequencies::find_nearest_note_frequency, hann_window, process_frequencies::{collect_harmonics}};
+use autotune::{
+    circular_buffer::CircularBuffer, frequencies::find_nearest_note_frequency, hann_window,
+    process_frequencies::collect_harmonics,
+};
 use hound::{WavReader, WavSpec, WavWriter};
 use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
 use std::error::Error;
@@ -6,7 +9,6 @@ const PI: f32 = 3.14159265358979323846264338327950288f32;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 256;
-
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = "5_notes.wav";
@@ -165,18 +167,20 @@ fn process_fft(
     // let target_frequency = find_nearest_note_frequency(exact_frequency);
     // println!("Target {target_frequency} exact {exact_frequency} fund_index {fundamental_index}");
     // let pitch_shift_ratio = target_frequency / exact_frequency;
-    
-    
-    for i in 0..FFT_SIZE/2 {
+
+    for i in 0..FFT_SIZE / 2 {
         let new_bin = 0;
         // let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
         // if new_bin < FFT_SIZE / 2 {
-                // println!("pre bin: {new_bin:<6} am: {:<15} af: {:<15}",synthesis_magnitudes[i], analysis_frequencies[i]);
-                
-                synthesis_magnitudes[i] = analysis_magnitudes[i];
-            
-                synthesis_frequencies[i] = analysis_frequencies[i];
-                println!("bin: {new_bin:<10} am: {:<15} af: {:<15}", analysis_magnitudes[i],analysis_frequencies[i]);
+        // println!("pre bin: {new_bin:<6} am: {:<15} af: {:<15}",synthesis_magnitudes[i], analysis_frequencies[i]);
+
+        synthesis_magnitudes[i] = analysis_magnitudes[i];
+
+        synthesis_frequencies[i] = analysis_frequencies[i];
+        println!(
+            "bin: {new_bin:<10} am: {:<15} af: {:<15}",
+            analysis_magnitudes[i], analysis_frequencies[i]
+        );
         // }
     }
 
@@ -187,9 +191,9 @@ fn process_fft(
 
         let bin_deviation = synthesis_frequencies[i] - i as f32;
         // Multiply to get back to a phase value
-        let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 /FFT_SIZE as f32;
+        let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
         // Add the expected phase increment based on the bin centre frequency
-        let bin_centre_frequency = 2.0 * PI * i as f32 /FFT_SIZE as f32;
+        let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
         phase_diff += bin_centre_frequency * HOP_SIZE as f32;
         // Advance the phase from the previous hop
         let out_phase = wrap_phase(last_output_phases[i] + phase_diff);
