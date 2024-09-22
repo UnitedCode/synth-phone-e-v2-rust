@@ -13,7 +13,7 @@ const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 128;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = "sweep.wav";
+    let path = "mine-diamonds.wav";
     // let path = "WeChooseToGoToTheMoon_f32.wav";
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
@@ -157,38 +157,31 @@ fn process_fft(
         analysis_frequencies[fundamental_index] * bin_width,
         analysis_magnitudes[fundamental_index]
     );
-    let mut max_magnitude = 0.0;
-    let mut fundamental_index = 0;
-    for (i, &magnitude) in analysis_magnitudes.iter().enumerate() {
-        if magnitude > max_magnitude {
-            max_magnitude = magnitude;
-            fundamental_index = i;
-        }
-        // println!("i:{i:<10} current_mag:{magnitude:<20} max_mag:{max_magnitude:<20} bin: {fundamental_index:<10} freq::{:<10}", analysis_frequencies[i]);
-    }
-    let harmonics = collect_harmonics(fundamental_index);
 
     //TODO: just pitch shift the fundamental and the harmonics by the same amount
     // Handle the pitch shift, storing frequencies into new bins
-    // let exact_frequency = analysis_frequencies[fundamental_index];
-    // let target_frequency = find_nearest_note_frequency(exact_frequency);
+    let exact_frequency = analysis_frequencies[fundamental_index] * bin_width;
+    let target_frequency = find_nearest_note_frequency(exact_frequency);
     // println!("Target {target_frequency} exact {exact_frequency} fund_index {fundamental_index}");
-    // let pitch_shift_ratio = target_frequency / exact_frequency;
+    let pitch_shift_ratio = target_frequency / exact_frequency;
 
     for i in 0..FFT_SIZE / 2 {
-        let new_bin = 0;
-        // let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
-        // if new_bin < FFT_SIZE / 2 {
-        // println!("pre bin: {new_bin:<6} am: {:<15} af: {:<15}",synthesis_magnitudes[i], analysis_frequencies[i]);
+        if(exact_frequency < 1.0)
+        {
+            continue;
+        }
+        let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
+        if new_bin < FFT_SIZE / 2 {
+            // println!("pre bin: {new_bin:<6} am: {:<15} af: {:<15}",synthesis_magnitudes[i], analysis_frequencies[i]);
 
-        synthesis_magnitudes[i] = analysis_magnitudes[i];
+            synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
 
-        synthesis_frequencies[i] = analysis_frequencies[i];
-        // println!(
-        //     "bin: {i:<10} am: {:<15} af: {:<15}",
-        //     analysis_magnitudes[i], analysis_frequencies[i]
-        // );
-        // }
+            synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio;
+            // println!(
+            //     "bin: {i:<10} am: {:<15} af: {:<15}",
+            //     analysis_magnitudes[i], analysis_frequencies[i]
+            // );
+        }
     }
 
     // SYNTHESIS
