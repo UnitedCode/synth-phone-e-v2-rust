@@ -1,5 +1,7 @@
 use autotune::{
-    circular_buffer::CircularBuffer, frequencies::find_nearest_note_frequency, hann_window,
+    circular_buffer::CircularBuffer,
+    frequencies::find_nearest_note_frequency,
+    hann_window::{self},
     process_frequencies::collect_harmonics,
 };
 use hound::{WavReader, WavSpec, WavWriter};
@@ -8,13 +10,14 @@ use std::error::Error;
 const PI: f32 = 3.14159265358979323846264338327950288f32;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 2;
-const HOP_SIZE: usize = 256;
+const HOP_SIZE: usize = 128;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = "5_notes.wav";
+    let path = "sweep.wav";
     // let path = "WeChooseToGoToTheMoon_f32.wav";
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
+    println!("Sample rate: {}", spec.sample_rate);
 
     match spec.sample_format {
         hound::SampleFormat::Int => match spec.bits_per_sample {
@@ -69,7 +72,6 @@ where
                 &mut buffer_out,
                 &mut last_input_phases,
                 &mut last_output_phases,
-                &mut bin_frequencies,
             );
             // update the output buffer write index to the start of the next hop
             // println!("-------- NEW HOP ------------------------");
@@ -88,22 +90,21 @@ fn process_fft(
     out_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>,
     last_input_phases: &mut [f32; FFT_SIZE],
     last_output_phases: &mut [f32; FFT_SIZE],
-    bin_frequencies: &mut [f32; FFT_SIZE / 2],
 ) {
-    let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    let bin_width = 44100 as f32 / FFT_SIZE as f32 * 2.0;
+    let analysis_window_buffer: [f32; FFT_SIZE] = generate_hanning_window();
+    let mut unwrapped_buffer: [f32; FFT_SIZE] = generate_hanning_window();
 
-    let mut unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
     let mut full_spectrum: [microfft::Complex32; FFT_SIZE] =
         [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+
     let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];
     let mut analysis_frequencies = [0.0; FFT_SIZE / 2];
     let mut synthesis_magnitudes = [0.0; FFT_SIZE / 2];
     let mut synthesis_frequencies = [0.0; FFT_SIZE / 2];
-    let mut synthesis_count = [0; FFT_SIZE / 2];
 
     // copy buffer into FFT input, starting one window ago
     in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
-
     for n in 0..FFT_SIZE {
         unwrapped_buffer[n] *= in_buffer.read();
     }
@@ -118,10 +119,10 @@ fn process_fft(
         let phase = atan2f(fft[i].im, fft[i].re);
 
         // //cut out noise
-        let magnitude_threshold = 0.05;
-        if amplitude < magnitude_threshold {
-            continue; // Skip this bin if the magnitude is too low
-        }
+        // let magnitude_threshold = 0.05;
+        // if amplitude < magnitude_threshold {
+        //     continue; // Skip this bin if the magnitude is too low
+        // }
 
         // Calculate the phase difference in this bin between the last
         // hop and this one, which will indirectly give us the exact frequency
@@ -131,7 +132,6 @@ fn process_fft(
         // on the centre frequency of this bin (2*pi*n/gFftSize) for this
         // hop size, then wrap to the range -pi to pi
         let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
-
         phase_diff = wrap_phase(phase_diff - bin_centre_frequency * HOP_SIZE as f32);
 
         // Find deviation from the centre frequency
@@ -139,6 +139,7 @@ fn process_fft(
 
         // Add the original bin number to get the fractional bin where this partial belongs
         analysis_frequencies[i] = i as f32 + bin_deviation;
+
         // Save the magnitude for later
         analysis_magnitudes[i] = amplitude;
         // Save the phase for next hop
@@ -149,7 +150,13 @@ fn process_fft(
 
     //TODO: maybe do this before analysis since (i believe) we should only shift the fundamental and harmonics
     //and if that is then we should not analyze noise/non-important freq
-    // let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
+    let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
+    println!(
+        "- Exact frequency at bin {:<35}: {:<15} -  {:<10}",
+        fundamental_index,
+        analysis_frequencies[fundamental_index] * bin_width,
+        analysis_magnitudes[fundamental_index]
+    );
     let mut max_magnitude = 0.0;
     let mut fundamental_index = 0;
     for (i, &magnitude) in analysis_magnitudes.iter().enumerate() {
@@ -177,10 +184,10 @@ fn process_fft(
         synthesis_magnitudes[i] = analysis_magnitudes[i];
 
         synthesis_frequencies[i] = analysis_frequencies[i];
-        println!(
-            "bin: {new_bin:<10} am: {:<15} af: {:<15}",
-            analysis_magnitudes[i], analysis_frequencies[i]
-        );
+        // println!(
+        //     "bin: {i:<10} am: {:<15} af: {:<15}",
+        //     analysis_magnitudes[i], analysis_frequencies[i]
+        // );
         // }
     }
 
@@ -188,31 +195,30 @@ fn process_fft(
     for i in 0..FFT_SIZE / 2 {
         let amplitude = synthesis_magnitudes[i];
         // Get the fractional offset from the bin centre frequency
-
         let bin_deviation = synthesis_frequencies[i] - i as f32;
+
         // Multiply to get back to a phase value
         let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
+
         // Add the expected phase increment based on the bin centre frequency
         let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
         phase_diff += bin_centre_frequency * HOP_SIZE as f32;
+
         // Advance the phase from the previous hop
         let out_phase = wrap_phase(last_output_phases[i] + phase_diff);
 
         // Now convert magnitude and phase back to real and imaginary components
         fft[i].re = amplitude * cosf(out_phase);
         fft[i].im = amplitude * sinf(out_phase);
+
         // Also store the complex conjugate in the upper half of the spectrum
-
-        // Save the phase for the next hop
-        last_output_phases[i] = out_phase;
-    }
-
-    // Reconstruct the full spectrum for the IFFT
-    for i in 0..(FFT_SIZE / 2) {
         full_spectrum[i] = fft[i]; // First half directly
         if i > 0 && i < (FFT_SIZE / 2) {
             full_spectrum[FFT_SIZE - i] = fft[i].conj(); // Conjugate symmetry for the second half
         }
+
+        // Save the phase for the next hop
+        last_output_phases[i] = out_phase;
     }
 
     // Run the inverse FFT
@@ -240,7 +246,15 @@ pub fn find_fundamental_frequency(analysis_magnitudes: &[f32]) -> usize {
             max_magnitude = magnitude;
             fundamental_bin = i;
         }
-        println!("i:{i:<10} current_mag:{magnitude:<20} max_mag:{max_magnitude:<20} bin: {fundamental_bin:>10}");
+        // println!("i:{i:<10} current_mag:{magnitude:<20} max_mag:{max_magnitude:<20} bin: {fundamental_bin:>10}");
     }
     fundamental_bin
+}
+
+pub fn generate_hanning_window() -> [f32; FFT_SIZE] {
+    let mut window = [0.0; FFT_SIZE];
+    for n in 0..FFT_SIZE {
+        window[n] = 0.5 * (1.0 - cosf(2.0 * PI * n as f32 / (FFT_SIZE - 1) as f32));
+    }
+    window
 }

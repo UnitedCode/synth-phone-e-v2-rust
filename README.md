@@ -43,6 +43,11 @@ cargo xtask embed
 
 This command reads your `Embed.toml` configuration file (if present) and flashes the program accordingly.
 
+## Running the host example
+```sh
+cargo run -p host-target-tests --bin host-target-tests
+```
+
 ## Setting Up the Debugger
 
 ### Linux
