@@ -4,11 +4,12 @@
 #![deny(unsafe_code)]
 // #![deny(missing_docs)]
 
-const _SAMPLE_RATE: f32 = 48_014.312;
+const SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 256;
 const BLOCK_SIZE: usize = 2;
+const BIN_WIDTH: f32 = SAMPLE_RATE as f32 / FFT_SIZE as f32 * 2.0;
 use autotune;
 use autotune::hann_window;
 mod rtic_app {
@@ -18,7 +19,10 @@ mod rtic_app {
     dispatchers = [DMA1_STR0]
 )]
     mod app {
-        use autotune::{frequencies::find_nearest_note_frequency, process_frequencies::{calculate_updates, find_fundamental_frequency}};
+        use autotune::{
+            frequencies::find_nearest_note_frequency,
+            process_frequencies::{calculate_updates, find_fundamental_frequency},
+        };
         use core::f32::consts::PI;
         use libdaisy::{audio, gpio, hid, logger, system};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
@@ -31,8 +35,8 @@ mod rtic_app {
         };
 
         use crate::{
-            autotune::circular_buffer::CircularBuffer, hann_window, BLOCK_SIZE, BUFFER_SIZE,
-            FFT_SIZE, HOP_SIZE,
+            autotune::circular_buffer::CircularBuffer, hann_window, BIN_WIDTH, BLOCK_SIZE,
+            BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
         };
 
         #[shared]
@@ -43,6 +47,7 @@ mod rtic_app {
             last_output_phases: [f32; FFT_SIZE],
             synthesis_magnitudes: [f32; FFT_SIZE],
             synthesis_frequencies: [f32; FFT_SIZE],
+            previous_pitch_shift_ratio: f32,
             hop_counter: u32,
         }
 
@@ -108,6 +113,7 @@ mod rtic_app {
                     last_output_phases: [0.0; FFT_SIZE],
                     synthesis_magnitudes: [0.0; FFT_SIZE],
                     synthesis_frequencies: [0.0; FFT_SIZE],
+                    previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
                 },
                 Local {
@@ -202,6 +208,7 @@ mod rtic_app {
         last_output_phases,
         synthesis_magnitudes,
         synthesis_frequencies,
+        previous_pitch_shift_ratio,
     ], local = [adc1, pot_input], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // info!("running task");
@@ -245,7 +252,7 @@ mod rtic_app {
                 let phase = atan2f(fft[i].im, fft[i].re);
 
                 //cut out noise
-                let magnitude_threshold = 0.05; // Adjust this threshold as needed
+                let magnitude_threshold = 0.5; // Adjust this threshold as needed
                 if amplitude < magnitude_threshold {
                     continue; // Skip this bin if the magnitude is too low
                 }
@@ -261,8 +268,8 @@ mod rtic_app {
                 // on the centre frequency of this bin (2*pi*n/gFftSize) for this
                 // hop size, then wrap to the range -pi to pi
                 let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
-
                 phase_diff = wrap_phase(phase_diff - bin_centre_frequency * HOP_SIZE as f32);
+
                 // Find deviation from the centre frequency
                 let bin_deviation = phase_diff * FFT_SIZE as f32 / HOP_SIZE as f32 / (2.0 * PI);
 
@@ -279,31 +286,42 @@ mod rtic_app {
 
             // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
 
-            //TODO: maybe do this before analysis since (i believe) we should only shift the fundamental and harmonics
-            //and if that is then we should not analyze noise/non-important freq
+            // Get the fundamental frequency (Loudest)
             let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
-            let harmonics = collect_harmonics(fundamental_index);
+            // let harmonics = collect_harmonics(fundamental_index);
 
-            //TODO: just pitch shift the fundamental and the harmonics by the same amount
-            // Handle the pitch shift, storing frequencies into new bins
-            let exact_frequency = analysis_frequencies[fundamental_index];
-            let target_frequency = find_nearest_note_frequency(exact_frequency);
-            let pitch_shift_ratio = target_frequency / exact_frequency;
+            // Exact frequency is tied to the bin.
+            let exact_frequency = analysis_frequencies[fundamental_index] * BIN_WIDTH;
 
-            for i in 0..FFT_SIZE / 2 {
-                let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
-                if new_bin < FFT_SIZE / 2 {
-                    ctx.shared
-                    .synthesis_magnitudes
-                    .lock(|synthesis_magnitudes| {
-                        synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
-                    });
-                ctx.shared
-                    .synthesis_frequencies
-                    .lock(|synthesis_frequencies| {
-                        synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio;
-                    });
-                    
+            // We cannot divide by 0
+            if exact_frequency > 0.1 {
+                let target_frequency = find_nearest_note_frequency(exact_frequency);
+                let current_pitch_shift_ratio = target_frequency / exact_frequency;
+
+                let previous_pitch_shift_ratio = ctx
+                    .shared
+                    .previous_pitch_shift_ratio
+                    .lock(|previous_pitch_shift_ratio| *previous_pitch_shift_ratio);
+
+                let pitch_shift_ratio =
+                    0.99 * current_pitch_shift_ratio + 0.01 * previous_pitch_shift_ratio;
+
+                // shift all bins by the ratio
+                for i in 0..FFT_SIZE / 2 {
+                    let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
+                    if new_bin < FFT_SIZE / 2 {
+                        ctx.shared
+                            .synthesis_magnitudes
+                            .lock(|synthesis_magnitudes| {
+                                synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
+                            });
+                        ctx.shared
+                            .synthesis_frequencies
+                            .lock(|synthesis_frequencies| {
+                                synthesis_frequencies[new_bin] =
+                                    analysis_frequencies[i] * pitch_shift_ratio;
+                            });
+                    }
                 }
             }
 
@@ -329,18 +347,17 @@ mod rtic_app {
                 fft[i].re = amplitude * cosf(out_phase);
                 fft[i].im = amplitude * sinf(out_phase);
 
-                ctx.shared.last_output_phases.lock(|last_output_phases| {
-                    last_output_phases[i] = out_phase;
-                });
-            }
-
-            // Reconstruct the full spectrum for the IFFT
-            for i in 0..(FFT_SIZE / 2) {
+                // Also store the complex conjugate in the upper half of the spectrum
                 full_spectrum[i] = fft[i]; // First half directly
                 if i > 0 && i < (FFT_SIZE / 2) {
                     // Conjugate symmetry for the second half
                     full_spectrum[FFT_SIZE - i] = fft[i].conj();
                 }
+
+                // Save the phase for the next hop
+                ctx.shared.last_output_phases.lock(|last_output_phases| {
+                    last_output_phases[i] = out_phase;
+                });
             }
 
             // Run the inverse FFT

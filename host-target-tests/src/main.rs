@@ -11,9 +11,11 @@ const PI: f32 = 3.14159265358979323846264338327950288f32;
 const FFT_SIZE: usize = 1024;
 const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 128;
+const SAMPLE_RATE: u32 = 44100;
+const BIN_WIDTH: f32 = SAMPLE_RATE as f32 / FFT_SIZE as f32 * 2.0;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = "mine-diamonds.wav";
+    let path = "diamonds-mono.wav";
     // let path = "WeChooseToGoToTheMoon_f32.wav";
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
@@ -49,7 +51,7 @@ where
 
     let mut last_input_phases = [0.0; FFT_SIZE];
     let mut last_output_phases = [0.0; FFT_SIZE];
-    let mut bin_frequencies = [0.0; FFT_SIZE / 2];
+    let mut previous_pitch_shift_ratio = 1.0;
 
     for sample in reader.samples::<f32>() {
         let sample = sample.expect("Error reading sample");
@@ -72,6 +74,7 @@ where
                 &mut buffer_out,
                 &mut last_input_phases,
                 &mut last_output_phases,
+                &mut previous_pitch_shift_ratio,
             );
             // update the output buffer write index to the start of the next hop
             // println!("-------- NEW HOP ------------------------");
@@ -90,8 +93,8 @@ fn process_fft(
     out_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>,
     last_input_phases: &mut [f32; FFT_SIZE],
     last_output_phases: &mut [f32; FFT_SIZE],
+    previous_pitch_shift_ratio: &mut f32,
 ) {
-    let bin_width = 44100 as f32 / FFT_SIZE as f32 * 2.0;
     let analysis_window_buffer: [f32; FFT_SIZE] = generate_hanning_window();
     let mut unwrapped_buffer: [f32; FFT_SIZE] = generate_hanning_window();
 
@@ -119,10 +122,10 @@ fn process_fft(
         let phase = atan2f(fft[i].im, fft[i].re);
 
         // //cut out noise
-        // let magnitude_threshold = 0.05;
-        // if amplitude < magnitude_threshold {
-        //     continue; // Skip this bin if the magnitude is too low
-        // }
+        let magnitude_threshold = 0.5;
+        if amplitude < magnitude_threshold {
+            continue; // Skip this bin if the magnitude is too low
+        }
 
         // Calculate the phase difference in this bin between the last
         // hop and this one, which will indirectly give us the exact frequency
@@ -142,46 +145,43 @@ fn process_fft(
 
         // Save the magnitude for later
         analysis_magnitudes[i] = amplitude;
+
         // Save the phase for next hop
         last_input_phases[i] = phase;
     }
 
     // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
 
-    //TODO: maybe do this before analysis since (i believe) we should only shift the fundamental and harmonics
-    //and if that is then we should not analyze noise/non-important freq
+    // Get the fundamental frequency (Loudest)
     let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
     println!(
         "- Exact frequency at bin {:<35}: {:<15} -  {:<10}",
         fundamental_index,
-        analysis_frequencies[fundamental_index] * bin_width,
+        analysis_frequencies[fundamental_index] * BIN_WIDTH,
         analysis_magnitudes[fundamental_index]
     );
 
-    //TODO: just pitch shift the fundamental and the harmonics by the same amount
     // Handle the pitch shift, storing frequencies into new bins
-    let exact_frequency = analysis_frequencies[fundamental_index] * bin_width;
-    let target_frequency = find_nearest_note_frequency(exact_frequency);
-    // println!("Target {target_frequency} exact {exact_frequency} fund_index {fundamental_index}");
-    let pitch_shift_ratio = target_frequency / exact_frequency;
+    // Exact frequency is tied to the bin.
+    let exact_frequency = analysis_frequencies[fundamental_index] * BIN_WIDTH;
+    // We cannot divide by 0
+    if exact_frequency > 0.1 {
+        let target_frequency = find_nearest_note_frequency(exact_frequency);
+        let current_pitch_shift_ratio = target_frequency / exact_frequency;
+        // let pitch_shift_ratio = target_frequency / exact_frequency;
+        let pitch_shift_ratio =
+            0.99 * current_pitch_shift_ratio + 0.01 * *previous_pitch_shift_ratio;
 
-    for i in 0..FFT_SIZE / 2 {
-        if(exact_frequency < 1.0)
-        {
-            continue;
+        // Shift all the notes by the ratio
+        for i in 0..FFT_SIZE / 2 {
+            let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
+            if new_bin < FFT_SIZE / 2 {
+                synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
+                synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio;
+            }
         }
-        let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
-        if new_bin < FFT_SIZE / 2 {
-            // println!("pre bin: {new_bin:<6} am: {:<15} af: {:<15}",synthesis_magnitudes[i], analysis_frequencies[i]);
 
-            synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
-
-            synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio;
-            // println!(
-            //     "bin: {i:<10} am: {:<15} af: {:<15}",
-            //     analysis_magnitudes[i], analysis_frequencies[i]
-            // );
-        }
+        *previous_pitch_shift_ratio = pitch_shift_ratio;
     }
 
     // SYNTHESIS
