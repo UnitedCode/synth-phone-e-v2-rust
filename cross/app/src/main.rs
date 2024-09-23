@@ -20,7 +20,7 @@ mod rtic_app {
 )]
     mod app {
         use autotune::{
-            frequencies::find_nearest_note_frequency,
+            frequencies::{find_nearest_note_frequency, find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES},
             process_frequencies::{calculate_updates, find_fundamental_frequency},
         };
         use core::f32::consts::PI;
@@ -252,7 +252,7 @@ mod rtic_app {
                 let phase = atan2f(fft[i].im, fft[i].re);
 
                 //cut out noise
-                let magnitude_threshold = 0.5; // Adjust this threshold as needed
+                let magnitude_threshold = 10.5; // Adjust this threshold as needed
                 if amplitude < magnitude_threshold {
                     continue; // Skip this bin if the magnitude is too low
                 }
@@ -295,7 +295,7 @@ mod rtic_app {
 
             // We cannot divide by 0
             if exact_frequency > 0.1 {
-                let target_frequency = find_nearest_note_frequency(exact_frequency);
+                let target_frequency = find_nearest_note_in_key(exact_frequency, &C_MAJOR_SCALE_FREQUENCIES);
                 let current_pitch_shift_ratio = target_frequency / exact_frequency;
 
                 let previous_pitch_shift_ratio = ctx

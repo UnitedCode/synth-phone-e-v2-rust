@@ -1,5 +1,17 @@
 use libm::fabsf;
 use log::warn;
+pub const C_MAJOR_SCALE_STEPS: [usize; 7] = [0, 2, 4, 5, 7, 9, 11];
+pub const MAX_OCTAVES: usize = 10;
+
+pub const C_MAJOR_SCALE_FREQUENCIES: [f32; 70] = [
+    16.35, 18.35, 20.60, 21.83, 24.50, 27.50, 30.87, 32.70, 36.71, 41.20, 43.65, 49.00, 55.00,
+    61.74, 65.41, 73.42, 82.41, 87.31, 98.00, 110.00, 123.47, 130.81, 146.83, 164.81, 174.61,
+    196.00, 220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25, 587.33,
+    659.25, 698.46, 783.99, 880.00, 987.77, 1046.50, 1174.66, 1318.51, 1396.91, 1567.98, 1760.00,
+    1975.53, 2093.00, 2349.32, 2637.02, 2793.83, 3135.96, 3520.00, 3951.07, 4186.01, 4698.64,
+    5274.04, 5587.65, 6271.93, 7040.00, 7902.13, 8372.02, 9397.27, 10548.08, 11175.30, 12543.85,
+    14080.00, 15804.26,
+];
 
 pub const FREQUENCIES: [f32; 142] = [
     16.35, 17.32, 17.32, 18.35, 19.45, 19.45, 20.60, 21.83, 23.12, 23.12, 24.50, 25.96, 25.96,
@@ -45,6 +57,32 @@ pub fn find_nearest_note_frequency(frequency: f32) -> f32 {
     }
 
     FREQUENCIES[low]
+}
+
+pub fn find_nearest_note_in_key(frequency: f32, scale_frequencies: &[f32]) -> f32 {
+    let mut low = 0;
+    let mut high = scale_frequencies.len() - 1;
+
+    while low < high {
+        let mid = (low + high) / 2;
+        let mid_freq = scale_frequencies[mid];
+
+        if mid_freq < frequency {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    // After the loop, 'low' should be the index of the closest frequency or the next higher frequency.
+    // Check if the previous frequency is closer.
+    if low > 0
+        && fabsf(scale_frequencies[low] - frequency) > fabsf(scale_frequencies[low - 1] - frequency)
+    {
+        low -= 1;
+    }
+
+    scale_frequencies[low]
 }
 
 #[cfg(test)]
