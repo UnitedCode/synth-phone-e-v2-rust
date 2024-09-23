@@ -1,5 +1,4 @@
 // use log::info;
-
 pub struct CircularBuffer<T, const N: usize> {
     buffer: [T; N],
     read_index: usize,

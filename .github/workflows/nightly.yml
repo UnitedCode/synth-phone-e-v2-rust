@@ -3,7 +3,7 @@ on:
     branches: [main] # Do not run on staging / trying
   pull_request:
 
-name: Nightly rust
+name: Nightly rust build
 
 jobs:
   ci:
@@ -19,5 +19,5 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           use-cross: true
-          command: build
-          args: --verbose --release --target thumbv7em-none-eabihf
+          command: run
+          args: -p xtask -- build

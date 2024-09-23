@@ -27,20 +27,26 @@ Ensure you have Rust installed on your system. If not, you can install it from t
    ```
 
 4. **Install cargo-embed (actually probe-rs):**
-   
+
    https://probe.rs/docs/getting-started/installation/
 
    `cargo-embed` is used for flashing your program to the microcontroller and provides a basic debugger.
+
 
 ## Flashing Your Program
 
 To flash your program to a microcontroller, navigate to your project directory in the terminal and run:
 
 ```sh
-cargo embed
+cargo xtask embed
 ```
 
 This command reads your `Embed.toml` configuration file (if present) and flashes the program accordingly.
+
+## Running the host example
+```sh
+cargo run -p host-target-tests --bin host-target-tests
+```
 
 ## Setting Up the Debugger
 
@@ -100,3 +106,47 @@ You're now ready to debug your program using GDB commands!
 
 - The [Embedded Rust Book](https://docs.rust-embedded.org/book/) is an excellent resource for learning more about embedded development with Rust.
 - Check out [The Discovery Book](https://docs.rust-embedded.org/discovery/) for hands-on projects aimed at beginners.
+- How the project is setup [Ferrous Systems Test Embedded App](https://ferrous-systems.com/blog/test-embedded-app/)
+
+
+# File Structure
+```
+├── .cargo
+│   └── config.toml # <- contains no build target, just command alias
+├── .github
+│   ├── workflows
+│   │   ├── nightly.yml
+│   │   ├── rustfmt.yml # <- linter
+│   │   └── test.yml
+├── .vscode
+│   └── settings.json
+├── Cargo.toml # <- outer Cargo workspace
+├── autotune # <- auto tune library, can be run on host
+│   ├── Cargo.toml
+│   └── src
+├── cross # <- Embedded workspace cannot be ran on host
+│   ├── Cargo.toml # <- inner Cargo workspace
+│   ├── memory.x
+│   ├── .cargo
+│   │   └── config.toml # <- build target for daisy seed
+│   ├── app
+│   ├── board
+│   ├── Embed.toml
+│   ├── self-tests
+│   └── target
+├── docs
+│   ├── help.md
+│   └── random_notes.md
+├── host-target-tests 
+│   ├── Cargo.toml
+│   ├── src
+│   └── tests
+├── README.md
+├── target
+│   ├── CACHEDIR.TAG
+│   └── debug
+└── xtask
+    ├── Cargo.toml
+    └── src
+
+```
