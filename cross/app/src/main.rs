@@ -252,7 +252,7 @@ mod rtic_app {
                 let phase = atan2f(fft[i].im, fft[i].re);
 
                 //cut out noise
-                let magnitude_threshold = 10.5; // Adjust this threshold as needed
+                let magnitude_threshold = 0.05; // Adjust this threshold as needed
                 if amplitude < magnitude_threshold {
                     continue; // Skip this bin if the magnitude is too low
                 }
