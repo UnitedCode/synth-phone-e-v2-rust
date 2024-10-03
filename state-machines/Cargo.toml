@@ -1,0 +1,10 @@
+[package]
+authors = ["Nathan Bradshaw", "Enoch Bradshaw"]
+edition = "2021"
+name = "state-machines"
+version = "0.1.0"
+
+[dependencies]
+rust-fsm = "0.7.0"
+
+[dev-dependencies]

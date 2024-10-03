@@ -32,6 +32,7 @@ libdaisy = {git = "https://github.com/nathansbradshaw/libdaisy-rust.git", featur
 libm = "0.2.8"
 heapless = "0.8.0"
 autotune = {path = "../../autotune"}
+state-machines = {path = "../../state-machines"}
 
 [features]
 default = ['defmt-default']

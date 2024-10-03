@@ -1,3 +1,16 @@
+/// Synthphone-E v2 by Enoch and Nathan Bradshaw
+//- if you are going to make spaghetti, at least leave a recipe
+//   ______________________________________________________________________________________________________
+//  [                                                                                                      ]\
+//  [   SSSS                 TT   HH            HH                                     EEEE   TTT  M M     ] }
+//  [   SS    YY  YY NNNNN  TTTTT  HHHHH  PPPPP  HHHHH    OOOOO  NNNNN   EEEE        EE        T  M M M    ] }
+//  [    SSSS YYYYY  NN  NN   TT   HH  HH PP  PP HH  HH  OO   OO NN  NN EEEEEE  --- EEEEEEE                ] }
+//  [       SS YYYY  NN  NN   TT   HH  HH PP  PP HH  HH  OO   OO NN  NN EE           EE                    ] }   
+//  [    SSS    YY   NN  NN    TT  HH  HH PPPPP  HH  HH    OOO   NN  NN  EEEE          EEEE                ] }
+//  [          YY                         PP                                                               ] }
+//   \-----------------------------------------------------------------------------------------------------\ }
+//    \______________________________________________________________________________________________________\
+
 #![no_std]
 #![no_main]
 // #![deny(warnings)]
@@ -23,6 +36,7 @@ mod rtic_app {
             frequencies::{find_nearest_note_frequency, find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES},
             process_frequencies::{calculate_updates, find_fundamental_frequency},
         };
+        use state_machines::MenuStateMachine;
         use core::f32::consts::PI;
         use libdaisy::{audio, gpio, hid, logger, system};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
@@ -49,6 +63,7 @@ mod rtic_app {
             synthesis_frequencies: [f32; FFT_SIZE],
             previous_pitch_shift_ratio: f32,
             hop_counter: u32,
+            menu_state_machine: MenuStateMachine, 
         }
 
         #[local]
@@ -115,6 +130,7 @@ mod rtic_app {
                     synthesis_frequencies: [0.0; FFT_SIZE],
                     previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
+                    menu_state_machine: MenuStateMachine::new()
                 },
                 Local {
                     pot_input,
@@ -140,13 +156,14 @@ mod rtic_app {
         last_input_phases,
         last_output_phases,
         hop_counter,
+        menu_state_machine,
     ], priority = 8)]
-        fn audio_handler(mut ctx: audio_handler::Context) {
+        fn update_handler(mut ctx: update_handler::Context) {
             let audio = ctx.local.audio;
             let buffer = ctx.local.buffer;
             let switch1 = ctx.local.button;
             let button_pressed = switch1.is_held() || switch1.is_pressed();
-
+            
             if audio.get_stereo(buffer) {
                 for (left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
                     let mut out_sample = *left;
