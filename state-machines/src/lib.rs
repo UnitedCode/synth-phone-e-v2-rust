@@ -6,7 +6,7 @@ enum MenuState {
     Key = 1,
     SubMenu = 2,
     Octave = 3,
-    PitchBend = 4, 
+    PitchBend = 4,
 }
 
 #[derive(Debug)]
@@ -16,16 +16,16 @@ enum MenuEvent {
     GoToOctave,
     ReturnToVolume,
     GotToPitchBend,
-    Adjust(i32), 
+    Adjust(i32),
 }
 
 pub struct MenuStateMachine {
-   pub current_state: MenuState,
-   pub volume: i32,
-   pub key: i32,
-   pub menu_option: i32,
-   pub octave: i32,
-   pub pitch_bend: i32,
+    pub current_state: MenuState,
+    pub volume: i32,
+    pub key: i32,
+    pub menu_option: i32,
+    pub octave: i32,
+    pub pitch_bend: i32,
 }
 
 impl MenuStateMachine {
@@ -35,7 +35,7 @@ impl MenuStateMachine {
             volume: 50,
             key: 0,
             menu_option: 0,
-            octave:     4,
+            octave: 4,
             pitch_bend: 0,
         }
     }
@@ -45,44 +45,30 @@ impl MenuStateMachine {
             MenuEvent::GoToKey => {
                 if self.current_state == MenuState::Volume {
                     self.current_state = MenuState::Key
-                    
                 }
-            },
+            }
             MenuEvent::GoToMenuSelect => {
                 if self.current_state == MenuState::Volume {
                     self.current_state = MenuState::SubMenu
                 }
-            },
+            }
             MenuEvent::GoToOctave => {
                 if self.current_state == MenuState::Volume {
                     self.current_state = MenuState::Octave
                 }
-            },
+            }
             MenuEvent::ReturnToVolume => self.current_state = MenuState::Volume,
             MenuEvent::GotToPitchBend => self.current_state = MenuState::PitchBend,
             MenuEvent::Adjust(value) => match self.current_state {
-                MenuState::Volume => {
-                    self.volume = (self.volume + value).clamp(0, 100)
-                },
-                MenuState::Key => {
-                    self.key = (self.key + value).clamp(0, 12)
-                },
-                MenuState::SubMenu => {
-                    self.menu_option = (self.menu_option + value).clamp(0, 5)
-                },
-                MenuState::Octave => {
-                    self.octave = (self.octave + value).clamp(0, 8)
-                },
-                MenuState::PitchBend => {
-                    self.pitch_bend = (self.pitch_bend + value).clamp(-12, 12)
-                },
-            }
-            
-            
+                MenuState::Volume => self.volume = (self.volume + value).clamp(0, 100),
+                MenuState::Key => self.key = (self.key + value).clamp(0, 12),
+                MenuState::SubMenu => self.menu_option = (self.menu_option + value).clamp(0, 5),
+                MenuState::Octave => self.octave = (self.octave + value).clamp(0, 8),
+                MenuState::PitchBend => self.pitch_bend = (self.pitch_bend + value).clamp(-12, 12),
+            },
         }
     }
-
-} 
+}
 
 #[cfg(test)]
 mod detect_fun_freq_tests {
@@ -165,5 +151,4 @@ mod detect_fun_freq_tests {
         fsm.handle_event(MenuEvent::Adjust(-7));
         assert_eq!(fsm.octave, 0); // Clamped to min 0
     }
-
 }
