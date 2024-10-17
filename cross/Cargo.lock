@@ -618,26 +618,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-fsm"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cebef9e69ecb76b3cebbbe9c789f41f4be3402a33dca983c24493f45c92351c9"
-dependencies = [
- "rust-fsm-dsl",
-]
-
-[[package]]
-name = "rust-fsm-dsl"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3adcbccd7feb6960e55a40d116a82ef40281248d630cfa3530586a49efbbd05"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.77",
-]
-
-[[package]]
 name = "rustc_version"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -718,9 +698,6 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 [[package]]
 name = "state-machines"
 version = "0.1.0"
-dependencies = [
- "rust-fsm",
-]
 
 [[package]]
 name = "static_assertions"

@@ -1,3 +1,9 @@
+#![no_std]
+#![no_main]
+#![deny(unsafe_code)]
+// #![deny(warnings)]
+// #![deny(missing_docs)]
+
 /// Synthphone-E v2 by Enoch and Nathan Bradshaw
 //- if you are going to make spaghetti, at least leave a recipe
 //   ______________________________________________________________________________________________________
@@ -10,12 +16,6 @@
 //  [          YY                         PP                                                               ] }
 //   \-----------------------------------------------------------------------------------------------------\ }
 //    \______________________________________________________________________________________________________\
-
-#![no_std]
-#![no_main]
-// #![deny(warnings)]
-#![deny(unsafe_code)]
-// #![deny(missing_docs)]
 
 const SAMPLE_RATE: f32 = 48_014.312;
 const FFT_SIZE: usize = 1024;
