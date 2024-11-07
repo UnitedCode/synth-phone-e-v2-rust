@@ -33,6 +33,7 @@ libm = "0.2.8"
 heapless = "0.8.0"
 autotune = {path = "../../autotune"}
 state-machines = {path = "../../state-machines"}
+ssd1306 = "0.9.0"
 
 [features]
 default = ['defmt-default']
