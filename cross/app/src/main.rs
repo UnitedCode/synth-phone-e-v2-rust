@@ -42,16 +42,16 @@ mod rtic_app {
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
         use log::{info, warn};
         use stm32h7xx_hal::{
-            adc,
-            gpio::{Analog, Input},
-            stm32,
-            time::MilliSeconds,
+            adc, gpio::{Analog, Input}, i2c::I2cExt, stm32, time::MilliSeconds
         };
 
         use crate::{
             autotune::circular_buffer::CircularBuffer, hann_window, BIN_WIDTH, BLOCK_SIZE,
             BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
         };
+        use fugit::RateExtU32;
+        use ssd1306::prelude::*;
+        use stm32h7xx_hal::hal::blocking::i2c::{Write, WriteRead};
 
         #[shared]
         struct Shared {
@@ -63,7 +63,8 @@ mod rtic_app {
             synthesis_frequencies: [f32; FFT_SIZE],
             previous_pitch_shift_ratio: f32,
             hop_counter: u32,
-            menu_state_machine: MenuStateMachine, 
+            menu_state_machine: MenuStateMachine,  
+            // display: ssd1306::mode::GraphicsMode<ssd1306::interface::I2cInterface<I2c<stm32::I2C1>>>,
         }
 
         #[local]
@@ -100,6 +101,14 @@ mod rtic_app {
                 .expect("Failed to get pin daisy29!")
                 .into_analog();
 
+            let daisy14_sda = system.gpio.daisy14.take().expect("Failed to get pin daisy9").into_alternate::<4>().internal_pull_up(true).set_open_drain();
+            let daisy13_scl = system.gpio.daisy13.take().expect("Failed to get daisy 8 pin").into_alternate::<4>().internal_pull_up(true).set_open_drain();
+
+            let i2c = device.I2C1.i2c((daisy13_scl, daisy14_sda), 400_u32.kHz(), ccdr.peripheral.I2C1, &ccdr.clocks);
+
+            let i2c_interface = ssd1306::I2CDisplayInterface::new(i2c);
+
+
             let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
             switch1.set_held_thresh(Some(150));
@@ -130,7 +139,8 @@ mod rtic_app {
                     synthesis_frequencies: [0.0; FFT_SIZE],
                     previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
-                    menu_state_machine: MenuStateMachine::new()
+                    menu_state_machine: MenuStateMachine::new(),
+                    // display
                 },
                 Local {
                     pot_input,
@@ -234,7 +244,7 @@ mod rtic_app {
 
             adc1.start_conversion(pot.get_pin());
 
-            let adc_result = adc1.read_sample().unwrap_or(1);
+            // let adc_result = adc1.read_sample().unwrap_or(1);
             // let pitch_shift = 0.15 * adc_result as f32 - 1.15;
             // info!("ADC result: {}, pitch shift: {}", adc_result, pitch_shift);
 
