@@ -110,11 +110,11 @@ mod rtic_app {
             let daisy14_sda = system.gpio.daisy14.take().expect("Failed to get pin daisy9").into_alternate::<4>().internal_pull_up(true).set_open_drain();
             let daisy13_scl = system.gpio.daisy13.take().expect("Failed to get daisy 8 pin").into_alternate::<4>().internal_pull_up(true).set_open_drain();
 
-            let i2c = device.I2C1.i2c((daisy13_scl, daisy14_sda), 400_u32.kHz(), ccdr.peripheral.I2C1, &ccdr.clocks);
+            let i2c = device.I2C1.i2c((daisy13_scl, daisy14_sda), 100_u32.kHz(), ccdr.peripheral.I2C1, &ccdr.clocks);
 
             
 
-            let i2c_interface = I2CDisplayInterface::new(i2c);
+            let i2c_interface = I2CDisplayInterface::new_custom_address(i2c, 0x3C);
 
             let mut display = Ssd1306::new(
                 i2c_interface,
