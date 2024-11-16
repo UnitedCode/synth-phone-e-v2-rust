@@ -36,13 +36,15 @@ mod rtic_app {
             frequencies::{find_nearest_note_frequency, find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES},
             process_frequencies::{calculate_updates, find_fundamental_frequency},
         };
+
+        use embedded_graphics::{pixelcolor::BinaryColor, prelude::{Dimensions, Point, Primitive}, primitives::Triangle, text::{Text, TextStyle}};
         use state_machines::MenuStateMachine;
         use core::f32::consts::PI;
         use libdaisy::{audio, gpio, hid, logger, system};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
         use log::{info, warn};
         use stm32h7xx_hal::{
-            adc, gpio::{Analog, Input}, i2c::I2cExt, stm32, time::MilliSeconds
+            adc, gpio::{Analog, Input}, i2c::{I2c, I2cExt}, stm32, time::MilliSeconds
         };
 
         use crate::{
@@ -50,8 +52,12 @@ mod rtic_app {
             BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
         };
         use fugit::RateExtU32;
-        use ssd1306::prelude::*;
+        use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
         use stm32h7xx_hal::hal::blocking::i2c::{Write, WriteRead};
+        use embedded_graphics::{
+            prelude::*,
+            mono_font::{ascii::FONT_6X10, MonoTextStyle},
+        };
 
         #[shared]
         struct Shared {
@@ -106,8 +112,33 @@ mod rtic_app {
 
             let i2c = device.I2C1.i2c((daisy13_scl, daisy14_sda), 400_u32.kHz(), ccdr.peripheral.I2C1, &ccdr.clocks);
 
-            let i2c_interface = ssd1306::I2CDisplayInterface::new(i2c);
+            
 
+            let i2c_interface = I2CDisplayInterface::new(i2c);
+
+            let mut display = Ssd1306::new(
+                i2c_interface,
+                DisplaySize128x64,
+                DisplayRotation::Rotate0,
+            )
+            .into_buffered_graphics_mode();
+
+            display.init().expect("Failed to initialize display");
+
+            // Create a text style
+// Clear the display buffer
+display.clear();
+
+// Create a text style
+let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+
+// Draw text at position (0, 16)
+Text::new("Hello, Rust!", Point::new(0, 16), text_style)
+    .draw(&mut display)
+    .unwrap();
+
+// Send the buffer to the display
+display.flush().unwrap();
 
             let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
@@ -420,5 +451,34 @@ mod rtic_app {
             }
             harmonics
         }
+
+
+fn initialize_display(
+    i2c: I2c<stm32h7xx_hal::stm32::I2C1>,
+) ->
+    Ssd1306<
+        I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>,
+        DisplaySize128x64,
+        BufferedGraphicsMode<DisplaySize128x64>
+> {
+    // Create the I2C interface for the display
+    let interface = I2CDisplayInterface::new(i2c);
+
+    // Initialize the display with the size 128x64 and default rotation
+    let mut display = Ssd1306::new(
+        interface,
+        DisplaySize128x64,
+        DisplayRotation::Rotate0,
+    )
+    .into_buffered_graphics_mode();
+
+    // Initialize the display
+    display.init().expect("Failed to init display");
+
+    display
+}
+
+
+
     }
 }
