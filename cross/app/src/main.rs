@@ -25,6 +25,7 @@ const BLOCK_SIZE: usize = 2;
 const BIN_WIDTH: f32 = SAMPLE_RATE as f32 / FFT_SIZE as f32 * 2.0;
 use autotune;
 use autotune::hann_window;
+
 mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
@@ -37,7 +38,8 @@ mod rtic_app {
             process_frequencies::{calculate_updates, find_fundamental_frequency},
         };
 
-        use embedded_graphics::{pixelcolor::BinaryColor, prelude::{Dimensions, Point, Primitive}, primitives::Triangle, text::{Text, TextStyle}};
+        use tinybmp::Bmp;
+        use embedded_graphics::{pixelcolor::BinaryColor, image::Image, prelude::{Dimensions, Point, Primitive}, primitives::Triangle, text::{Text, TextStyle}};
         use state_machines::MenuStateMachine;
         use core::f32::consts::PI;
         use libdaisy::{audio, gpio, hid, logger, system};
@@ -107,8 +109,8 @@ mod rtic_app {
                 .expect("Failed to get pin daisy29!")
                 .into_analog();
 
-            let daisy14_sda = system.gpio.daisy14.take().expect("Failed to get pin daisy9").into_alternate::<4>().internal_pull_up(true).set_open_drain();
-            let daisy13_scl = system.gpio.daisy13.take().expect("Failed to get daisy 8 pin").into_alternate::<4>().internal_pull_up(true).set_open_drain();
+            let daisy14_sda = system.gpio.daisy12.take().expect("Failed to get pin daisy9").into_alternate::<4>().internal_pull_up(true).set_open_drain();
+            let daisy13_scl = system.gpio.daisy11.take().expect("Failed to get daisy 8 pin").into_alternate::<4>().internal_pull_up(true).set_open_drain();
 
             let i2c = device.I2C1.i2c((daisy13_scl, daisy14_sda), 100_u32.kHz(), ccdr.peripheral.I2C1, &ccdr.clocks);
 
@@ -118,7 +120,7 @@ mod rtic_app {
 
             let mut display = Ssd1306::new(
                 i2c_interface,
-                DisplaySize128x64,
+                DisplaySize128x32,
                 DisplayRotation::Rotate0,
             )
             .into_buffered_graphics_mode();
@@ -132,12 +134,21 @@ display.clear();
 // Create a text style
 let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
 
-// Draw text at position (0, 16)
-Text::new("Hello, Rust!", Point::new(0, 16), text_style)
-    .draw(&mut display)
-    .unwrap();
+
 
 // Send the buffer to the display
+display.flush().unwrap();
+
+let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp")).unwrap();
+
+// To draw the `bmp` object to the display it needs to be wrapped in an `Image` object to set
+// the position at which it should drawn. Here, the top left corner of the image is set to
+// `(32, 32)`.
+let image = Image::new(&bmp, Point::new(0, 0));
+
+// Display the image
+image.draw(&mut display);
+
 display.flush().unwrap();
 
             let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);

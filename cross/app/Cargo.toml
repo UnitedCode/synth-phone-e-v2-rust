@@ -36,7 +36,7 @@ state-machines = {path = "../../state-machines"}
 ssd1306 = "0.7.1"
 fugit = "0.3.7"
 embedded-graphics = "0.7.1"
-
+tinybmp = "0.4.0"
 
 [features]
 default = ['defmt-default']
