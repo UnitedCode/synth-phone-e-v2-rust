@@ -11,7 +11,7 @@
 //  [   SSSS                 TT   HH            HH                                     EEEE   TTT  M M     ] }
 //  [   SS    YY  YY NNNNN  TTTTT  HHHHH  PPPPP  HHHHH    OOOOO  NNNNN   EEEE        EE        T  M M M    ] }
 //  [    SSSS YYYYY  NN  NN   TT   HH  HH PP  PP HH  HH  OO   OO NN  NN EEEEEE  --- EEEEEEE                ] }
-//  [       SS YYYY  NN  NN   TT   HH  HH PP  PP HH  HH  OO   OO NN  NN EE           EE                    ] }   
+//  [       SS YYYY  NN  NN   TT   HH  HH PP  PP HH  HH  OO   OO NN  NN EE           EE                    ] }
 //  [    SSS    YY   NN  NN    TT  HH  HH PPPPP  HH  HH    OOO   NN  NN  EEEE          EEEE                ] }
 //  [          YY                         PP                                                               ] }
 //   \-----------------------------------------------------------------------------------------------------\ }
@@ -34,32 +34,60 @@ mod rtic_app {
 )]
     mod app {
         use autotune::{
-            frequencies::{find_nearest_note_frequency, find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES},
-            process_frequencies::{calculate_updates, find_fundamental_frequency},
+            frequencies::{
+                find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES,
+            },
+            process_frequencies::find_fundamental_frequency,
         };
 
-        use tinybmp::Bmp;
-        use embedded_graphics::{pixelcolor::BinaryColor, image::Image, prelude::{Dimensions, Point, Primitive}, primitives::Triangle, text::{Text, TextStyle}};
-        use state_machines::MenuStateMachine;
         use core::f32::consts::PI;
+        use embedded_graphics::{
+            image::Image,
+            pixelcolor::BinaryColor,
+            prelude::Point,
+        };
         use libdaisy::{audio, gpio, hid, logger, system};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
         use log::{info, warn};
+        use state_machines::MenuStateMachine;
         use stm32h7xx_hal::{
-            adc, gpio::{Analog, Input}, i2c::{I2c, I2cExt}, stm32, time::MilliSeconds
+            adc, gpio::{Analog, Input}, i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
         };
+        use tinybmp::Bmp;
 
         use crate::{
             autotune::circular_buffer::CircularBuffer, hann_window, BIN_WIDTH, BLOCK_SIZE,
             BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
         };
+        use embedded_graphics::{
+            mono_font::{ascii::FONT_6X10, MonoTextStyle},
+            prelude::*,
+        };
         use fugit::RateExtU32;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
-        use stm32h7xx_hal::hal::blocking::i2c::{Write, WriteRead};
-        use embedded_graphics::{
-            prelude::*,
-            mono_font::{ascii::FONT_6X10, MonoTextStyle},
-        };
+
+        use rotary_encoder_embedded::standard::StandardMode;
+        use rotary_encoder_embedded::{Direction, RotaryEncoder};
+
+        pub struct Knob {
+            rotary_encoder: RotaryEncoder<StandardMode, gpio::Daisy3<Input>, gpio::Daisy4<Input>>,
+            value: u8,
+        }
+
+        impl Knob {
+            pub fn new(
+                rotary_encoder: RotaryEncoder<
+                    StandardMode,
+                    gpio::Daisy3<Input>,
+                    gpio::Daisy4<Input>,
+                >,
+            ) -> Knob {
+                Knob {
+                    rotary_encoder: rotary_encoder,
+                    value: 0_u8,
+                }
+            }
+        }
 
         #[shared]
         struct Shared {
@@ -71,8 +99,7 @@ mod rtic_app {
             synthesis_frequencies: [f32; FFT_SIZE],
             previous_pitch_shift_ratio: f32,
             hop_counter: u32,
-            menu_state_machine: MenuStateMachine,  
-            // display: ssd1306::mode::GraphicsMode<ssd1306::interface::I2cInterface<I2c<stm32::I2C1>>>,
+            menu_state_machine: MenuStateMachine,
         }
 
         #[local]
@@ -82,6 +109,8 @@ mod rtic_app {
             button: hid::Switch<gpio::Daisy28<Input>>,
             pot_input: hid::AnalogControl<gpio::Daisy15<Analog>>,
             adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
+            timer2: Timer<stm32::TIM2>,
+            knob_1: Knob,
         }
 
         #[init]
@@ -94,6 +123,28 @@ mod rtic_app {
             let mut system = libdaisy::system_init!(core, device, ccdr, BLOCK_SIZE);
 
             let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
+            // Encoder business
+
+            // let encoder_btn_sw = system.gpio.daisy2.take();
+
+            // Configure Pins connected to encoder as floating input (only if your encoder
+            // board already has pull-up resistors, use 'into_pull_up_input' otherwise)
+            // and Obtain Handle.
+            let encoder_dt = system
+                .gpio
+                .daisy3
+                .take()
+                .expect("Failed to get daisy3")
+                .into_floating_input();
+            let encoder_clk = system
+                .gpio
+                .daisy4
+                .take()
+                .expect("failed to get pin daisy4")
+                .into_floating_input();
+            let encoder_1 = RotaryEncoder::new(encoder_dt, encoder_clk).into_standard_mode();
+
+            let knob_1 = Knob::new(encoder_1);
 
             let daisy28 = system
                 .gpio
@@ -109,47 +160,60 @@ mod rtic_app {
                 .expect("Failed to get pin daisy29!")
                 .into_analog();
 
-            let daisy14_sda = system.gpio.daisy12.take().expect("Failed to get pin daisy9").into_alternate::<4>().internal_pull_up(true).set_open_drain();
-            let daisy13_scl = system.gpio.daisy11.take().expect("Failed to get daisy 8 pin").into_alternate::<4>().internal_pull_up(true).set_open_drain();
+            let daisy14_sda = system
+                .gpio
+                .daisy12
+                .take()
+                .expect("Failed to get pin daisy9")
+                .into_alternate::<4>()
+                .internal_pull_up(true)
+                .set_open_drain();
+            let daisy13_scl = system
+                .gpio
+                .daisy11
+                .take()
+                .expect("Failed to get daisy 8 pin")
+                .into_alternate::<4>()
+                .internal_pull_up(true)
+                .set_open_drain();
 
-            let i2c = device.I2C1.i2c((daisy13_scl, daisy14_sda), 100_u32.kHz(), ccdr.peripheral.I2C1, &ccdr.clocks);
-
-            
+            let i2c = device.I2C1.i2c(
+                (daisy13_scl, daisy14_sda),
+                100_u32.kHz(),
+                ccdr.peripheral.I2C1,
+                &ccdr.clocks,
+            );
 
             let i2c_interface = I2CDisplayInterface::new_custom_address(i2c, 0x3C);
 
-            let mut display = Ssd1306::new(
-                i2c_interface,
-                DisplaySize128x32,
-                DisplayRotation::Rotate0,
-            )
-            .into_buffered_graphics_mode();
+            let mut display =
+                Ssd1306::new(i2c_interface, DisplaySize128x32, DisplayRotation::Rotate0)
+                    .into_buffered_graphics_mode();
 
             display.init().expect("Failed to initialize display");
 
             // Create a text style
-// Clear the display buffer
-display.clear();
+            // Clear the display buffer
+            display.clear();
 
-// Create a text style
-let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+            // Create a text style
+            // let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
 
+            // Send the buffer to the display
+            display.flush().unwrap();
 
+            let bmp: Bmp<BinaryColor> =
+                Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp")).unwrap();
 
-// Send the buffer to the display
-display.flush().unwrap();
+            // To draw the `bmp` object to the display it needs to be wrapped in an `Image` object to set
+            // the position at which it should drawn. Here, the top left corner of the image is set to
+            // `(32, 32)`.
+            let image = Image::new(&bmp, Point::new(0, 0));
 
-let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp")).unwrap();
+            // Display the image
+            image.draw(&mut display);
 
-// To draw the `bmp` object to the display it needs to be wrapped in an `Image` object to set
-// the position at which it should drawn. Here, the top left corner of the image is set to
-// `(32, 32)`.
-let image = Image::new(&bmp, Point::new(0, 0));
-
-// Display the image
-image.draw(&mut display);
-
-display.flush().unwrap();
+            display.flush().unwrap();
 
             let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
@@ -160,17 +224,16 @@ display.flush().unwrap();
             let adc1_max = adc1.slope() as f32;
 
             let pot_input = hid::AnalogControl::new(daisy15, adc1_max);
-
-            info!("Startup done!!");
             let mut timer2 = stm32h7xx_hal::timer::TimerExt::timer(
                 device.TIM2,
-                MilliSeconds::from_ticks(100).into_rate(),
+                MilliSeconds::from_ticks(1).into_rate(),
                 ccdr.peripheral.TIM2,
                 &ccdr.clocks,
             );
             timer2.listen(stm32h7xx_hal::timer::Event::TimeOut);
 
-            timer2.set_freq(MilliSeconds::from_ticks(500).into_rate());
+            info!("Startup done!! yo!");
+
             (
                 Shared {
                     in_buffer: CircularBuffer::new(0.0, None),
@@ -190,6 +253,8 @@ display.flush().unwrap();
                     audio: system.audio,
                     buffer,
                     button: switch1,
+                    timer2,
+                    knob_1
                 },
                 init::Monotonics(),
             )
@@ -215,7 +280,7 @@ display.flush().unwrap();
             let buffer = ctx.local.buffer;
             let switch1 = ctx.local.button;
             let button_pressed = switch1.is_held() || switch1.is_pressed();
-            
+
             if audio.get_stereo(buffer) {
                 for (left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
                     let mut out_sample = *left;
@@ -267,6 +332,33 @@ display.flush().unwrap();
             } else {
                 warn!("Error reading data!");
             }
+        }
+
+        #[task(binds = TIM2, local = [knob_1, timer2], shared = [])]
+        fn interface_handler(mut ctx: interface_handler::Context) {
+            ctx.local.timer2.clear_irq();
+            // TODO this function needs to be updated to handle encoder business
+            // SEE: https://github.com/rtic-rs/rtic/blob/master/examples/stm32f411_encoder_polling/src/main.rs
+            // and: https://github.com/nathansbradshaw/libdaisy-rust/commit/f08c01fd8f950675c6c1051c2310c1cdf7309d8b
+            match ctx.local.knob_1.rotary_encoder.update() {
+                Direction::Clockwise => {
+                    if ctx.local.knob_1.value < 255 {
+                        ctx.local.knob_1.value += 1;
+                        
+                        info!("Value increased")
+                    }
+                }
+                Direction::Anticlockwise => {
+                    if ctx.local.knob_1.value > 0 {
+                        ctx.local.knob_1.value -= 1;
+                       info!("Value decreased")
+                    }
+                }
+                Direction::None => {
+                    
+                }
+            }
+
         }
 
         /// FFT TASK
@@ -364,7 +456,8 @@ display.flush().unwrap();
 
             // We cannot divide by 0
             if exact_frequency > 0.1 {
-                let target_frequency = find_nearest_note_in_key(exact_frequency, &C_MAJOR_SCALE_FREQUENCIES);
+                let target_frequency =
+                    find_nearest_note_in_key(exact_frequency, &C_MAJOR_SCALE_FREQUENCIES);
                 let current_pitch_shift_ratio = target_frequency / exact_frequency;
 
                 let previous_pitch_shift_ratio = ctx
@@ -463,33 +556,24 @@ display.flush().unwrap();
             harmonics
         }
 
+        fn initialize_display(
+            i2c: I2c<stm32h7xx_hal::stm32::I2C1>,
+        ) -> Ssd1306<
+            I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>,
+            DisplaySize128x64,
+            BufferedGraphicsMode<DisplaySize128x64>,
+        > {
+            // Create the I2C interface for the display
+            let interface = I2CDisplayInterface::new(i2c);
 
-fn initialize_display(
-    i2c: I2c<stm32h7xx_hal::stm32::I2C1>,
-) ->
-    Ssd1306<
-        I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>,
-        DisplaySize128x64,
-        BufferedGraphicsMode<DisplaySize128x64>
-> {
-    // Create the I2C interface for the display
-    let interface = I2CDisplayInterface::new(i2c);
+            // Initialize the display with the size 128x64 and default rotation
+            let mut display = Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0)
+                .into_buffered_graphics_mode();
 
-    // Initialize the display with the size 128x64 and default rotation
-    let mut display = Ssd1306::new(
-        interface,
-        DisplaySize128x64,
-        DisplayRotation::Rotate0,
-    )
-    .into_buffered_graphics_mode();
+            // Initialize the display
+            display.init().expect("Failed to init display");
 
-    // Initialize the display
-    display.init().expect("Failed to init display");
-
-    display
-}
-
-
-
+            display
+        }
     }
 }

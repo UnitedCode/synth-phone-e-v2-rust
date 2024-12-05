@@ -24,6 +24,7 @@ dependencies = [
  "panic-halt",
  "panic-itm",
  "panic-rtt-target",
+ "rotary-encoder-embedded",
  "rtt-target",
  "ssd1306",
  "state-machines",
@@ -662,6 +663,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5b9d34b8991d19d98081b46eacdd8eb58c6f2b201139f7c5f643cc155a633af"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "rotary-encoder-embedded"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff8ec63cac264e7f64ef4ea9a446d0a4012ccc3fedaa55d6996e83793e95a75f"
+dependencies = [
+ "embedded-hal",
 ]
 
 [[package]]

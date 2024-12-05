@@ -28,7 +28,7 @@ panic-itm = "0.4.2"
 cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-integration"] }
 micromath = "2.1.0"
 microfft = "0.6"
-libdaisy = {git = "https://github.com/nathansbradshaw/libdaisy-rust.git", features = ["log-rtt"], commit = "cff24384018e585e755f9949c25677d4b1f76c04"}
+libdaisy = {git = "https://github.com/nathansbradshaw/libdaisy-rust.git", features = ["log-rtt"], commit = "f08c01fd8f950675c6c1051c2310c1cdf7309d8b"}
 libm = "0.2.8"
 heapless = "0.8.0"
 autotune = {path = "../../autotune"}
@@ -37,6 +37,7 @@ ssd1306 = "0.7.1"
 fugit = "0.3.7"
 embedded-graphics = "0.7.1"
 tinybmp = "0.4.0"
+rotary-encoder-embedded = "0.3.1"
 
 [features]
 default = ['defmt-default']

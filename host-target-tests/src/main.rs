@@ -1,7 +1,4 @@
-use autotune::{
-    circular_buffer::CircularBuffer,
-    frequencies::find_nearest_note_frequency,
-};
+use autotune::{circular_buffer::CircularBuffer, frequencies::find_nearest_note_frequency};
 use hound::{WavReader, WavSpec, WavWriter};
 use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
 use std::error::Error;
