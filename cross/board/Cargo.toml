@@ -1,5 +1,5 @@
 [package]
-authors = ["Nathan Bradshaw"]
+authors = ["Nathan Bradshaw", "Enoch Bradshaw"]
 edition = "2021"
 name = "board"
 version = "0.1.0"

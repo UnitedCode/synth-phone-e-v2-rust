@@ -4,4 +4,5 @@ members = [
     "host-target-tests",
     "xtask",
     "autotune",
+    "state-machines"
 ]
