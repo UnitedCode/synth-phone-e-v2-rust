@@ -39,29 +39,28 @@ mod rtic_app {
             },
             process_frequencies::find_fundamental_frequency,
         };
-
+        use heapless::String;
+        use core::fmt::Write;
         use core::f32::consts::PI;
         use embedded_graphics::{
+            mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder, MonoTextStyle},
             image::Image,
             pixelcolor::BinaryColor,
-            prelude::Point,
+            prelude::*,
+            text::{Baseline, Text},
         };
-        use libdaisy::{audio, gpio, hid, logger, system};
+        use libdaisy::{audio, hid, logger, prelude::{Output, PushPull, Input}, system, gpio::*};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
         use log::{info, warn};
         use state_machines::MenuStateMachine;
         use stm32h7xx_hal::{
-            adc, gpio::{Analog, Input}, i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
+            adc, i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
         };
         use tinybmp::Bmp;
 
         use crate::{
             autotune::circular_buffer::CircularBuffer, hann_window, BIN_WIDTH, BLOCK_SIZE,
             BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
-        };
-        use embedded_graphics::{
-            mono_font::{ascii::FONT_6X10, MonoTextStyle},
-            prelude::*,
         };
         use fugit::RateExtU32;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
@@ -70,7 +69,7 @@ mod rtic_app {
         use rotary_encoder_embedded::{Direction, RotaryEncoder};
 
         pub struct Knob {
-            rotary_encoder: RotaryEncoder<StandardMode, gpio::Daisy3<Input>, gpio::Daisy4<Input>>,
+            rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
             value: u8,
         }
 
@@ -78,8 +77,8 @@ mod rtic_app {
             pub fn new(
                 rotary_encoder: RotaryEncoder<
                     StandardMode,
-                    gpio::Daisy3<Input>,
-                    gpio::Daisy4<Input>,
+                    Daisy3<Input>,
+                    Daisy4<Input>,
                 >,
             ) -> Knob {
                 Knob {
@@ -106,11 +105,18 @@ mod rtic_app {
         struct Local {
             audio: audio::Audio,
             buffer: audio::AudioBuffer,
-            button: hid::Switch<gpio::Daisy28<Input>>,
-            pot_input: hid::AnalogControl<gpio::Daisy15<Analog>>,
+            button: hid::Switch<Daisy28<Input>>,
             adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
             timer2: Timer<stm32::TIM2>,
             knob_1: Knob,
+            display: Ssd1306<ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>, ssd1306::prelude::DisplaySize128x32, BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>>,
+            col_1_pin: Daisy21<Output<PushPull>>,
+            col_2_pin: Daisy20<Output<PushPull>>,
+            col_3_pin: Daisy19<Output<PushPull>>,
+            row_1_pin: Daisy15<Input>,
+            row_2_pin: Daisy16<Input>,
+            row_3_pin: Daisy17<Input>,
+            row_4_pin: Daisy18<Input>,
         }
 
         #[init]
@@ -153,13 +159,6 @@ mod rtic_app {
                 .expect("Failed to get pin daisy28!")
                 .into_pull_up_input();
 
-            let daisy15 = system
-                .gpio
-                .daisy15
-                .take()
-                .expect("Failed to get pin daisy29!")
-                .into_analog();
-
             let daisy14_sda = system
                 .gpio
                 .daisy12
@@ -183,6 +182,14 @@ mod rtic_app {
                 ccdr.peripheral.I2C1,
                 &ccdr.clocks,
             );
+            let col_1_pin: Daisy21<Output<PushPull>> = system.gpio.daisy21.take().expect("Failed to get D21").into_push_pull_output();
+            let col_2_pin: Daisy20<Output<PushPull>> = system.gpio.daisy20.take().expect("Failed to get D20").into_push_pull_output();
+            let col_3_pin: Daisy19<Output<PushPull>> = system.gpio.daisy19.take().expect("Failed to get D19").into_push_pull_output();
+
+            let row_1_pin: Daisy15<Input> = system.gpio.daisy15.take().expect("Failed to get D15").into_pull_up_input();
+            let row_2_pin: Daisy16<Input> = system.gpio.daisy16.take().expect("Failed to get D16").into_pull_up_input();
+            let row_3_pin: Daisy17<Input> = system.gpio.daisy17.take().expect("Failed to get D17").into_pull_up_input();
+            let row_4_pin: Daisy18<Input> = system.gpio.daisy18.take().expect("Failed to get D18").into_pull_up_input();
 
             let i2c_interface = I2CDisplayInterface::new_custom_address(i2c, 0x3C);
 
@@ -196,12 +203,6 @@ mod rtic_app {
             // Clear the display buffer
             display.clear();
 
-            // Create a text style
-            // let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-
-            // Send the buffer to the display
-            display.flush().unwrap();
-
             let bmp: Bmp<BinaryColor> =
                 Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp")).unwrap();
 
@@ -213,7 +214,18 @@ mod rtic_app {
             // Display the image
             image.draw(&mut display);
 
-            display.flush().unwrap();
+            display.flush().expect("Could not write to display");
+            display.clear();
+
+            // Create a text style
+            let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+
+            Text::with_baseline("Nathan is wrong! its a fallacy", Point::zero(), text_style, Baseline::Top)
+                .draw(&mut display)
+                .unwrap();
+
+            // Send the buffer to the display
+            display.flush().expect("Could not write to display");
 
             let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
@@ -223,7 +235,7 @@ mod rtic_app {
             adc1.set_resolution(adc::Resolution::EightBit);
             let adc1_max = adc1.slope() as f32;
 
-            let pot_input = hid::AnalogControl::new(daisy15, adc1_max);
+;
             let mut timer2 = stm32h7xx_hal::timer::TimerExt::timer(
                 device.TIM2,
                 MilliSeconds::from_ticks(1).into_rate(),
@@ -245,16 +257,16 @@ mod rtic_app {
                     previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
                     menu_state_machine: MenuStateMachine::new(),
-                    // display
                 },
                 Local {
-                    pot_input,
                     adc1,
                     audio: system.audio,
                     buffer,
                     button: switch1,
                     timer2,
-                    knob_1
+                    knob_1,
+                    display,
+                    col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin
                 },
                 init::Monotonics(),
             )
@@ -334,24 +346,69 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = TIM2, local = [knob_1, timer2], shared = [])]
+        #[task(binds = TIM2, local = [knob_1, timer2, display, col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin], shared = [])]
         fn interface_handler(mut ctx: interface_handler::Context) {
             ctx.local.timer2.clear_irq();
+
+
+            let matrix_state = scan_button_matrix(
+                ctx.local.col_1_pin,
+                ctx.local.col_2_pin,
+                ctx.local.col_3_pin,
+                ctx.local.row_1_pin,
+                ctx.local.row_2_pin,
+                ctx.local.row_3_pin,
+                ctx.local.row_4_pin,
+            );
+
+            info!("{:?}", matrix_state);
+
+            let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+            
+            let text_style2 = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+
+            Text::with_baseline("piss", Point::new(54, 14), text_style2, Baseline::Top)
+                            .draw(ctx.local.display)
+                            .unwrap();
+
+            
             // TODO this function needs to be updated to handle encoder business
             // SEE: https://github.com/rtic-rs/rtic/blob/master/examples/stm32f411_encoder_polling/src/main.rs
             // and: https://github.com/nathansbradshaw/libdaisy-rust/commit/f08c01fd8f950675c6c1051c2310c1cdf7309d8b
             match ctx.local.knob_1.rotary_encoder.update() {
                 Direction::Clockwise => {
-                    if ctx.local.knob_1.value < 255 {
+
+                    if ctx.local.knob_1.value < 255 { 
+
                         ctx.local.knob_1.value += 1;
+
+                        let mut buffer: String<3> = String::new();
+                        write!(&mut buffer, "{}", ctx.local.knob_1.value).unwrap();
+
+                        ctx.local.display.clear();
+                        Text::with_baseline(&buffer, Point::new(110, 20), text_style, Baseline::Top)
+                            .draw(ctx.local.display)
+                            .unwrap();
+                        ctx.local.display.flush().expect("could not draw to screen");
                         
                         info!("Value increased")
                     }
                 }
                 Direction::Anticlockwise => {
                     if ctx.local.knob_1.value > 0 {
+
                         ctx.local.knob_1.value -= 1;
-                       info!("Value decreased")
+
+                        let mut buffer: String<3> = String::new();
+                        write!(&mut buffer, "{}", ctx.local.knob_1.value).unwrap();
+
+                        ctx.local.display.clear();
+                        Text::with_baseline(&buffer, Point::new(110, 20), text_style, Baseline::Top)
+                            .draw(ctx.local.display)
+                            .unwrap();
+                        ctx.local.display.flush().expect("could not draw to screen");
+
+                        info!("Value decreased")
                     }
                 }
                 Direction::None => {
@@ -370,13 +427,9 @@ mod rtic_app {
         synthesis_magnitudes,
         synthesis_frequencies,
         previous_pitch_shift_ratio,
-    ], local = [adc1, pot_input], priority = 7)]
+    ], local = [], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // info!("running task");
-            let adc1 = ctx.local.adc1;
-            let pot = ctx.local.pot_input;
-
-            adc1.start_conversion(pot.get_pin());
 
             // let adc_result = adc1.read_sample().unwrap_or(1);
             // let pitch_shift = 0.15 * adc_result as f32 - 1.15;
@@ -575,5 +628,69 @@ mod rtic_app {
 
             display
         }
+
+        /// Scans a 4x3 button matrix without diodes.
+        /// The returned structure could be a 2D array or vector of booleans.
+        /// For simplicity, this returns a nested array: [4 rows][3 cols].
+        fn scan_button_matrix(
+            col_1: &mut Daisy21<Output<PushPull>>,
+            col_2: &mut Daisy20<Output<PushPull>>,
+            col_3: &mut Daisy19<Output<PushPull>>,
+            row_1: &Daisy15<Input>,
+            row_2: &Daisy16<Input>,
+            row_3: &Daisy17<Input>,
+            row_4: &Daisy18<Input>,
+        ) -> [[bool; 3]; 4] {
+            let mut state = [[false; 3]; 4];
+    
+            // Helper closure to read rows
+            let read_rows = |
+                            r1: &Daisy15<Input>,
+                            r2: &Daisy16<Input>,
+                            r3: &Daisy17<Input>,
+                            r4: &Daisy18<Input>| -> [bool; 4] {
+                [
+                    r1.is_low(), // true if button pressed
+                    r2.is_low(),
+                    r3.is_low(),
+                    r4.is_low(),
+                ]
+            };
+    
+
+    
+            // // Drive COL_2 low, others high
+            col_1.set_high();
+            col_2.set_low();
+            col_3.set_high();
+            let col2_rows = read_rows(row_1, row_2, row_3, row_4);
+            for (r, pressed) in col2_rows.iter().enumerate() {
+                state[r][1] = *pressed;
+            }
+
+            // Drive COL_1 low, others high
+            col_2.set_high();
+            col_1.set_low();
+            col_3.set_high();
+            let col1_rows = read_rows(row_1, row_2, row_3, row_4);
+            for (r, pressed) in col1_rows.iter().enumerate() {
+                state[r][0] = *pressed;
+            }
+    
+            // Drive COL_3 low, others high
+            col_1.set_high();
+            col_2.set_high();
+            col_3.set_low();
+            let col3_rows = read_rows(row_1, row_2, row_3, row_4);
+            for (r, pressed) in col3_rows.iter().enumerate() {
+                state[r][2] = *pressed;
+            }
+    
+            // Finally, return all keys states
+            // state[row][col] = true means that button is pressed
+            state
+        }
     }
+
+
 }
