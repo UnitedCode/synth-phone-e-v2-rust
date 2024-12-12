@@ -43,7 +43,7 @@ mod rtic_app {
         use core::fmt::Write;
         use core::f32::consts::PI;
         use embedded_graphics::{
-            mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder, MonoTextStyle},
+            mono_font::{ascii::FONT_6X10, MonoTextStyle},
             image::Image,
             pixelcolor::BinaryColor,
             prelude::*,
@@ -53,18 +53,15 @@ mod rtic_app {
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
         use log::{info, warn};
         use state_machines::MenuStateMachine;
-        use stm32h7xx_hal::{
-            adc, i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
+        use stm32h7xx_hal::{ i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
         };
         use tinybmp::Bmp;
-
         use crate::{
             autotune::circular_buffer::CircularBuffer, hann_window, BIN_WIDTH, BLOCK_SIZE,
             BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
         };
         use fugit::RateExtU32;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
-
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::{Direction, RotaryEncoder};
 
@@ -100,13 +97,12 @@ mod rtic_app {
             hop_counter: u32,
             menu_state_machine: MenuStateMachine,
         }
-
+        
         #[local]
         struct Local {
             audio: audio::Audio,
             buffer: audio::AudioBuffer,
             button: hid::Switch<Daisy28<Input>>,
-            adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
             timer2: Timer<stm32::TIM2>,
             knob_1: Knob,
             display: Ssd1306<ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>, ssd1306::prelude::DisplaySize128x32, BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>>,
@@ -118,7 +114,7 @@ mod rtic_app {
             row_3_pin: Daisy17<Input>,
             row_4_pin: Daisy18<Input>,
         }
-
+        
         #[init]
         fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
             logger::init();
@@ -129,13 +125,7 @@ mod rtic_app {
             let mut system = libdaisy::system_init!(core, device, ccdr, BLOCK_SIZE);
 
             let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
-            // Encoder business
 
-            // let encoder_btn_sw = system.gpio.daisy2.take();
-
-            // Configure Pins connected to encoder as floating input (only if your encoder
-            // board already has pull-up resistors, use 'into_pull_up_input' otherwise)
-            // and Obtain Handle.
             let encoder_dt = system
                 .gpio
                 .daisy3
@@ -152,7 +142,7 @@ mod rtic_app {
 
             let knob_1 = Knob::new(encoder_1);
 
-            let daisy28 = system
+            let daisy28_btn = system
                 .gpio
                 .daisy28
                 .take()
@@ -199,20 +189,15 @@ mod rtic_app {
 
             display.init().expect("Failed to initialize display");
 
-            // Create a text style
-            // Clear the display buffer
             display.clear();
 
             let bmp: Bmp<BinaryColor> =
                 Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp")).unwrap();
 
-            // To draw the `bmp` object to the display it needs to be wrapped in an `Image` object to set
-            // the position at which it should drawn. Here, the top left corner of the image is set to
-            // `(32, 32)`.
             let image = Image::new(&bmp, Point::new(0, 0));
 
             // Display the image
-            image.draw(&mut display);
+            image.draw(&mut display).expect("Failed to display image");
 
             display.flush().expect("Could not write to display");
             display.clear();
@@ -227,15 +212,10 @@ mod rtic_app {
             // Send the buffer to the display
             display.flush().expect("Could not write to display");
 
-            let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
+            let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
             switch1.set_held_thresh(Some(150));
 
-            let mut adc1 = system.adc1.enable();
-            adc1.set_resolution(adc::Resolution::EightBit);
-            let adc1_max = adc1.slope() as f32;
-
-;
             let mut timer2 = stm32h7xx_hal::timer::TimerExt::timer(
                 device.TIM2,
                 MilliSeconds::from_ticks(1).into_rate(),
@@ -259,7 +239,6 @@ mod rtic_app {
                     menu_state_machine: MenuStateMachine::new(),
                 },
                 Local {
-                    adc1,
                     audio: system.audio,
                     buffer,
                     button: switch1,
@@ -296,7 +275,6 @@ mod rtic_app {
             if audio.get_stereo(buffer) {
                 for (left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
                     let mut out_sample = *left;
-                    // info!("{out_sample}");
 
                     // Lock to write to in_buffer
                     ctx.shared.in_buffer.lock(|in_buffer| {
@@ -347,9 +325,8 @@ mod rtic_app {
         }
 
         #[task(binds = TIM2, local = [knob_1, timer2, display, col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin], shared = [])]
-        fn interface_handler(mut ctx: interface_handler::Context) {
+        fn interface_handler(ctx: interface_handler::Context) {
             ctx.local.timer2.clear_irq();
-
 
             let matrix_state = scan_button_matrix(
                 ctx.local.col_1_pin,
@@ -364,17 +341,7 @@ mod rtic_app {
             info!("{:?}", matrix_state);
 
             let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-            
-            let text_style2 = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
 
-            Text::with_baseline("piss", Point::new(54, 14), text_style2, Baseline::Top)
-                            .draw(ctx.local.display)
-                            .unwrap();
-
-            
-            // TODO this function needs to be updated to handle encoder business
-            // SEE: https://github.com/rtic-rs/rtic/blob/master/examples/stm32f411_encoder_polling/src/main.rs
-            // and: https://github.com/nathansbradshaw/libdaisy-rust/commit/f08c01fd8f950675c6c1051c2310c1cdf7309d8b
             match ctx.local.knob_1.rotary_encoder.update() {
                 Direction::Clockwise => {
 
@@ -429,12 +396,6 @@ mod rtic_app {
         previous_pitch_shift_ratio,
     ], local = [], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
-            // info!("running task");
-
-            // let adc_result = adc1.read_sample().unwrap_or(1);
-            // let pitch_shift = 0.15 * adc_result as f32 - 1.15;
-            // info!("ADC result: {}, pitch shift: {}", adc_result, pitch_shift);
-
             // START ACTUAL FFT PROCESSING
             let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
@@ -585,9 +546,6 @@ mod rtic_app {
                     out_buffer.add_value(windowed_val);
                 });
             }
-
-            // let elapsed = start_cycles.wrapping_sub(end_cycle);
-            // info!("FFT Process Time{elapsed}");
         }
 
         #[inline(always)]
