@@ -324,8 +324,18 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = TIM2, local = [knob_1, timer2, display, col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin], shared = [])]
-        fn interface_handler(ctx: interface_handler::Context) {
+        #[task(binds = TIM2, local = [
+            knob_1, 
+            timer2, 
+            display, 
+            col_1_pin, 
+            col_2_pin, 
+            col_3_pin, 
+            row_1_pin, 
+            row_2_pin, 
+            row_3_pin, 
+            row_4_pin], shared = [menu_state_machine])]
+        fn interface_handler(mut ctx: interface_handler::Context) {
             ctx.local.timer2.clear_irq();
 
             let matrix_state = scan_button_matrix(
@@ -345,6 +355,10 @@ mod rtic_app {
             match ctx.local.knob_1.rotary_encoder.update() {
                 Direction::Clockwise => {
 
+                    ctx.shared.menu_state_machine.lock(|msm| {
+                        msm.handle_event(state_machines::MenuEvent::Adjust(1));
+                    });
+
                     if ctx.local.knob_1.value < 255 { 
 
                         ctx.local.knob_1.value += 1;
@@ -363,7 +377,9 @@ mod rtic_app {
                 }
                 Direction::Anticlockwise => {
                     if ctx.local.knob_1.value > 0 {
-
+                        ctx.shared.menu_state_machine.lock(|msm| {
+                            msm.handle_event(state_machines::MenuEvent::Adjust(-1));
+                        });
                         ctx.local.knob_1.value -= 1;
 
                         let mut buffer: String<3> = String::new();

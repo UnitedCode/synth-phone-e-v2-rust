@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 #[derive(Debug, PartialEq)]
-enum MenuState {
+pub enum MenuState {
     Volume = 0,
     Key = 1,
     SubMenu = 2,
@@ -10,7 +10,7 @@ enum MenuState {
 }
 
 #[derive(Debug)]
-enum MenuEvent {
+pub enum MenuEvent {
     GoToKey,
     GoToMenuSelect,
     GoToOctave,
