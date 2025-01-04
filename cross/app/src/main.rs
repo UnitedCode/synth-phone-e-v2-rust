@@ -52,7 +52,7 @@ mod rtic_app {
         use libdaisy::{audio, hid, logger, prelude::{Output, PushPull, Input}, system, gpio::*};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
         use log::{info, warn};
-        use state_machines::MenuStateMachine;
+        use state_machines::{MenuState, MenuStateMachine};
         use stm32h7xx_hal::{ i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
         };
         use tinybmp::Bmp;
@@ -96,6 +96,7 @@ mod rtic_app {
             previous_pitch_shift_ratio: f32,
             hop_counter: u32,
             menu_state_machine: MenuStateMachine,
+            old_matrix_state: [[bool; 3]; 4],
         }
         
         #[local]
@@ -113,6 +114,7 @@ mod rtic_app {
             row_2_pin: Daisy16<Input>,
             row_3_pin: Daisy17<Input>,
             row_4_pin: Daisy18<Input>,
+            encoder_button: hid::Switch<Daisy2<Input>>,
         }
         
         #[init]
@@ -138,6 +140,16 @@ mod rtic_app {
                 .take()
                 .expect("failed to get pin daisy4")
                 .into_floating_input();
+
+            let encoder_sw_pin = system
+                .gpio
+                .daisy2
+                .take()
+                .expect("Failed to get pin daisy2")
+                .into_pull_up_input();
+
+            let encoder_button = hid::Switch::new(encoder_sw_pin, hid::SwitchType::PullUp);
+
             let encoder_1 = RotaryEncoder::new(encoder_dt, encoder_clk).into_standard_mode();
 
             let knob_1 = Knob::new(encoder_1);
@@ -237,6 +249,7 @@ mod rtic_app {
                     previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
                     menu_state_machine: MenuStateMachine::new(),
+                    old_matrix_state: [[false; 3]; 4],
                 },
                 Local {
                     audio: system.audio,
@@ -245,7 +258,8 @@ mod rtic_app {
                     timer2,
                     knob_1,
                     display,
-                    col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin
+                    col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin,
+                    encoder_button
                 },
                 init::Monotonics(),
             )
@@ -334,11 +348,15 @@ mod rtic_app {
             row_1_pin, 
             row_2_pin, 
             row_3_pin, 
-            row_4_pin], shared = [menu_state_machine])]
+            row_4_pin,
+            encoder_button,
+            ], shared = [menu_state_machine, old_matrix_state])]
         fn interface_handler(mut ctx: interface_handler::Context) {
             ctx.local.timer2.clear_irq();
 
-            let matrix_state = scan_button_matrix(
+            let mut update_state: bool = false;
+
+            let new_matrix_state = scan_button_matrix(
                 ctx.local.col_1_pin,
                 ctx.local.col_2_pin,
                 ctx.local.col_3_pin,
@@ -347,10 +365,59 @@ mod rtic_app {
                 ctx.local.row_3_pin,
                 ctx.local.row_4_pin,
             );
+            ctx.shared.menu_state_machine.lock(|msm|
+                {
+                    info!("state - {:?} -", msm.snapshot());
+            });
 
-            info!("{:?}", matrix_state);
+            // info!("{:?}", new_matrix_state);
+
+            for row in 0..4 {
+                for col in 0..3 {
+                    let was_pressed = ctx.shared.old_matrix_state.lock(|oms| {
+                        oms[row][col]
+                    });
+                    let is_pressed  = new_matrix_state[row][col];
+        
+                    // If there is a change, decide how to handle it
+                    if is_pressed != was_pressed {
+                        ctx.shared.old_matrix_state.lock(|oms| {
+                            oms[row][col] = is_pressed;
+                        });
+                        if is_pressed {
+                            // 3a) Button has just been pressed
+                            ctx.shared.menu_state_machine.lock(|msm|
+                                {
+                                    handle_button_press(row, col, msm);
+                            })
+                        } else {
+                            // 3b) Button has just been released
+                            ctx.shared.menu_state_machine.lock(|msm|
+                                {
+                            handle_button_release(row, col, msm);
+                        })
+
+                        }
+                    }
+                }
+            }
+        
 
             let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+
+            ctx.local.encoder_button.update();
+            if ctx.local.encoder_button.is_pressed() {
+                // The user is pushing (or has just pushed) the encoder button
+                info!("Encoder button pressed!");
+                
+                // For example, forward an event to your menu:
+                ctx.shared.menu_state_machine.lock(|msm| {
+                    msm.handle_event(state_machines::MenuEvent::Select);
+                    if msm.snapshot().menu_state == MenuState::Volume {
+                        info!("RING RING RING!")
+                    }
+                });
+            }
 
             match ctx.local.knob_1.rotary_encoder.update() {
                 Direction::Clockwise => {
@@ -376,6 +443,7 @@ mod rtic_app {
                     }
                 }
                 Direction::Anticlockwise => {
+                    update_state = true;
                     if ctx.local.knob_1.value > 0 {
                         ctx.shared.menu_state_machine.lock(|msm| {
                             msm.handle_event(state_machines::MenuEvent::Adjust(-1));
@@ -664,7 +732,41 @@ mod rtic_app {
             // state[row][col] = true means that button is pressed
             state
         }
+
+        fn handle_button_press(row: usize, col: usize, msm: &mut MenuStateMachine) {
+            match (row, col) {
+                (0,0) => info!("Top-left button pressed!"),
+                (0,1) => info!("Top-middle button pressed!"),
+                (0,2) => info!("Top-right button pressed!"),
+                (1,0) => info!("Middle-left button pressed!"),
+                (1,1) => info!("Middle-middle button pressed!"),
+                (1,2) => info!("Middle-right button pressed!"),
+                (2,0) => info!("Bottom-left button pressed!"),
+                (2,1) => info!("Bottom-middle button pressed!"),
+                (2,2) => info!("Bottom-right button pressed!"),
+                (3,0) => {
+                    info!("BBottom-left button pressed!");
+                    msm.handle_event(state_machines::MenuEvent::GoToSubMenu);
+                },
+                (3,1) => {info!("BBottom-middle button pressed!");
+                msm.handle_event(state_machines::MenuEvent::GoToOctave);
+            },
+                (3,2) => {info!("BBottom-right button pressed!");
+                msm.handle_event(state_machines::MenuEvent::GoToKey);
+            },
+                _ => {}
+            }
+        }
+        
+        fn handle_button_release(row: usize, col: usize, msm: &mut MenuStateMachine) {
+            // Possibly do something else on release
+            msm.handle_event(state_machines::MenuEvent::GoToVolume);
+            info!("Button ({},{}) released!", row, col);
+        }
+        
     }
+
+
 
 
 }
