@@ -43,8 +43,8 @@ mod rtic_app {
         use core::fmt::Write;
         use core::f32::consts::PI;
         use embedded_graphics::{
-            mono_font::{ascii::FONT_6X10, MonoTextStyle},
             image::Image,
+            mono_font::{ascii::FONT_6X9, ascii::FONT_10X20, MonoTextStyle, MonoTextStyleBuilder},
             pixelcolor::BinaryColor,
             prelude::*,
             text::{Baseline, Text},
@@ -669,6 +669,101 @@ mod rtic_app {
             display.init().expect("Failed to init display");
 
             display
+        }
+
+        fn draw_screen_values(key: i32, mode: String, note: String, oct: I32, vol: I32){
+            let mut display: SimulatorDisplay<BinaryColor> = SimulatorDisplay::new(Size::new(128, 32));
+
+            // Load the BMP image (16BPP).
+            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("./assets/SynthphoneE_MenuBlank.bmp"))
+                .expect("Could not load BMP");
+        
+            // Wrap the BMP in an `Image` to position it. Draw at (0,0) for full coverage on a 128×32 display.
+            let image = Image::new(&bmp, Point::new(0, 0));
+            image.draw(&mut display)?;
+        
+            // Build a simple white-on-black text style using an ASCII font
+            let text_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X9)
+                .text_color(BinaryColor::Off) 
+                .background_color(BinaryColor::On) 
+                .build();
+        
+            let h1_style = MonoTextStyleBuilder::new()
+                .font(&FONT_10X20)
+                .text_color(BinaryColor::Off)
+                .background_color(BinaryColor::On) 
+                .build();
+        
+            // Example: fill a buffer with something to display
+            let mut key_buffer: String<2> = String::new();
+                write!(&mut key_buffer, key) // for example
+                    .unwrap();
+        
+            let mut mode_buffer: String<5> = String::new();
+                write!(&mut mode_buffer, mode) // for example
+                    .unwrap();
+        
+            let mut note_buffer: String<2> = String::new();
+                write!(&mut note_buffer, note) // for example
+                    .unwrap();
+        
+            let mut oct_buffer: String<1> = String::new();
+                write!(&mut oct_buffer, oct) // for example
+                    .unwrap();
+        
+            let mut vol_buffer: String<3> = String::new();
+            write!(&mut vol_buffer, vol) // for example
+                .unwrap();
+        
+        
+            // Draw the text on top of the image at coordinates (62,16)
+            draw_text(&mut display, &key_buffer, Point::new(26, 3), &text_style)?;
+            draw_text(&mut display, &mode_buffer, Point::new(80, 3), &text_style)?;
+            draw_centered_text(&mut display, &note_buffer, Point::new(62, 15), h1_style)?;
+            draw_text(&mut display, &oct_buffer, Point::new(14, 28), &text_style)?;
+            draw_text(&mut display, &vol_buffer, Point::new(112, 28), &text_style)?;
+        }
+
+        fn draw_text<D>(
+            display: &mut D,
+            text: &str,
+            position: Point,
+            style: &MonoTextStyle<BinaryColor>,
+        ) -> Result<(), D::Error>
+        where
+            D: DrawTarget<Color = BinaryColor>,
+        {
+            Text::with_baseline(text, position, *style, Baseline::Middle).draw(display)?;
+            Ok(())
+        }
+        
+        fn draw_centered_text<D>(
+            display: &mut D,
+            text: &str,
+            center: Point,
+            style: MonoTextStyle<BinaryColor>,
+        ) -> Result<(), D::Error>
+        where
+            D: DrawTarget<Color = BinaryColor>,
+        {
+            // 1) Create a Text at (0,0) just to measure it
+            let text_obj = Text::with_baseline(text, Point::zero(), style, Baseline::Top);
+        
+            // 2) bounding_box() gives us the width/height of this text
+            let bbox = text_obj.bounding_box();
+            let text_width = bbox.size.width as i32;
+            let text_height = bbox.size.height as i32;
+        
+            // 3) Compute a new top-left so that the text is centered on `center`
+            let draw_x = center.x - text_width / 2;
+            let draw_y = center.y - text_height / 2;
+        
+            // 4) Draw the text at the adjusted position
+            Text::with_baseline(text, Point::new(draw_x, draw_y), style, Baseline::Top)
+                .draw(display)?;
+        
+            Ok(())
         }
 
         /// Scans a 4x3 button matrix without diodes.
