@@ -23,7 +23,7 @@ const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 256;
 const BLOCK_SIZE: usize = 2;
 const BIN_WIDTH: f32 = SAMPLE_RATE as f32 / FFT_SIZE as f32 * 2.0;
-use autotune;
+use autotune::{self, keys};
 use autotune::hann_window;
 
 mod rtic_app {
@@ -36,15 +36,14 @@ mod rtic_app {
         use autotune::{
             frequencies::{
                 find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES,
-            },
-            process_frequencies::find_fundamental_frequency,
+            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::find_fundamental_frequency
         };
         use heapless::String;
         use core::fmt::Write;
         use core::f32::consts::PI;
         use embedded_graphics::{
             image::Image,
-            mono_font::{ascii::FONT_6X9, ascii::FONT_10X20, MonoTextStyle, MonoTextStyleBuilder},
+            mono_font::{ascii::{FONT_10X20, FONT_6X10, FONT_6X9}, MonoTextStyle, MonoTextStyleBuilder},
             pixelcolor::BinaryColor,
             prelude::*,
             text::{Baseline, Text},
@@ -64,6 +63,8 @@ mod rtic_app {
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::{Direction, RotaryEncoder};
+
+        type LcdDisplay = Ssd1306<ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>, ssd1306::prelude::DisplaySize128x32, BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>>;
 
         pub struct Knob {
             rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
@@ -106,7 +107,7 @@ mod rtic_app {
             button: hid::Switch<Daisy28<Input>>,
             timer2: Timer<stm32::TIM2>,
             knob_1: Knob,
-            display: Ssd1306<ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>, ssd1306::prelude::DisplaySize128x32, BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>>,
+            display: LcdDisplay,
             col_1_pin: Daisy21<Output<PushPull>>,
             col_2_pin: Daisy20<Output<PushPull>>,
             col_3_pin: Daisy19<Output<PushPull>>,
@@ -216,13 +217,6 @@ mod rtic_app {
 
             // Create a text style
             let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-
-            Text::with_baseline("Nathan is wrong! its a fallacy", Point::zero(), text_style, Baseline::Top)
-                .draw(&mut display)
-                .unwrap();
-
-            // Send the buffer to the display
-            display.flush().expect("Could not write to display");
 
             let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
@@ -365,10 +359,7 @@ mod rtic_app {
                 ctx.local.row_3_pin,
                 ctx.local.row_4_pin,
             );
-            ctx.shared.menu_state_machine.lock(|msm|
-                {
-                    info!("state - {:?} -", msm.snapshot());
-            });
+
 
             // info!("{:?}", new_matrix_state);
 
@@ -385,25 +376,24 @@ mod rtic_app {
                             oms[row][col] = is_pressed;
                         });
                         if is_pressed {
+                            update_state = true;
                             // 3a) Button has just been pressed
                             ctx.shared.menu_state_machine.lock(|msm|
                                 {
-                                    handle_button_press(row, col, msm);
+                                    msm.handle_event(handle_button_press(row, col));
                             })
                         } else {
+                            update_state = true;
                             // 3b) Button has just been released
                             ctx.shared.menu_state_machine.lock(|msm|
                                 {
-                            handle_button_release(row, col, msm);
+                            msm.handle_event(handle_button_release(row, col));
                         })
 
                         }
                     }
                 }
             }
-        
-
-            let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
 
             ctx.local.encoder_button.update();
             if ctx.local.encoder_button.is_pressed() {
@@ -421,51 +411,39 @@ mod rtic_app {
 
             match ctx.local.knob_1.rotary_encoder.update() {
                 Direction::Clockwise => {
+                    update_state = true;
 
                     ctx.shared.menu_state_machine.lock(|msm| {
                         msm.handle_event(state_machines::MenuEvent::Adjust(1));
                     });
-
-                    if ctx.local.knob_1.value < 255 { 
-
-                        ctx.local.knob_1.value += 1;
-
-                        let mut buffer: String<3> = String::new();
-                        write!(&mut buffer, "{}", ctx.local.knob_1.value).unwrap();
-
-                        ctx.local.display.clear();
-                        Text::with_baseline(&buffer, Point::new(110, 20), text_style, Baseline::Top)
-                            .draw(ctx.local.display)
-                            .unwrap();
-                        ctx.local.display.flush().expect("could not draw to screen");
-                        
-                        info!("Value increased")
-                    }
                 }
                 Direction::Anticlockwise => {
                     update_state = true;
-                    if ctx.local.knob_1.value > 0 {
+                    
                         ctx.shared.menu_state_machine.lock(|msm| {
                             msm.handle_event(state_machines::MenuEvent::Adjust(-1));
                         });
-                        ctx.local.knob_1.value -= 1;
-
-                        let mut buffer: String<3> = String::new();
-                        write!(&mut buffer, "{}", ctx.local.knob_1.value).unwrap();
-
-                        ctx.local.display.clear();
-                        Text::with_baseline(&buffer, Point::new(110, 20), text_style, Baseline::Top)
-                            .draw(ctx.local.display)
-                            .unwrap();
-                        ctx.local.display.flush().expect("could not draw to screen");
-
-                        info!("Value decreased")
-                    }
+                        // ctx.local.knob_1.value -= 1;
+                    
                 }
                 Direction::None => {
                     
                 }
             }
+
+
+            ctx.shared.menu_state_machine.lock(|msm|
+                {
+                    if update_state {
+                        
+                    
+                        let snapshot = msm.snapshot();
+                        info!("state - {:?} -", msm.snapshot());
+                        draw_screen_values(snapshot.key, snapshot.key, snapshot.note, snapshot.octave, snapshot.volume,  ctx.local.display);
+                        ctx.local.display.flush().expect("could not draw to screen");
+                        update_state = false;
+                    }
+            });
 
         }
 
@@ -671,16 +649,15 @@ mod rtic_app {
             display
         }
 
-        fn draw_screen_values(key: i32, mode: String, note: String, oct: I32, vol: I32){
-            let mut display: SimulatorDisplay<BinaryColor> = SimulatorDisplay::new(Size::new(128, 32));
+        fn draw_screen_values(key: i32, mode: i32, note: i32, oct: i32, vol: i32, display: &mut LcdDisplay){
 
             // Load the BMP image (16BPP).
-            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("./assets/SynthphoneE_MenuBlank.bmp"))
+            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE_MenuBlank.bmp"))
                 .expect("Could not load BMP");
         
             // Wrap the BMP in an `Image` to position it. Draw at (0,0) for full coverage on a 128×32 display.
             let image = Image::new(&bmp, Point::new(0, 0));
-            image.draw(&mut display)?;
+            image.draw(display).expect("Draw thing");
         
             // Build a simple white-on-black text style using an ASCII font
             let text_style = MonoTextStyleBuilder::new()
@@ -694,35 +671,35 @@ mod rtic_app {
                 .text_color(BinaryColor::Off)
                 .background_color(BinaryColor::On) 
                 .build();
-        
+
             // Example: fill a buffer with something to display
             let mut key_buffer: String<2> = String::new();
-                write!(&mut key_buffer, key) // for example
-                    .unwrap();
+                write!(&mut key_buffer, "{}", get_key_name(key)) // for example
+                    .expect("failed converting key to string");
         
             let mut mode_buffer: String<5> = String::new();
-                write!(&mut mode_buffer, mode) // for example
-                    .unwrap();
+                write!(&mut mode_buffer, "{}", get_mode_name(mode)) // for example
+                .expect("failed converting mode to string");
         
             let mut note_buffer: String<2> = String::new();
-                write!(&mut note_buffer, note) // for example
-                    .unwrap();
+                write!(&mut note_buffer, "{}", get_note_name(note, get_key(key))) // for example
+                .expect("failed converting note to string");
         
             let mut oct_buffer: String<1> = String::new();
-                write!(&mut oct_buffer, oct) // for example
-                    .unwrap();
+                write!(&mut oct_buffer, "{oct}") // for example
+                .expect("failed converting oct to string");
         
             let mut vol_buffer: String<3> = String::new();
-            write!(&mut vol_buffer, vol) // for example
-                .unwrap();
+            write!(&mut vol_buffer, "{vol}") // for example
+                .expect("failed converting vol to string");
         
         
             // Draw the text on top of the image at coordinates (62,16)
-            draw_text(&mut display, &key_buffer, Point::new(26, 3), &text_style)?;
-            draw_text(&mut display, &mode_buffer, Point::new(80, 3), &text_style)?;
-            draw_centered_text(&mut display, &note_buffer, Point::new(62, 15), h1_style)?;
-            draw_text(&mut display, &oct_buffer, Point::new(14, 28), &text_style)?;
-            draw_text(&mut display, &vol_buffer, Point::new(112, 28), &text_style)?;
+            draw_text(display, &key_buffer, Point::new(26, 3), &text_style);
+            draw_text(display, &mode_buffer, Point::new(80, 3), &text_style);
+            draw_centered_text(display, &note_buffer, Point::new(62, 15), h1_style);
+            draw_text(display, &oct_buffer, Point::new(14, 28), &text_style);
+            draw_text(display, &vol_buffer, Point::new(112, 28), &text_style);
         }
 
         fn draw_text<D>(
@@ -730,12 +707,11 @@ mod rtic_app {
             text: &str,
             position: Point,
             style: &MonoTextStyle<BinaryColor>,
-        ) -> Result<(), D::Error>
+        )
         where
             D: DrawTarget<Color = BinaryColor>,
         {
-            Text::with_baseline(text, position, *style, Baseline::Middle).draw(display)?;
-            Ok(())
+            Text::with_baseline(text, position, *style, Baseline::Middle).draw(display);
         }
         
         fn draw_centered_text<D>(
@@ -743,7 +719,7 @@ mod rtic_app {
             text: &str,
             center: Point,
             style: MonoTextStyle<BinaryColor>,
-        ) -> Result<(), D::Error>
+        )
         where
             D: DrawTarget<Color = BinaryColor>,
         {
@@ -761,9 +737,7 @@ mod rtic_app {
         
             // 4) Draw the text at the adjusted position
             Text::with_baseline(text, Point::new(draw_x, draw_y), style, Baseline::Top)
-                .draw(display)?;
-        
-            Ok(())
+                .draw(display);
         }
 
         /// Scans a 4x3 button matrix without diodes.
@@ -828,35 +802,49 @@ mod rtic_app {
             state
         }
 
-        fn handle_button_press(row: usize, col: usize, msm: &mut MenuStateMachine) {
+        fn handle_button_press(row: usize, col: usize) -> state_machines::MenuEvent {
             match (row, col) {
-                (0,0) => info!("Top-left button pressed!"),
-                (0,1) => info!("Top-middle button pressed!"),
-                (0,2) => info!("Top-right button pressed!"),
-                (1,0) => info!("Middle-left button pressed!"),
-                (1,1) => info!("Middle-middle button pressed!"),
-                (1,2) => info!("Middle-right button pressed!"),
-                (2,0) => info!("Bottom-left button pressed!"),
-                (2,1) => info!("Bottom-middle button pressed!"),
-                (2,2) => info!("Bottom-right button pressed!"),
+                (0,2) => state_machines::MenuEvent::SetNote(1),
+                (0,1) => state_machines::MenuEvent::SetNote(2),
+                (0,0) => state_machines::MenuEvent::SetNote(3),
+                (1,2) => state_machines::MenuEvent::SetNote(4),
+                (1,1) => state_machines::MenuEvent::SetNote(5),
+                (1,0) => state_machines::MenuEvent::SetNote(6),
+                (2,2) => state_machines::MenuEvent::SetNote(7),
+                (2,1) => state_machines::MenuEvent::SetNote(8),
+                (2,0) => state_machines::MenuEvent::SetNote(9),
                 (3,0) => {
                     info!("BBottom-left button pressed!");
-                    msm.handle_event(state_machines::MenuEvent::GoToSubMenu);
+                    state_machines::MenuEvent::GoToSubMenu
                 },
                 (3,1) => {info!("BBottom-middle button pressed!");
-                msm.handle_event(state_machines::MenuEvent::GoToOctave);
+                state_machines::MenuEvent::GoToOctave
             },
                 (3,2) => {info!("BBottom-right button pressed!");
-                msm.handle_event(state_machines::MenuEvent::GoToKey);
+                state_machines::MenuEvent::GoToKey
             },
-                _ => {}
+                _ => state_machines::MenuEvent::NoOp
             }
         }
         
-        fn handle_button_release(row: usize, col: usize, msm: &mut MenuStateMachine) {
-            // Possibly do something else on release
-            msm.handle_event(state_machines::MenuEvent::GoToVolume);
+        fn handle_button_release(row: usize, col: usize) -> state_machines::MenuEvent {
+
             info!("Button ({},{}) released!", row, col);
+            match (row, col) {
+                (0,2) => state_machines::MenuEvent::SetNote(0),
+                (0,1) => state_machines::MenuEvent::SetNote(0),
+                (0,0) => state_machines::MenuEvent::SetNote(0),
+                (1,2) => state_machines::MenuEvent::SetNote(0),
+                (1,1) => state_machines::MenuEvent::SetNote(0),
+                (1,0) => state_machines::MenuEvent::SetNote(0),
+                (2,2) => state_machines::MenuEvent::SetNote(0),
+                (2,1) => state_machines::MenuEvent::SetNote(0),
+                (2,0) => state_machines::MenuEvent::SetNote(0),
+               
+                 _ => (state_machines::MenuEvent::GoToVolume)
+            }
+            // Possibly do something else on release
+            
         }
         
     }

@@ -35,6 +35,7 @@ pub struct AllStatesSnapshot {
     pub volume: i32,
     pub key: i32,
     pub octave: i32,
+    pub note: i32,
 
     pub sub_menu_state: SubMenuState,
     pub dry_wet: i32,
@@ -51,8 +52,10 @@ pub enum MenuEvent {
     GoToSubMenu,
     GoToOctave,
     Adjust(i32),
+    SetNote(i32),
     Select,
     Return,
+    NoOp
 }
 
 /// The top-level state machine.
@@ -62,6 +65,7 @@ pub struct MenuStateMachine {
     volume: i32,
     key: i32,
     octave: i32,
+    pub note: i32,
 
     // Nested machine is private:
     sub_menu: SubMenuStateMachine,
@@ -72,6 +76,7 @@ impl MenuStateMachine {
     pub fn new() -> Self {
         Self {
             current_state: MenuState::Volume,
+            note: 0,
             volume: 50,
             key: 0,
             octave: 4,
@@ -87,6 +92,7 @@ impl MenuStateMachine {
             volume: self.volume,
             key: self.key,
             octave: self.octave,
+            note: self.note,
 
             sub_menu_state: self.sub_menu.current_state,
             dry_wet: self.sub_menu.dry_wet,
@@ -113,10 +119,10 @@ impl MenuStateMachine {
             }
             MenuEvent::Adjust(delta) => match self.current_state {
                 MenuState::Volume => {
-                    self.volume = clamp_value(self.volume, delta, 0, 100);
+                    self.volume = clamp_value(self.volume, delta, 1, 100);
                 }
                 MenuState::Key => {
-                    self.key = clamp_value(self.key, delta, 0, 12);
+                    self.key = clamp_value(self.key, delta, 0, 24);
                 }
                 MenuState::Octave => {
                     self.octave = clamp_value(self.octave, delta, 0, 8);
@@ -143,6 +149,10 @@ impl MenuStateMachine {
                     self.current_state = MenuState::Volume;
                 }
             }
+            MenuEvent::SetNote(note) => {
+                self.note = note;
+            },
+            MenuEvent::NoOp => (),
         }
     }
 }

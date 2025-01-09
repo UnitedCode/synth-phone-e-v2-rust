@@ -1,0 +1,145 @@
+/// A KeyScale is simply an array of 7 static string slices, e.g. ["C", "D", "E", "F", "G", "A", "B"].
+pub type KeyScale = [&'static str; 7];
+
+/// =======================================
+/// Major Key Scales
+/// =======================================
+pub const C_MAJOR_SCALE: KeyScale = ["C",  "D",  "E",  "F",  "G",  "A",  "B"];
+pub const G_MAJOR_SCALE: KeyScale = ["G",  "A",  "B",  "C",  "D",  "E",  "F#"];
+pub const D_MAJOR_SCALE: KeyScale = ["D",  "E",  "F#", "G",  "A",  "B",  "C#"];
+pub const A_MAJOR_SCALE: KeyScale = ["A",  "B",  "C#", "D",  "E",  "F#", "G#"];
+pub const E_MAJOR_SCALE: KeyScale = ["E",  "F#", "G#", "A",  "B",  "C#", "D#"];
+pub const B_MAJOR_SCALE: KeyScale = ["B",  "C#", "D#", "E",  "F#", "G#", "A#"];
+pub const F_SHARP_MAJOR_SCALE: KeyScale 
+    = ["F#", "G#", "A#", "B",  "C#", "D#", "E#"];
+pub const C_SHARP_MAJOR_SCALE: KeyScale 
+    = ["C#", "D#", "E#", "F#", "G#", "A#", "B#"];
+
+pub const F_MAJOR_SCALE: KeyScale = ["F",  "G",  "A",  "Bb", "C",  "D",  "E"];
+pub const BB_MAJOR_SCALE: KeyScale 
+    = ["Bb", "C",  "D",  "Eb", "F",  "G",  "A"];
+pub const EB_MAJOR_SCALE: KeyScale 
+    = ["Eb", "F",  "G",  "Ab", "Bb", "C",  "D"];
+pub const AB_MAJOR_SCALE: KeyScale 
+    = ["Ab", "Bb", "C",  "Db", "Eb", "F",  "G"];
+
+/// =======================================
+/// Minor Key Scales (Natural Minor)
+/// =======================================
+pub const A_MINOR_SCALE: KeyScale 
+    = ["A",  "B",  "C",  "D",  "E",  "F",  "G"];
+pub const E_MINOR_SCALE: KeyScale 
+    = ["E",  "F#", "G",  "A",  "B",  "C",  "D"];
+pub const B_MINOR_SCALE: KeyScale 
+    = ["B",  "C#", "D",  "E",  "F#", "G",  "A"];
+pub const F_SHARP_MINOR_SCALE: KeyScale 
+    = ["F#", "G#", "A",  "B",  "C#", "D",  "E"];
+pub const C_SHARP_MINOR_SCALE: KeyScale 
+    = ["C#", "D#", "E",  "F#", "G#", "A",  "B"];
+pub const G_SHARP_MINOR_SCALE: KeyScale 
+    = ["G#", "A#", "B",  "C#", "D#", "E",  "F#"];
+pub const D_MINOR_SCALE: KeyScale 
+    = ["D",  "E",  "F",  "G",  "A",  "Bb", "C"];
+pub const G_MINOR_SCALE: KeyScale 
+    = ["G",  "A",  "Bb", "C",  "D",  "Eb", "F"];
+pub const C_MINOR_SCALE: KeyScale 
+    = ["C",  "D",  "Eb", "F",  "G",  "Ab", "Bb"];
+pub const F_MINOR_SCALE: KeyScale 
+    = ["F",  "G",  "Ab", "Bb", "C",  "Db", "Eb"];
+pub const BB_MINOR_SCALE: KeyScale 
+    = ["Bb", "C",  "Db", "Eb", "F",  "Gb", "Ab"];
+pub const EB_MINOR_SCALE: KeyScale 
+    = ["Eb", "F",  "Gb", "Ab", "Bb", "Cb", "Db"];
+
+/// =======================================
+/// All 24 Keys in One Array
+/// =======================================
+/// Each tuple is (KeyScale, KeyName).
+pub const KEYS: [(KeyScale, &'static str); 24] = [
+    (C_MAJOR_SCALE,        "C"),
+    (G_MAJOR_SCALE,        "G"),
+    (D_MAJOR_SCALE,        "D"),
+    (A_MAJOR_SCALE,        "A"),
+    (E_MAJOR_SCALE,        "E"),
+    (B_MAJOR_SCALE,        "B"),
+    (F_SHARP_MAJOR_SCALE,  "F#"),
+    (C_SHARP_MAJOR_SCALE,  "C#"),
+    (F_MAJOR_SCALE,        "F"),
+    (BB_MAJOR_SCALE,       "Bb"),
+    (EB_MAJOR_SCALE,       "Eb"),
+    (AB_MAJOR_SCALE,       "Ab"),
+
+    (A_MINOR_SCALE,        "A"),
+    (E_MINOR_SCALE,        "E"),
+    (B_MINOR_SCALE,        "B"),
+    (F_SHARP_MINOR_SCALE,  "F#"),
+    (C_SHARP_MINOR_SCALE,  "C#"),
+    (G_SHARP_MINOR_SCALE,  "G#"),
+    (D_MINOR_SCALE,        "D"),
+    (G_MINOR_SCALE,        "G"),
+    (C_MINOR_SCALE,        "C"),
+    (F_MINOR_SCALE,        "F"),
+    (BB_MINOR_SCALE,       "Bb"),
+    (EB_MINOR_SCALE,       "Eb"),
+];
+
+/// =======================================
+/// Functions
+/// =======================================
+
+/// Returns the note name from a given `scale` based on `note` (1..9).
+/// Wraps around at 8 and 9, which effectively map back to scale[0] or scale[1].
+pub fn get_note_name(note: i32, scale: KeyScale) -> &'static str {
+    match note {
+        1 => scale[0],
+        2 => scale[1],
+        3 => scale[2],
+        4 => scale[3],
+        5 => scale[4],
+        6 => scale[5],
+        7 => scale[6],
+        8 => scale[0],  // wrap around
+        9 => scale[1],  // wrap around
+        _ => "",        // out of range
+    }
+}
+
+/// Returns one of the 24 `KEYS` based on `key` (0..23).
+/// Defaults to `KEYS[0]` (C Major) if out of range.
+pub fn get_key(key: i32) -> KeyScale {
+    if let Some(k) = KEYS.get(key as usize) {
+        k.0
+    } else {
+        // Fallback to first key (C Major) if out of range
+        KEYS[0].0
+    }
+}
+
+/// Returns the "mode" of the key: "Major" if index < 12, otherwise "Minor".
+/// Defaults to "Major" if out of range.
+pub fn get_mode_name(key: i32) -> &'static str {
+    let idx = key as usize;
+    if idx < 24 {
+        // If index is in 0..11, it's Major, else Minor.
+        if idx < 12 {
+            "Major"
+        } else {
+            "Minor"
+        }
+    } else {
+        // Out of range => default "Major"
+        "     "
+    }
+}
+
+/// Returns the name of the key based on KEY_NAMES
+/// Defaults to "C Major" if out of range.
+pub fn get_key_name(key: i32) -> &'static str {
+    let key = key as usize;
+    if key < KEYS.len() {
+        KEYS[key].1
+    } else {
+        // Fallback to first key, or handle differently
+        KEYS[0].1
+    }
+}
