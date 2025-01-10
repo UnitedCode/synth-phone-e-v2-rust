@@ -676,7 +676,7 @@ mod rtic_app {
 
                 let y = 4 + (i as i32 * 12);
 
-                Text::with_baseline(option.0, Point::new(5, y), style, Baseline::Top)
+                Text::with_baseline(option.0, Point::new(5, y), style, Baseline::Middle)
                     .draw(display)
                     .expect("Failed to draw option name");
 
@@ -684,7 +684,7 @@ mod rtic_app {
                     write!(&mut option_value_buffer, "{}", option.1) 
                         .expect("failed converting option value to string");
 
-                Text::with_baseline(&option_value_buffer, Point::new(110, y), style, Baseline::Top)
+                Text::with_baseline(&option_value_buffer, Point::new(110, y), style, Baseline::Middle)
                     .draw(display)
                     .expect("Failed to draw option value");
             }
