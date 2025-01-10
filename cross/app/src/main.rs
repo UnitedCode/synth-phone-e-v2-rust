@@ -43,7 +43,7 @@ mod rtic_app {
         use core::f32::consts::PI;
         use embedded_graphics::{
             image::Image,
-            mono_font::{ascii::{FONT_10X20, FONT_6X10, FONT_6X9}, MonoTextStyle, MonoTextStyleBuilder},
+            mono_font::{ascii::{FONT_10X20, FONT_6X10, FONT_6X9, FONT_6X13}, MonoTextStyle, MonoTextStyleBuilder},
             pixelcolor::BinaryColor,
             prelude::*,
             text::{Baseline, Text},
@@ -400,10 +400,10 @@ mod rtic_app {
                 // The user is pushing (or has just pushed) the encoder button
                 info!("Encoder button pressed!");
                 
-                // For example, forward an event to your menu:
+                // , forward an event to your menu:
                 ctx.shared.menu_state_machine.lock(|msm| {
                     msm.handle_event(state_machines::MenuEvent::Select);
-                    if msm.snapshot().menu_state == MenuState::Volume {
+                    if msm.snapshot().current_state == MenuState::Volume {
                         info!("RING RING RING!")
                     }
                 });
@@ -436,10 +436,14 @@ mod rtic_app {
                 {
                     if update_state {
                         
-                    
                         let snapshot = msm.snapshot();
                         info!("state - {:?} -", msm.snapshot());
-                        draw_screen_values(snapshot.key, snapshot.key, snapshot.note, snapshot.octave, snapshot.volume,  ctx.local.display);
+                        if snapshot.current_state == MenuState::SubMenu {
+                            let sub_menu_context = msm.current();
+                            draw_submenu(sub_menu_context.next_item, sub_menu_context.next_item, sub_menu_context.current_item, false, ctx.local.display);
+                        } else {
+                            draw_screen_values(snapshot.key, snapshot.key, snapshot.note, snapshot.octave, snapshot.volume,  ctx.local.display);
+                        }
                         ctx.local.display.flush().expect("could not draw to screen");
                         update_state = false;
                     }
@@ -649,6 +653,44 @@ mod rtic_app {
             display
         }
 
+
+        fn draw_submenu(next:(&str, i32), prev: (&str, i32), current: (&str, i32), selected: bool,  display: &mut LcdDisplay){
+            
+            let text_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X9)
+                .text_color(BinaryColor::Off) 
+                .background_color(BinaryColor::On) 
+                .build();
+        
+            let h1_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X13)
+                .text_color(BinaryColor::Off)   
+                .background_color(BinaryColor::On) 
+                .build();
+
+            let options = [prev, current, next];
+
+            for (i, &option) in options.iter().enumerate() {
+                
+                let style = if i == 1 { h1_style } else { text_style };
+
+                let y = 4 + (i as i32 * 12);
+
+                Text::with_baseline(option.0, Point::new(5, y), style, Baseline::Top)
+                    .draw(display)
+                    .expect("Failed to draw option name");
+
+                let mut option_value_buffer: String<3> = String::new();
+                    write!(&mut option_value_buffer, "{}", option.1) 
+                        .expect("failed converting option value to string");
+
+                Text::with_baseline(&option_value_buffer, Point::new(110, y), style, Baseline::Top)
+                    .draw(display)
+                    .expect("Failed to draw option value");
+            }
+        }
+        
+
         fn draw_screen_values(key: i32, mode: i32, note: i32, oct: i32, vol: i32, display: &mut LcdDisplay){
 
             // Load the BMP image (16BPP).
@@ -668,29 +710,29 @@ mod rtic_app {
         
             let h1_style = MonoTextStyleBuilder::new()
                 .font(&FONT_10X20)
-                .text_color(BinaryColor::Off)
+                .text_color(BinaryColor::Off)   
                 .background_color(BinaryColor::On) 
                 .build();
 
             // Example: fill a buffer with something to display
             let mut key_buffer: String<2> = String::new();
-                write!(&mut key_buffer, "{}", get_key_name(key)) // for example
+                write!(&mut key_buffer, "{}", get_key_name(key)) 
                     .expect("failed converting key to string");
         
             let mut mode_buffer: String<5> = String::new();
-                write!(&mut mode_buffer, "{}", get_mode_name(mode)) // for example
+                write!(&mut mode_buffer, "{}", get_mode_name(mode)) 
                 .expect("failed converting mode to string");
         
             let mut note_buffer: String<2> = String::new();
-                write!(&mut note_buffer, "{}", get_note_name(note, get_key(key))) // for example
+                write!(&mut note_buffer, "{}", get_note_name(note, get_key(key))) 
                 .expect("failed converting note to string");
         
             let mut oct_buffer: String<1> = String::new();
-                write!(&mut oct_buffer, "{oct}") // for example
+                write!(&mut oct_buffer, "{oct}")
                 .expect("failed converting oct to string");
         
             let mut vol_buffer: String<3> = String::new();
-            write!(&mut vol_buffer, "{vol}") // for example
+            write!(&mut vol_buffer, "{vol}")
                 .expect("failed converting vol to string");
         
         

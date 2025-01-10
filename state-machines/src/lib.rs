@@ -7,41 +7,18 @@ pub enum MenuState {
     Key,
     SubMenu,
     Octave,
-}
-
-/// The sub-menu states:
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum SubMenuState {
     None,
+    // Sub menu states
     DryWet,
     Speed,
     Effect,
 }
-
 /// The effect states:
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum EffectState {
     PassThrough,
     Autotune,
     Vocoder,
-}
-
-/// The **public** "snapshot" struct. 
-/// This is how external code sees the complete state, 
-/// *without* knowing about the nested machines inside.
-#[derive(Debug)]
-pub struct AllStatesSnapshot {
-    pub menu_state: MenuState,
-    pub volume: i32,
-    pub key: i32,
-    pub octave: i32,
-    pub note: i32,
-
-    pub sub_menu_state: SubMenuState,
-    pub dry_wet: i32,
-    pub speed: i32,
-
-    pub effect_state: EffectState,
 }
 
 /// The top-level events that external code can trigger:
@@ -65,10 +42,42 @@ pub struct MenuStateMachine {
     volume: i32,
     key: i32,
     octave: i32,
+    note: i32,
+
+    // Nested machine is private:
+    sub_menu: i32,
+    sub_menu_selected: bool,
+
+    pub dry_wet: i32,
+    pub speed: i32,
+    pub effect: i32,
+    pub item4: i32,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct MenuStateMachineSnapshot {
+    pub current_state: MenuState,
+    pub volume: i32,
+    pub key: i32,
+    pub octave: i32,
     pub note: i32,
 
     // Nested machine is private:
-    sub_menu: SubMenuStateMachine,
+    pub sub_menu: i32,
+    pub sub_menu_selected: bool,
+    pub dry_wet: i32,
+    pub speed: i32,
+    pub effect: i32,
+    pub item4: i32,
+}
+
+pub const MENU_ITEMS_LENGTH: usize = 3;
+pub const MENU_ITEMS: [&'static str; MENU_ITEMS_LENGTH] = ["ONE", "TWO", "Three"];
+
+pub struct SubMenuContext {
+    pub previous_item: (&'static str, i32),
+    pub current_item: (&'static str, i32),
+    pub next_item: (&'static str, i32),
 }
 
 impl MenuStateMachine {
@@ -80,25 +89,56 @@ impl MenuStateMachine {
             volume: 50,
             key: 0,
             octave: 4,
-            sub_menu: SubMenuStateMachine::new(),
+            sub_menu: 0,
+            sub_menu_selected: false,
+        
+            dry_wet: 0,
+            speed: 0,
+            effect: 0,
+            item4: 0,
+            
+        }
+    }
+
+    pub fn current(&self) -> SubMenuContext {
+        let menu_order: [(&str, i32); 3] = [
+            get_menu_item_details(MenuState::DryWet, self),
+            get_menu_item_details(MenuState::Speed, self),
+            get_menu_item_details(MenuState::Effect, self)];
+        
+        let total_items = menu_order.len();
+        let current = self.sub_menu as usize;
+        let previous = if current == 0 {
+            total_items - 1
+        } else {
+            current - 1
+        };
+        
+        let next = (current + 1) % total_items;
+        SubMenuContext {
+            previous_item: menu_order[previous],
+            current_item: menu_order[current],
+            next_item: menu_order[next],
         }
     }
 
     /// The single snapshot method that collects *all* necessary info
     /// from top-level, sub-menu, and effect machines.
-    pub fn snapshot(&self) -> AllStatesSnapshot {
-        AllStatesSnapshot {
-            menu_state: self.current_state,
+    pub fn snapshot(&self) -> MenuStateMachineSnapshot {
+        MenuStateMachineSnapshot {
+            current_state: self.current_state,
             volume: self.volume,
             key: self.key,
             octave: self.octave,
             note: self.note,
 
-            sub_menu_state: self.sub_menu.current_state,
-            dry_wet: self.sub_menu.dry_wet,
-            speed: self.sub_menu.speed,
-
-            effect_state: self.sub_menu.effect_machine.current_effect,
+            sub_menu: self.sub_menu,
+            sub_menu_selected: self.sub_menu_selected,
+            dry_wet: self.dry_wet,
+            speed: self.speed,
+            effect: self.effect,
+            item4: self.item4,
+       
         }
     }
 
@@ -128,150 +168,59 @@ impl MenuStateMachine {
                     self.octave = clamp_value(self.octave, delta, 0, 8);
                 }
                 MenuState::SubMenu => {
-                    // Forward to the sub-menu's event handler
-                    self.sub_menu.handle_submenu_event(SubMenuEvent::Adjust(delta));
+                    self.sub_menu = wrap_value(self.sub_menu, delta, 0, (MENU_ITEMS_LENGTH -1) as i32);
+
                 }
+                MenuState::None => todo!(),
+                MenuState::DryWet => todo!(),
+                MenuState::Speed => todo!(),
+                MenuState::Effect => todo!(),
             },
-            MenuEvent::Select => {
-                match self.current_state {
-                    MenuState::SubMenu => {
-                        self.sub_menu.handle_submenu_event(SubMenuEvent::Select);
-                    }
-                    _ => {
-                        // Possibly confirm or do nothing in other states
-                    }
-                }
-            }
-            MenuEvent::Return => {
-                // Maybe if the user is in the sub-menu, we return to Volume?
-                if self.current_state == MenuState::SubMenu {
-                    self.sub_menu.handle_submenu_event(SubMenuEvent::Return);
-                    self.current_state = MenuState::Volume;
-                }
-            }
             MenuEvent::SetNote(note) => {
                 self.note = note;
             },
             MenuEvent::NoOp => (),
-        }
-    }
-}
-
-/// ============  2. Private Sub-Menu Machine  ============
-/// This is *not* exposed outside the module.
-/// It's only known to `MenuStateMachine`.
-///
-/// We define a minimal set of events for the sub-menu.
-#[derive(Debug)]
-enum SubMenuEvent {
-    Adjust(i32),
-    Select,
-    Return,
-}
-
-/// Private sub-menu machine
-struct SubMenuStateMachine {
-    current_state: SubMenuState,
-    dry_wet: i32,
-    speed: i32,
-
-    // Nested effect machine:
-    effect_machine: EffectStateMachine,
-}
-
-impl SubMenuStateMachine {
-    fn new() -> Self {
-        Self {
-            current_state: SubMenuState::None,
-            dry_wet: 0,
-            speed: 0,
-            effect_machine: EffectStateMachine::new(),
-        }
-    }
-
-    fn handle_submenu_event(&mut self, event: SubMenuEvent) {
-        match event {
-            SubMenuEvent::Adjust(delta) => {
+            MenuEvent::Select => {
                 match self.current_state {
-                    SubMenuState::None => {
-                        // no-op
-                    }
-                    SubMenuState::DryWet => {
-                        self.dry_wet = clamp_value(self.dry_wet, delta, 0, 100);
-                    }
-                    SubMenuState::Speed => {
-                        self.speed = clamp_value(self.speed, delta, 0, 100);
-                    }
-                    SubMenuState::Effect => {
-                        // Forward effect adjustments (cycle next/previous, etc.)
-                        if delta > 0 {
-                            self.effect_machine.handle_effect_event(EffectEvent::CycleNext);
-                        } else if delta < 0 {
-                            self.effect_machine.handle_effect_event(EffectEvent::CyclePrevious);
+                    MenuState::SubMenu => {
+                        match self.sub_menu {
+                            0 => self.current_state = MenuState::DryWet,
+                            1 =>  self.current_state = MenuState::Speed,
+                            2 => self.current_state = MenuState::Effect,
+                            _ => self.current_state = MenuState::DryWet,
+                            
                         }
-                    }
+                    },
+                    _ => self.handle_event(MenuEvent::NoOp),                    
                 }
-            }
-            SubMenuEvent::Select => {
-                // Possibly finalize or switch states. 
-                // For demonstration, let's cycle states:
-                self.current_state = match self.current_state {
-                    SubMenuState::None => SubMenuState::DryWet,
-                    SubMenuState::DryWet => SubMenuState::Speed,
-                    SubMenuState::Speed => SubMenuState::Effect,
-                    SubMenuState::Effect => SubMenuState::None,
-                };
-            }
-            SubMenuEvent::Return => {
-                // Return to "None" (or keep current)
-                self.current_state = SubMenuState::None;
-            }
+            },
+            MenuEvent::Return => {
+                self.handle_event(MenuEvent::GoToVolume);
+            },
         }
     }
 }
 
-/// ============  3. Private Effect Machine  ============
-/// Also not visible outside this module.
-#[derive(Debug)]
-enum EffectEvent {
-    CycleNext,
-    CyclePrevious,
-}
-
-struct EffectStateMachine {
-    current_effect: EffectState,
-}
-
-impl EffectStateMachine {
-    fn new() -> Self {
-        Self {
-            current_effect: EffectState::PassThrough,
-        }
-    }
-
-    fn handle_effect_event(&mut self, event: EffectEvent) {
-        match event {
-            EffectEvent::CycleNext => {
-                self.current_effect = match self.current_effect {
-                    EffectState::PassThrough => EffectState::Autotune,
-                    EffectState::Autotune => EffectState::Vocoder,
-                    EffectState::Vocoder => EffectState::PassThrough,
-                };
-            }
-            EffectEvent::CyclePrevious => {
-                self.current_effect = match self.current_effect {
-                    EffectState::PassThrough => EffectState::Vocoder,
-                    EffectState::Autotune => EffectState::PassThrough,
-                    EffectState::Vocoder => EffectState::Autotune,
-                };
-            }
-        }
-    }
-}
 
 /// A small helper function to clamp an i32.
 fn clamp_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
     (current + delta).clamp(min, max)
+}
+fn wrap_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
+    let range = max - min + 1;
+    ((current + delta - min) % range + range) % range + min
+}
+pub fn get_menu_item_details(menu_state:MenuState, msm: &MenuStateMachine) -> (&'static str, i32){
+    match menu_state {
+        MenuState::Volume => ("Vol", msm.volume),
+        MenuState::Key => ("Key", msm.key),
+        MenuState::SubMenu => ("Sub", msm.sub_menu),
+        MenuState::Octave => ("Oct", msm.octave),
+        MenuState::None => ("None", 0),
+        MenuState::DryWet => ("Dry/Wet", msm.dry_wet),
+        MenuState::Speed => ("Speed", msm.speed),
+        MenuState::Effect => ("Effect", msm.effect),
+    }
 }
 
 /// ============  4. Example Usage or Tests  ============
