@@ -12,6 +12,7 @@ pub enum MenuState {
     DryWet,
     Speed,
     Effect,
+    Magnitude,
 }
 /// The effect states:
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -51,7 +52,7 @@ pub struct MenuStateMachine {
     pub dry_wet: i32,
     pub speed: i32,
     pub effect: i32,
-    pub item4: i32,
+    pub magnitude: i32,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -68,11 +69,10 @@ pub struct MenuStateMachineSnapshot {
     pub dry_wet: i32,
     pub speed: i32,
     pub effect: i32,
-    pub item4: i32,
+    pub magnitude: i32,
 }
 
-pub const MENU_ITEMS_LENGTH: usize = 3;
-pub const MENU_ITEMS: [&'static str; MENU_ITEMS_LENGTH] = ["ONE", "TWO", "Three"];
+pub const MENU_ITEMS_LENGTH: usize = 4;
 
 pub struct SubMenuContext {
     pub previous_item: (&'static str, i32),
@@ -95,16 +95,18 @@ impl MenuStateMachine {
             dry_wet: 0,
             speed: 0,
             effect: 0,
-            item4: 0,
+            magnitude: 05,
             
         }
     }
 
     pub fn current(&self) -> SubMenuContext {
-        let menu_order: [(&str, i32); 3] = [
+        let menu_order: [(&str, i32); MENU_ITEMS_LENGTH] = [
             get_menu_item_details(MenuState::DryWet, self),
             get_menu_item_details(MenuState::Speed, self),
-            get_menu_item_details(MenuState::Effect, self)];
+            get_menu_item_details(MenuState::Effect, self),
+            get_menu_item_details(MenuState::Magnitude, self)
+            ];
         
         let total_items = menu_order.len();
         let current = self.sub_menu as usize;
@@ -137,7 +139,7 @@ impl MenuStateMachine {
             dry_wet: self.dry_wet,
             speed: self.speed,
             effect: self.effect,
-            item4: self.item4,
+            magnitude: self.magnitude,
        
         }
     }
@@ -171,10 +173,19 @@ impl MenuStateMachine {
                     self.sub_menu = wrap_value(self.sub_menu, delta, 0, (MENU_ITEMS_LENGTH -1) as i32);
 
                 }
-                MenuState::None => todo!(),
-                MenuState::DryWet => todo!(),
-                MenuState::Speed => todo!(),
-                MenuState::Effect => todo!(),
+                MenuState::None => (),
+                MenuState::DryWet => {
+                    self.dry_wet = clamp_value(self.dry_wet, delta, 0, 100)
+                },
+                MenuState::Speed => {
+                    self.speed = clamp_value(self.speed, delta, 0, 100)
+                },
+                MenuState::Effect => {
+                    self.effect = clamp_value(self.effect, delta, 0, 100)
+                },
+                MenuState::Magnitude => {
+                    self.magnitude = clamp_value(self.magnitude, delta, 1, 1000)
+                },
             },
             MenuEvent::SetNote(note) => {
                 self.note = note;
@@ -187,11 +198,21 @@ impl MenuStateMachine {
                             0 => self.current_state = MenuState::DryWet,
                             1 =>  self.current_state = MenuState::Speed,
                             2 => self.current_state = MenuState::Effect,
+                            3 => self.current_state = MenuState::Magnitude,
                             _ => self.current_state = MenuState::DryWet,
                             
                         }
                     },
-                    _ => self.handle_event(MenuEvent::NoOp),                    
+                    MenuState::Volume | 
+                    MenuState::Key |
+                    MenuState::Octave |
+                    MenuState::None => {}
+                    MenuState::DryWet |
+                    MenuState::Speed |
+                    MenuState::Magnitude |                    
+                    MenuState::Effect => {
+                        self.current_state = MenuState::SubMenu
+                    },
                 }
             },
             MenuEvent::Return => {
@@ -220,6 +241,7 @@ pub fn get_menu_item_details(menu_state:MenuState, msm: &MenuStateMachine) -> (&
         MenuState::DryWet => ("Dry/Wet", msm.dry_wet),
         MenuState::Speed => ("Speed", msm.speed),
         MenuState::Effect => ("Effect", msm.effect),
+        MenuState::Magnitude => ("Magnitude", msm.magnitude)
     }
 }
 

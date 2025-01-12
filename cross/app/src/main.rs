@@ -438,9 +438,13 @@ mod rtic_app {
                         
                         let snapshot = msm.snapshot();
                         info!("state - {:?} -", msm.snapshot());
-                        if snapshot.current_state == MenuState::SubMenu {
-                            let sub_menu_context = msm.current();
-                            draw_submenu(sub_menu_context.next_item, sub_menu_context.next_item, sub_menu_context.current_item, false, ctx.local.display);
+                        if snapshot.current_state == MenuState::SubMenu 
+                            || snapshot.current_state == MenuState::DryWet 
+                            || snapshot.current_state == MenuState::Effect 
+                            || snapshot.current_state == MenuState::Speed
+                            || snapshot.current_state == MenuState::Magnitude {
+                                let sub_menu_context = msm.current();
+                                draw_submenu(sub_menu_context.next_item, sub_menu_context.next_item, sub_menu_context.current_item, false, ctx.local.display);
                         } else {
                             draw_screen_values(snapshot.key, snapshot.key, snapshot.note, snapshot.octave, snapshot.volume,  ctx.local.display);
                         }
@@ -460,6 +464,7 @@ mod rtic_app {
         synthesis_magnitudes,
         synthesis_frequencies,
         previous_pitch_shift_ratio,
+        menu_state_machine
     ], local = [], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // START ACTUAL FFT PROCESSING
@@ -493,7 +498,10 @@ mod rtic_app {
                 let phase = atan2f(fft[i].im, fft[i].re);
 
                 //cut out noise
-                let magnitude_threshold = 0.05; // Adjust this threshold as needed
+                let mut magnitude_threshold = 0.05; // Adjust this threshold as needed
+                ctx.shared.menu_state_machine.lock(|msm| {
+                    magnitude_threshold = msm.magnitude as f32 / 100.0;
+                });
                 if amplitude < magnitude_threshold {
                     continue; // Skip this bin if the magnitude is too low
                 }
@@ -535,7 +543,7 @@ mod rtic_app {
             let exact_frequency = analysis_frequencies[fundamental_index] * BIN_WIDTH;
 
             // We cannot divide by 0
-            if exact_frequency > 0.1 {
+            if exact_frequency > 0.001 {
                 let target_frequency =
                     find_nearest_note_in_key(exact_frequency, &C_MAJOR_SCALE_FREQUENCIES);
                 let current_pitch_shift_ratio = target_frequency / exact_frequency;
@@ -546,7 +554,7 @@ mod rtic_app {
                     .lock(|previous_pitch_shift_ratio| *previous_pitch_shift_ratio);
 
                 let pitch_shift_ratio =
-                    0.99 * current_pitch_shift_ratio + 0.01 * previous_pitch_shift_ratio;
+                    0.999 * current_pitch_shift_ratio + 0.001 * previous_pitch_shift_ratio;
 
                 // shift all bins by the ratio
                 for i in 0..FFT_SIZE / 2 {
