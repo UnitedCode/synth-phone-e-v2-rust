@@ -25,18 +25,18 @@ pub const AB_MAJOR_SCALE: KeyScale = (["Ab", "Bb", "C",  "Db", "Eb", "F",  "G"],
 /// =======================================
 /// Minor Key Scales (Natural Minor)
 /// =======================================
-pub const A_MINOR_SCALE: KeyScale = (["A",  "B",  "C",  "D",  "E",  "F",  "G"],C_MAJOR_SCALE_FREQUENCIES);
-pub const E_MINOR_SCALE: KeyScale = (["E",  "F#", "G",  "A",  "B",  "C",  "D"],C_MAJOR_SCALE_FREQUENCIES);
-pub const B_MINOR_SCALE: KeyScale = (["B",  "C#", "D",  "E",  "F#", "G",  "A"],C_MAJOR_SCALE_FREQUENCIES);
-pub const F_SHARP_MINOR_SCALE: KeyScale = (["F#", "G#", "A",  "B",  "C#", "D",  "E"],C_MAJOR_SCALE_FREQUENCIES);
-pub const C_SHARP_MINOR_SCALE: KeyScale = (["C#", "D#", "E",  "F#", "G#", "A",  "B"],C_MAJOR_SCALE_FREQUENCIES);
-pub const G_SHARP_MINOR_SCALE: KeyScale = (["G#", "A#", "B",  "C#", "D#", "E",  "F#"],C_MAJOR_SCALE_FREQUENCIES);
-pub const D_MINOR_SCALE: KeyScale = (["D",  "E",  "F",  "G",  "A",  "Bb", "C"],C_MAJOR_SCALE_FREQUENCIES);
-pub const G_MINOR_SCALE: KeyScale = (["G",  "A",  "Bb", "C",  "D",  "Eb", "F"],C_MAJOR_SCALE_FREQUENCIES);
-pub const C_MINOR_SCALE: KeyScale = (["C",  "D",  "Eb", "F",  "G",  "Ab", "Bb"],C_MAJOR_SCALE_FREQUENCIES);
-pub const F_MINOR_SCALE: KeyScale = (["F",  "G",  "Ab", "Bb", "C",  "Db", "Eb"],C_MAJOR_SCALE_FREQUENCIES);
-pub const BB_MINOR_SCALE: KeyScale = (["Bb", "C",  "Db", "Eb", "F",  "Gb", "Ab"],C_MAJOR_SCALE_FREQUENCIES);
-pub const EB_MINOR_SCALE: KeyScale = (["Eb", "F",  "Gb", "Ab", "Bb", "Cb", "Db"],C_MAJOR_SCALE_FREQUENCIES);
+pub const A_MINOR_SCALE: KeyScale = (["A",  "B",  "C",  "D",  "E",  "F",  "G"],A_MINOR_SCALE_FREQUENCIES);
+pub const E_MINOR_SCALE: KeyScale = (["E",  "F#", "G",  "A",  "B",  "C",  "D"],E_MINOR_SCALE_FREQUENCIES);
+pub const B_MINOR_SCALE: KeyScale = (["B",  "C#", "D",  "E",  "F#", "G",  "A"],B_MINOR_SCALE_FREQUENCIES);
+pub const F_SHARP_MINOR_SCALE: KeyScale = (["F#", "G#", "A",  "B",  "C#", "D",  "E"],FS_MINOR_SCALE_FREQUENCIES);
+pub const C_SHARP_MINOR_SCALE: KeyScale = (["C#", "D#", "E",  "F#", "G#", "A",  "B"],CS_MINOR_SCALE_FREQUENCIES);
+pub const G_SHARP_MINOR_SCALE: KeyScale = (["G#", "A#", "B",  "C#", "D#", "E",  "F#"],AB_MINOR_SCALE_FREQUENCIES);
+pub const D_MINOR_SCALE: KeyScale = (["D",  "E",  "F",  "G",  "A",  "Bb", "C"],D_MINOR_SCALE_FREQUENCIES);
+pub const G_MINOR_SCALE: KeyScale = (["G",  "A",  "Bb", "C",  "D",  "Eb", "F"],G_MINOR_SCALE_FREQUENCIES);
+pub const C_MINOR_SCALE: KeyScale = (["C",  "D",  "Eb", "F",  "G",  "Ab", "Bb"],C_MINOR_SCALE_FREQUENCIES);
+pub const F_MINOR_SCALE: KeyScale = (["F",  "G",  "Ab", "Bb", "C",  "Db", "Eb"],F_MINOR_SCALE_FREQUENCIES);
+pub const BB_MINOR_SCALE: KeyScale = (["Bb", "C",  "Db", "Eb", "F",  "Gb", "Ab"],BB_MINOR_SCALE_FREQUENCIES);
+pub const EB_MINOR_SCALE: KeyScale = (["Eb", "F",  "Gb", "Ab", "Bb", "Cb", "Db"],EB_MINOR_SCALE_FREQUENCIES);
 
 /// =======================================
 /// All 24 Keys in One Array

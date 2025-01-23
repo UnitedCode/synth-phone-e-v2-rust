@@ -10,7 +10,6 @@ pub const MAJOR_SCALE_STEPS: [usize; 7] = [2, 2, 1, 2, 2, 2, 1]; // W-W-H-W-W-W-
 //Why He Waddle wiff his widdle willy
 
 // Define the number of octaves (same as C_MAJOR_SCALE_FREQUENCIES length)
-pub const MAX_OCTAVES: usize = 10;
 pub const SCALE_NOTES: usize = 7;
 
 pub const C_MAJOR_SCALE_FREQUENCIES: [f32; 70] = [

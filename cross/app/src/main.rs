@@ -36,7 +36,7 @@ mod rtic_app {
         use autotune::{
             frequencies::{
                 find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES,
-            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::find_fundamental_frequency
+            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::find_fundamental_frequency
         };
         use heapless::String;
         use core::fmt::Write;
