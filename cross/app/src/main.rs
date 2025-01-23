@@ -544,8 +544,13 @@ mod rtic_app {
 
             // We cannot divide by 0
             if exact_frequency > 0.001 {
+                let mut scale_frequencies = &C_MAJOR_SCALE_FREQUENCIES;
+                
+                ctx.shared.menu_state_machine.lock(|msm| {
+                    scale_frequencies = get_scale_by_key(msm.snapshot().key);
+                });
                 let target_frequency =
-                    find_nearest_note_in_key(exact_frequency, &C_MAJOR_SCALE_FREQUENCIES);
+                    find_nearest_note_in_key(exact_frequency, scale_frequencies);
                 let current_pitch_shift_ratio = target_frequency / exact_frequency;
 
                 let previous_pitch_shift_ratio = ctx
