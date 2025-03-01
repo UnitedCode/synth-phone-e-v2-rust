@@ -14,6 +14,7 @@ pub enum MenuState {
     Effect,
     Magnitude,
     Crush,
+    SampleReduction,
 }
 /// The effect states:
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -55,6 +56,7 @@ pub struct MenuStateMachine {
     pub effect: i32,
     pub magnitude: i32,
     pub crush: i32,
+    pub sample_reduction: i32,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -73,9 +75,10 @@ pub struct MenuStateMachineSnapshot {
     pub effect: i32,
     pub magnitude: i32,
     pub crush: i32,
+    pub sample_reduction: i32,
 }
 
-pub const MENU_ITEMS_LENGTH: usize = 5;
+pub const MENU_ITEMS_LENGTH: usize = 6;
 
 pub struct SubMenuContext {
     pub previous_item: (&'static str, i32),
@@ -99,7 +102,8 @@ impl MenuStateMachine {
             speed: 31,
             effect: 0,
             magnitude: 05,
-            crush: 31,
+            crush: 32,
+            sample_reduction: 1,
         }
     }
 
@@ -109,6 +113,7 @@ impl MenuStateMachine {
             get_menu_item_details(MenuState::Speed, self),
             get_menu_item_details(MenuState::Effect, self),
             get_menu_item_details(MenuState::Magnitude, self),
+            get_menu_item_details(MenuState::SampleReduction, self),
             get_menu_item_details(MenuState::Crush, self)
             ];
         
@@ -145,6 +150,7 @@ impl MenuStateMachine {
             effect: self.effect,
             magnitude: self.magnitude,
             crush: self.crush,
+            sample_reduction: self.sample_reduction,
        
         }
     }
@@ -194,6 +200,9 @@ impl MenuStateMachine {
                 MenuState::Crush => {
                     self.crush = clamp_value(self.crush, delta, 4, 32)
                 },
+                MenuState::SampleReduction => {
+                    self.sample_reduction = clamp_value(self.sample_reduction, delta, 1, 32)
+                },
             },
             MenuEvent::SetNote(note) => {
                 self.note = note;
@@ -207,7 +216,8 @@ impl MenuStateMachine {
                             1 => self.current_state = MenuState::Speed,
                             2 => self.current_state = MenuState::Effect,
                             3 => self.current_state = MenuState::Magnitude,
-                            4 => self.current_state = MenuState::Crush,
+                            4 => self.current_state = MenuState::SampleReduction,
+                            5 => self.current_state = MenuState::Crush,
                             _ => self.current_state = MenuState::DryWet,
                             
                         }
@@ -219,7 +229,8 @@ impl MenuStateMachine {
                     MenuState::DryWet |
                     MenuState::Speed |
                     MenuState::Magnitude | 
-                    MenuState::Crush |                   
+                    MenuState::SampleReduction |                 
+                    MenuState::Crush |  
                     MenuState::Effect => {
                         self.current_state = MenuState::SubMenu
                     },
@@ -253,6 +264,7 @@ pub fn get_menu_item_details(menu_state:MenuState, msm: &MenuStateMachine) -> (&
         MenuState::Effect => ("Effect", msm.effect),
         MenuState::Magnitude => ("Magnitude", msm.magnitude),
         MenuState::Crush => ("Crush", msm.crush),
+        MenuState::SampleReduction => ("Sample Reduction", msm.sample_reduction),
     }
 }
 

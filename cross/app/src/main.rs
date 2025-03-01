@@ -36,7 +36,7 @@ mod rtic_app {
         use autotune::{
             frequencies::{
                 find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES,
-            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::{bitcrush, find_fundamental_frequency, normalize_sample}
+            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::{bitcrush, sample_rate_reduce, find_fundamental_frequency, normalize_sample}
         };
         use heapless::String;
         use core::fmt::Write;
@@ -98,8 +98,11 @@ mod rtic_app {
             hop_counter: u32,
             menu_state_machine: MenuStateMachine,
             old_matrix_state: [[bool; 3]; 4],
+            // For sample-rate reduction
+            sr_hold_counter: i32,
+            sr_held_value: f32,
         }
-        
+
         #[local]
         struct Local {
             audio: audio::Audio,
@@ -244,6 +247,9 @@ mod rtic_app {
                     hop_counter: 0,
                     menu_state_machine: MenuStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
+                    // For sample-rate reduction
+                    sr_hold_counter: 0,
+                    sr_held_value: 0.0,
                 },
                 Local {
                     audio: system.audio,
@@ -273,6 +279,8 @@ mod rtic_app {
         last_output_phases,
         hop_counter,
         menu_state_machine,
+        sr_hold_counter,
+        sr_held_value,
     ], priority = 8)]
         fn update_handler(mut ctx: update_handler::Context) {
             let audio = ctx.local.audio;
@@ -298,15 +306,30 @@ mod rtic_app {
                         }
                     });
 
+                    // ************** SAMPLE-RATE REDUCE **************
+                    // 1) Get user-chosen factor from your menu
+                    let mut sr_factor = 1;
+                    ctx.shared.menu_state_machine.lock(|msm| {
+                        sr_factor = msm.sample_reduction;
+                    });
+
+                    // 2) “Downsample” the out_sample
+                    ctx.shared.sr_hold_counter.lock(|hold_ctr| {
+                        ctx.shared.sr_held_value.lock(|held_val| {
+                            out_sample = sample_rate_reduce(out_sample, sr_factor, hold_ctr, held_val);
+                        });
+                    });
+
+                    // ************** BIT DEPTH REDUCE **************
+                    // 3) Get bit depth from your menu
                     let mut bit_depth = 32;
                     ctx.shared.menu_state_machine.lock(|msm| { 
                         bit_depth = msm.crush;
-                        let crushed_sample = bitcrush(out_sample, bit_depth.try_into().unwrap());
-                        out_sample = normalize_sample(crushed_sample, 0.8);
                     });
-                    // ctx.shared.bit_depth.lock(|&mut bd| {
-                    //     out_sample = bitcrush(out_sample, bd);
-                    // });
+                    out_sample = bitcrush(out_sample, bit_depth as u8);
+
+                    // ************** NORMALIZE / FINAL OUT **************
+                    out_sample = normalize_sample(out_sample, 0.8);
 
                     // Check and handle hop counter
                     let mut local_hop_counter: u32 = 0;
@@ -455,7 +478,7 @@ mod rtic_app {
                             || snapshot.current_state == MenuState::Magnitude 
                             || snapshot.current_state == MenuState::Crush{
                                 let sub_menu_context = msm.current();
-                                draw_submenu(sub_menu_context.next_item, sub_menu_context.next_item, sub_menu_context.current_item, false, ctx.local.display);
+                                draw_submenu(sub_menu_context.next_item, sub_menu_context.previous_item, sub_menu_context.current_item, false, ctx.local.display);
                         } else {
                             draw_screen_values(snapshot.key, snapshot.key, snapshot.note, snapshot.octave, snapshot.volume,  ctx.local.display);
                         }

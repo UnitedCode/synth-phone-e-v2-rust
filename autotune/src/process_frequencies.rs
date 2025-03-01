@@ -57,8 +57,26 @@ pub fn collect_harmonics(fundamental_index: usize) -> [usize; 8] {
 }
 
 #[inline(always)]
+pub fn sample_rate_reduce(
+    sample: f32,
+    factor: i32,
+    hold_counter: &mut i32,
+    held_value: &mut f32,
+) -> f32 {
+    // If we're at the start of the "hold" cycle, update the held sample
+    if *hold_counter == 0 {
+        *held_value = sample;
+    }
+    // Increment the hold_counter (wrapping around "factor")
+    *hold_counter = (*hold_counter + 1) % factor;
+
+    // Always return the held_value (which may have just been updated)
+    *held_value
+}
+
+#[inline(always)]
 pub fn bitcrush(sample: f32, bit_depth: u8) -> f32 {
-    let levels = (1 << bit_depth) as f32;
+    let levels = (1u64 << bit_depth) as f32;
     // Normalize sample from [-1,1] to [0,1]
     let normalized = (sample + 1.0) / 2.0;
     // Quantize the sample using libm's roundf
