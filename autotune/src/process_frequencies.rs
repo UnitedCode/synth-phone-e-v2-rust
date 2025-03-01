@@ -1,4 +1,6 @@
 use libm::floorf;
+use libm::roundf;
+use libm::fabsf;
 
 use crate::frequencies::find_nearest_note_frequency;
 
@@ -52,6 +54,28 @@ pub fn collect_harmonics(fundamental_index: usize) -> [usize; 8] {
         harmonics[n - 1] = harmonic_index;
     }
     harmonics
+}
+
+#[inline(always)]
+pub fn bitcrush(sample: f32, bit_depth: u8) -> f32 {
+    let levels = (1 << bit_depth) as f32;
+    // Normalize sample from [-1,1] to [0,1]
+    let normalized = (sample + 1.0) / 2.0;
+    // Quantize the sample using libm's roundf
+    let quantized = roundf(normalized * levels) / levels;
+    // Map back to [-1,1]
+    quantized * 2.0 - 1.0
+}
+
+#[inline(always)]
+pub fn normalize_sample(sample: f32, target_peak: f32) -> f32 {
+    let abs_sample = fabsf(sample);
+    if abs_sample > target_peak {
+        // Scale the sample down to target_peak while preserving its sign.
+        sample * (target_peak / abs_sample)
+    } else {
+        sample
+    }
 }
 
 #[cfg(test)]

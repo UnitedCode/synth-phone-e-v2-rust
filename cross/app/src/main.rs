@@ -36,7 +36,7 @@ mod rtic_app {
         use autotune::{
             frequencies::{
                 find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES,
-            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::find_fundamental_frequency
+            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::{bitcrush, find_fundamental_frequency, normalize_sample}
         };
         use heapless::String;
         use core::fmt::Write;
@@ -298,6 +298,16 @@ mod rtic_app {
                         }
                     });
 
+                    let mut bit_depth = 32;
+                    ctx.shared.menu_state_machine.lock(|msm| { 
+                        bit_depth = msm.crush;
+                        let crushed_sample = bitcrush(out_sample, bit_depth.try_into().unwrap());
+                        out_sample = normalize_sample(crushed_sample, 0.8);
+                    });
+                    // ctx.shared.bit_depth.lock(|&mut bd| {
+                    //     out_sample = bitcrush(out_sample, bd);
+                    // });
+
                     // Check and handle hop counter
                     let mut local_hop_counter: u32 = 0;
                     ctx.shared.hop_counter.lock(|count| {
@@ -442,7 +452,8 @@ mod rtic_app {
                             || snapshot.current_state == MenuState::DryWet 
                             || snapshot.current_state == MenuState::Effect 
                             || snapshot.current_state == MenuState::Speed
-                            || snapshot.current_state == MenuState::Magnitude {
+                            || snapshot.current_state == MenuState::Magnitude 
+                            || snapshot.current_state == MenuState::Crush{
                                 let sub_menu_context = msm.current();
                                 draw_submenu(sub_menu_context.next_item, sub_menu_context.next_item, sub_menu_context.current_item, false, ctx.local.display);
                         } else {
@@ -669,16 +680,18 @@ mod rtic_app {
 
         fn draw_submenu(next:(&str, i32), prev: (&str, i32), current: (&str, i32), selected: bool,  display: &mut LcdDisplay){
             
+            display.clear();
+
             let text_style = MonoTextStyleBuilder::new()
                 .font(&FONT_6X9)
-                .text_color(BinaryColor::Off) 
-                .background_color(BinaryColor::On) 
+                .text_color(BinaryColor::On) 
+                .background_color(BinaryColor::Off) 
                 .build();
         
             let h1_style = MonoTextStyleBuilder::new()
                 .font(&FONT_6X13)
-                .text_color(BinaryColor::Off)   
-                .background_color(BinaryColor::On) 
+                .text_color(BinaryColor::On)   
+                .background_color(BinaryColor::Off) 
                 .build();
 
             let options = [prev, current, next];
@@ -705,6 +718,9 @@ mod rtic_app {
         
 
         fn draw_screen_values(key: i32, mode: i32, note: i32, oct: i32, vol: i32, display: &mut LcdDisplay){
+
+            //TODO: only draw boxes over needed sections?
+            display.clear();
 
             // Load the BMP image (16BPP).
             let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE_MenuBlank.bmp"))
