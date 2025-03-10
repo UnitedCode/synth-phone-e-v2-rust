@@ -94,12 +94,12 @@ impl MenuStateMachine {
             note: 0,
             volume: 50,
             key: 0,
-            octave: 4,
+            octave: 2,
             sub_menu: 0,
             sub_menu_selected: false,
         
             dry_wet: 0,
-            speed: 31,
+            speed: 10,
             effect: 0,
             magnitude: 05,
             crush: 32,
@@ -149,8 +149,8 @@ impl MenuStateMachine {
             speed: self.speed,
             effect: self.effect,
             magnitude: self.magnitude,
-            crush: self.crush,
             sample_reduction: self.sample_reduction,
+            crush: self.crush,
        
         }
     }
@@ -178,7 +178,7 @@ impl MenuStateMachine {
                     self.key = wrap_value(self.key, delta, 0, 24);
                 }
                 MenuState::Octave => {
-                    self.octave = clamp_value(self.octave, delta, 0, 8);
+                    self.octave = clamp_value(self.octave, delta, 1, 4);
                 }
                 MenuState::SubMenu => {
                     self.sub_menu = wrap_value(self.sub_menu, delta, 0, (MENU_ITEMS_LENGTH -1) as i32);
@@ -189,7 +189,7 @@ impl MenuStateMachine {
                     self.dry_wet = clamp_value(self.dry_wet, delta, 0, 100)
                 },
                 MenuState::Speed => {
-                    self.speed = clamp_value(self.speed, delta, 6, 31)
+                    self.speed = clamp_value(self.speed, delta, 0, 20)
                 },
                 MenuState::Effect => {
                     self.effect = clamp_value(self.effect, delta, 0, 100)

@@ -36,7 +36,7 @@ mod rtic_app {
         use autotune::{
             frequencies::{
                 find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES,
-            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::{bitcrush, sample_rate_reduce, find_fundamental_frequency, normalize_sample}
+            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::{cepstral_smoothing, bitcrush, sample_rate_reduce, find_fundamental_frequency, normalize_sample}
         };
         use heapless::String;
         use core::fmt::Write;
@@ -476,7 +476,8 @@ mod rtic_app {
                             || snapshot.current_state == MenuState::Effect 
                             || snapshot.current_state == MenuState::Speed
                             || snapshot.current_state == MenuState::Magnitude 
-                            || snapshot.current_state == MenuState::Crush{
+                            || snapshot.current_state == MenuState::Crush
+                            || snapshot.current_state == MenuState::SampleReduction{
                                 let sub_menu_context = msm.current();
                                 draw_submenu(sub_menu_context.next_item, sub_menu_context.previous_item, sub_menu_context.current_item, false, ctx.local.display);
                         } else {
@@ -532,13 +533,13 @@ mod rtic_app {
                 let phase = atan2f(fft[i].im, fft[i].re);
 
                 //cut out noise
-                let mut magnitude_threshold = 0.05; // Adjust this threshold as needed
-                ctx.shared.menu_state_machine.lock(|msm| {
-                    magnitude_threshold = msm.magnitude as f32 / 100.0;
-                });
-                if amplitude < magnitude_threshold {
-                    continue; // Skip this bin if the magnitude is too low
-                }
+                // let mut magnitude_threshold = 0.05; // Adjust this threshold as needed
+                // ctx.shared.menu_state_machine.lock(|msm| {
+                //     magnitude_threshold = msm.magnitude as f32 / 100.0;
+                // });
+                // if amplitude < magnitude_threshold {
+                //     continue; // Skip this bin if the magnitude is too low
+                // }
 
                 // Calculate the phase difference in this bin between the last
                 // hop and this one, which will indirectly give us the exact frequency
@@ -568,7 +569,31 @@ mod rtic_app {
             }
 
             // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
+            ctx.shared.synthesis_magnitudes.lock(|syn_mag| {
+                for bin in syn_mag.iter_mut() {
+                    *bin = 0.0;
+                }
+            });
+            ctx.shared.synthesis_frequencies.lock(|syn_freq| {
+                for bin in syn_freq.iter_mut() {
+                    *bin = 0.0;
+                }
+            });
 
+            let mut analysis_magnitudes_full = [0.0f32; FFT_SIZE];
+            // Set the DC component.
+            analysis_magnitudes_full[0] = analysis_magnitudes[0];
+            // For bins 1 to FFT_SIZE/2 - 1, mirror the half-spectrum.
+            for i in 1..(FFT_SIZE / 2) {
+                analysis_magnitudes_full[i] = analysis_magnitudes[i];
+                analysis_magnitudes_full[FFT_SIZE - i] = analysis_magnitudes[i];
+            }
+
+            // Now compute the envelope using cepstral smoothing.
+            let envelope = cepstral_smoothing(&analysis_magnitudes_full);
+
+
+            // TODO: the fundimental can now be found from the spectral analysis
             // Get the fundamental frequency (Loudest)
             let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
             // let harmonics = collect_harmonics(fundamental_index);
@@ -579,6 +604,11 @@ mod rtic_app {
             // We cannot divide by 0
             if exact_frequency > 0.001 {
                 let mut scale_frequencies = &C_MAJOR_SCALE_FREQUENCIES;
+
+                let mut octave_factor = 1.0; // Adjust this threshold as needed
+                ctx.shared.menu_state_machine.lock(|msm| {
+                    octave_factor = msm.snapshot().octave as f32 * 0.5;//todo snapshot?!?! nate halp
+                });
                 
                 ctx.shared.menu_state_machine.lock(|msm| {
                     scale_frequencies = get_scale_by_key(msm.snapshot().key);
@@ -595,22 +625,58 @@ mod rtic_app {
                 let pitch_shift_ratio =
                     0.999 * current_pitch_shift_ratio + 0.001 * previous_pitch_shift_ratio;
 
+                
+                let mut formant_ratio = 1.0;
+                // ctx.shared.menu_state_machine.lock(|msm| {
+                //     formant_ratio = msm.speed as f32 / 10.0;//TODO: change to real var
+                // });
+
                 // shift all bins by the ratio
                 for i in 0..FFT_SIZE / 2 {
-                    let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
+                    let amplitude_in = analysis_magnitudes[i];
+                    let old_envelope = envelope[i].max(1e-9);
+                    let new_bin = (floorf(i as f32 * pitch_shift_ratio + 0.5) * octave_factor) as usize;//*2 to test octave
                     if new_bin < FFT_SIZE / 2 {
+                        // find new envelope at new_bin
+
+                        // clamp so we don't go out of bounds
+                        let mut shifted_env_bin_f32 = (i as f32 * formant_ratio)
+                            .clamp(0.0, FFT_SIZE as f32 / 2.0 - 1.0); 
+                        
+                        shifted_env_bin_f32 = floorf(shifted_env_bin_f32 + 0.5);
+
+                        let shifted_env_bin = shifted_env_bin_f32 as usize;
+
+                        let shifted_env_bin = shifted_env_bin.min(FFT_SIZE/2 - 1);
+
+                        let new_envelope = envelope[shifted_env_bin];
+                        let adjusted_mag = amplitude_in * (new_envelope / old_envelope);
+                        
                         ctx.shared
                             .synthesis_magnitudes
                             .lock(|synthesis_magnitudes| {
-                                synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
+                                synthesis_magnitudes[new_bin] = adjusted_mag;
+                                //synthesis_magnitudes[i] = analysis_magnitudes[i];
                             });
                         ctx.shared
                             .synthesis_frequencies
                             .lock(|synthesis_frequencies| {
-                                synthesis_frequencies[new_bin] =
-                                    analysis_frequencies[i] * pitch_shift_ratio;
+                                synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio * octave_factor;
+                                //synthesis_frequencies[i] = analysis_frequencies[i];
                             });
                     }
+                    // ctx.shared
+                    //     .synthesis_magnitudes
+                    //     .lock(|synthesis_magnitudes| {
+                    //         //synthesis_magnitudes[new_bin] = adjusted_mag;
+                    //         synthesis_magnitudes[i] = analysis_magnitudes[i];
+                    //     });
+                    // ctx.shared
+                    //     .synthesis_frequencies
+                    //     .lock(|synthesis_frequencies| {
+                    //         //synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio * octave_factor;
+                    //         synthesis_frequencies[i] = analysis_frequencies[i];
+                    //     });
                 }
             }
 
