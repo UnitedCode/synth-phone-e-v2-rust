@@ -47,9 +47,10 @@ mod rtic_app {
             pixelcolor::BinaryColor,
             prelude::*,
             text::{Baseline, Text},
+            primitives::{Line, PrimitiveStyle},
         };
         use libdaisy::{audio, hid, logger, prelude::{Output, PushPull, Input}, system, gpio::*};
-        use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
+        use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf, roundf};
         use log::{info, warn};
         use state_machines::{MenuState, MenuStateMachine};
         use stm32h7xx_hal::{ i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
@@ -429,10 +430,12 @@ mod rtic_app {
             }
 
             ctx.local.encoder_button.update();
-            if ctx.local.encoder_button.is_pressed() {
+            if ctx.local.encoder_button.is_falling() {
                 // The user is pushing (or has just pushed) the encoder button
                 info!("Encoder button pressed!");
                 
+                update_state = true;
+
                 // , forward an event to your menu:
                 ctx.shared.menu_state_machine.lock(|msm| {
                     msm.handle_event(state_machines::MenuEvent::Select);
@@ -479,7 +482,7 @@ mod rtic_app {
                             || snapshot.current_state == MenuState::Crush
                             || snapshot.current_state == MenuState::SampleReduction{
                                 let sub_menu_context = msm.current();
-                                draw_submenu(sub_menu_context.next_item, sub_menu_context.previous_item, sub_menu_context.current_item, false, ctx.local.display);
+                                draw_submenu(sub_menu_context.next_item, sub_menu_context.previous_item, sub_menu_context.current_item, snapshot.current_state, ctx.local.display);
                         } else {
                             draw_screen_values(snapshot.key, snapshot.key, snapshot.note, snapshot.octave, snapshot.volume,  ctx.local.display);
                         }
@@ -592,11 +595,59 @@ mod rtic_app {
             // Now compute the envelope using cepstral smoothing.
             let envelope = cepstral_smoothing(&analysis_magnitudes_full);
 
+            // 1) Create our carrier in freq domain: a harmonic stack at 440 Hz
+            // let mut freq_domain_carrier: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+
+            // let bin_for_440 = roundf(440.0 / BIN_WIDTH) as usize;
+
+            // let max_harmonic = (FFT_SIZE / 2) / bin_for_440;
+
+            // // Example amplitude roll-off for each harmonic. Tweak as you wish.
+            // fn amplitude_function(h: usize) -> f32 {
+            //     // A simple 1/h rolloff, or do something fancier
+            //     100.0 / (h as f32)
+            // }
+
+            // // Populate the carrier bins for each harmonic
+            // for h in 1..=max_harmonic {
+            //     let bin = bin_for_440 * h;
+            //     freq_domain_carrier[bin].re = amplitude_function(h);
+            // }
+
+            // // Mirror them for a real IFFT
+            // for i in 1..(FFT_SIZE / 2) {
+            //     freq_domain_carrier[FFT_SIZE - i] = freq_domain_carrier[i].conj();
+            // }
+
+            // // 2) Multiply the carrier bins by the voice envelope
+            // for i in 0..(FFT_SIZE / 2) {
+            //     let amp_scale = envelope[i];
+            //     freq_domain_carrier[i].re *= amp_scale;
+            //     freq_domain_carrier[i].im *= amp_scale;
+
+            //     // Mirror side
+            //     if i != 0 {
+            //         freq_domain_carrier[FFT_SIZE - i].re *= amp_scale;
+            //         freq_domain_carrier[FFT_SIZE - i].im *= amp_scale;
+            //     }
+            // }
+
+            // // 3) Inverse FFT to get time-domain data
+            // microfft::inverse::ifft_1024(&mut freq_domain_carrier);
+
+            // // 4) Overlap-add or window it into out_buffer
+            // for (n, val) in freq_domain_carrier.iter().enumerate() {
+            //     let windowed_val = val.re * analysis_window_buffer[n]; // or skip the window if you prefer
+            //     ctx.shared.out_buffer.lock(|out_buffer| {
+            //         out_buffer.add_value(windowed_val);
+            //     });
+            // }
+
 
             // TODO: the fundimental can now be found from the spectral analysis
             // Get the fundamental frequency (Loudest)
             let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
-            // let harmonics = collect_harmonics(fundamental_index);
+            let harmonics = collect_harmonics(fundamental_index);
 
             // Exact frequency is tied to the bin.
             let exact_frequency = analysis_frequencies[fundamental_index] * BIN_WIDTH;
@@ -628,7 +679,7 @@ mod rtic_app {
                 
                 let mut formant_ratio = 1.0;
                 // ctx.shared.menu_state_machine.lock(|msm| {
-                //     formant_ratio = msm.speed as f32 / 10.0;//TODO: change to real var
+                //     formant_ratio = 20.0;//msm.speed as f32 / 10.0;//TODO: change to real var
                 // });
 
                 // shift all bins by the ratio
@@ -767,7 +818,7 @@ mod rtic_app {
         }
 
 
-        fn draw_submenu(next:(&str, i32), prev: (&str, i32), current: (&str, i32), selected: bool,  display: &mut LcdDisplay){
+        fn draw_submenu(next:(&str, i32), prev: (&str, i32), current: (&str, i32), current_state: MenuState,  display: &mut LcdDisplay){
             
             display.clear();
 
@@ -784,6 +835,18 @@ mod rtic_app {
                 .build();
 
             let options = [prev, current, next];
+
+            if current_state == MenuState::SubMenu {
+                Line::new(Point::new(2, 22), Point::new(103, 22))
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+                .draw(display)
+                .expect("Failed to draw underline");
+            } else {
+                Line::new(Point::new(108, 22), Point::new(123, 22))
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+                .draw(display)
+                .expect("Failed to draw underline");
+            }
 
             for (i, &option) in options.iter().enumerate() {
                 
