@@ -339,13 +339,14 @@ impl AppStateMachine {
         match (&self.state, event) {
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
-                if key < 9 {
+                if key <= 9 {
                     // First 9 buttons are notes
                     self.play_note(key);
-                } else if key == 9 {
+                    self.note = key as i32;
+                } else if key ==  10{
                     // Lower key
                     self.current_key = (self.current_key + 11) % 12;
-                } else if key == 11 {
+                } else if key == 12 {
                     // Raise key
                     self.current_key = (self.current_key + 1) % 12;
                 }
@@ -356,24 +357,24 @@ impl AppStateMachine {
             (AppState::EffectsProfile(_), AppEvent::KeypadPress(key)) => {
                 match key {
                     // Row 1: Octave controls
-                    0 => self.current_octave = -1, // Low
-                    1 => self.current_octave = 0,  // Normal
-                    2 => self.current_octave = 1,  // High
+                    1 => self.current_octave = -1, // Low
+                    2 => self.current_octave = 0,  // Normal
+                    3 => self.current_octave = 1,  // High
                     
                     // Row 2: Bit crush controls
-                    3 => self.current_crush = 1,   // Crush 1
-                    4 => self.current_crush = 0,   // No crush
-                    5 => self.current_crush = 2,   // Crush 2
+                    4 => self.current_crush = 1,   // Crush 1
+                    5 => self.current_crush = 0,   // No crush
+                    6 => self.current_crush = 2,   // Crush 2
                     
                     // Row 3: Formant controls
-                    6 => self.current_formant = -1, // Male
-                    7 => self.current_formant = 0,  // None
-                    8 => self.current_formant = 1,  // Female
+                    7 => self.current_formant = -1, // Male
+                    8 => self.current_formant = 0,  // None
+                    9 => self.current_formant = 1,  // Female
                     
                     // Row 4: Key and profile controls
-                    9 => self.current_key = (self.current_key + 11) % 12, // Key down
-                    10 => self.state = self.state.cycle_profile(), // Cycle profile
-                    11 => self.current_key = (self.current_key + 1) % 12, // Key up
+                    10 => self.current_key = (self.current_key + 11) % 12, // Key down
+                    11 => self.state = self.state.cycle_profile(), // Cycle profile
+                    12 => self.current_key = (self.current_key + 1) % 12, // Key up
                     
                     _ => (), // Invalid key
                 }

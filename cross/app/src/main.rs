@@ -933,6 +933,7 @@ mod rtic_app {
                 .expect("Failed converting mode to string");
             
             let mut note_buffer: String<2> = String::new();
+            info!("note - {:?} -", note);
             write!(&mut note_buffer, "{}", get_note_name(note, get_key(key)))
                 .expect("Failed converting note to string");
             
@@ -1240,9 +1241,9 @@ mod rtic_app {
             match current_state {
                 // In Processing state - release notes
                 AppState::Processing(_) => {
-                    info!("note off (todo)");
+                    info!("note off");
                     match (row, col) {
-                        (0, _) | (1, _) | (2, _) => state_machines::AppEvent::NoOp, // Stop the note
+                        (0, _) | (1, _) | (2, _) => state_machines::AppEvent::KeypadPress(0), // Stop the note
                         _ => state_machines::AppEvent::NoOp
                     }
                 },
