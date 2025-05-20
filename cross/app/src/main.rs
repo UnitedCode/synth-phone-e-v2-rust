@@ -962,7 +962,7 @@ mod rtic_app {
             display.clear();
             
             // Load the background image
-            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE_PerformanceProfile-Empty.bmp"))
+            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE-PerformanceProfile-Empty.bmp"))
                 .expect("Could not load BMP");
             
             let image = Image::new(&bmp, Point::new(0, 0));
