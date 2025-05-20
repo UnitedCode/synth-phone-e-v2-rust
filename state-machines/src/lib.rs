@@ -4,7 +4,7 @@
 
 // New state machine structure only
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ProcessingState {
+pub enum ProcessingProfile {
     Autotune,
     Vocode,
     Dry,
@@ -14,12 +14,12 @@ pub enum ProcessingState {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AppState {
     Splash,
-    Processing(ProcessingState),
-    EffectsProfile(ProcessingState),
-    Menu(MenuState, ProcessingState),
+    Processing(ProcessingProfile),
+    EffectsProfile(ProcessingProfile),
+    Menu(MenuState, ProcessingProfile),
 }
 
-/// Menu state with selection/editing modes
+/// Menu state with selection/editing profiles
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MenuState {
     Selecting(usize), // Index of the current menu item
@@ -125,18 +125,20 @@ pub enum AppEvent {
     EncoderDoublePress,   // Double press of the encoder
     EncoderRotate(i32),   // Rotation of the encoder (positive or negative)
     
-    // Button presses in different modes
+    // Button presses in different profiles
     KeypadPress(usize),   // Press of a keypad button (0-11)
     
-    // Processing mode selection
-    CycleProcessingMode,  // Cycle to next processing mode
-    SetProcessingMode(ProcessingMode), // Set a specific processing mode
+    // Processing profile selection
+    CycleProcessingProfile,  // Cycle to next processing profile
+    SetProcessingProfile(ProcessingProfile), // Set a specific processing profile
     
     // Effects parameters
     SetOctave(i32),       // Set octave (low=-1, normal=0, high=1)
-    SetBitCrush(i32),     // Set bit crush mode (1=crush1, 0=none, 2=crush2)
-    SetFormant(i32),      // Set formant mode (-1=male, 0=none, 1=female)
+    SetBitCrush(i32),     // Set bit crush (1=crush1, 0=none, 2=crush2)
+    SetFormant(i32),      // Set formant (-1=male, 0=none, 1=female)
     KeyChange(i32),       // Change musical key up or down
+
+    NoOp,
 }
 
 impl AppState {
@@ -150,37 +152,37 @@ impl AppState {
         match (self, event) {
             // From Splash screen
             (AppState::Splash, AppEvent::SplashComplete) => {
-                AppState::Processing(ProcessingMode::Autotune)
+                AppState::Processing(ProcessingProfile::Autotune)
             }
             
             // Encoder press to toggle between Processing and Effects
-            (AppState::Processing(mode), AppEvent::EncoderPress) => {
-                AppState::Effects(mode)
+            (AppState::Processing(profile), AppEvent::EncoderPress) => {
+                AppState::EffectsProfile(profile)
             }
-            (AppState::Effects(mode), AppEvent::EncoderPress) => {
-                AppState::Processing(mode)
+            (AppState::EffectsProfile(profile), AppEvent::EncoderPress) => {
+                AppState::Processing(profile)
             }
             
             // Double press to enter menu from anywhere
-            (AppState::Processing(mode), AppEvent::EncoderDoublePress) => {
-                AppState::Menu(MenuState::Selecting(0), mode)
+            (AppState::Processing(profile), AppEvent::EncoderDoublePress) => {
+                AppState::Menu(MenuState::Selecting(0), profile)
             }
-            (AppState::Effects(mode), AppEvent::EncoderDoublePress) => {
-                AppState::Menu(MenuState::Selecting(0), mode)
+            (AppState::EffectsProfile(profile), AppEvent::EncoderDoublePress) => {
+                AppState::Menu(MenuState::Selecting(0), profile)
             }
             
             // Double press to exit menu
-            (AppState::Menu(_, mode), AppEvent::EncoderDoublePress) => {
-                AppState::Processing(mode)
+            (AppState::Menu(_, profile), AppEvent::EncoderDoublePress) => {
+                AppState::Processing(profile)
             }
             
-            // Handle mode changes in Effects
-            (AppState::Effects(_), AppEvent::CycleProcessingMode) => {
-                // Implemented separately in cycle_mode function
+            // Handle profile changes in Effects
+            (AppState::EffectsProfile(_), AppEvent::CycleProcessingProfile) => {
+                // Implemented separately in cycle_profile function
                 self
             }
-            (AppState::Effects(_), AppEvent::SetProcessingMode(new_mode)) => {
-                AppState::Processing(new_mode)
+            (AppState::EffectsProfile(_), AppEvent::SetProcessingProfile(new_profile)) => {
+                AppState::Processing(new_profile)
             }
             
             // Stay in current state for all other events
@@ -188,17 +190,17 @@ impl AppState {
         }
     }
     
-    /// Helper function to cycle through processing modes
-    pub fn cycle_mode(&self) -> Self {
+    /// Helper function to cycle through processing profiles
+    pub fn cycle_profile(&self) -> Self {
         match self {
-            AppState::Effects(ProcessingMode::Autotune) => {
-                AppState::Effects(ProcessingMode::Vocode)
+            AppState::EffectsProfile(ProcessingProfile::Autotune) => {
+                AppState::EffectsProfile(ProcessingProfile::Vocode)
             }
-            AppState::Effects(ProcessingMode::Vocode) => {
-                AppState::Effects(ProcessingMode::Dry)
+            AppState::EffectsProfile(ProcessingProfile::Vocode) => {
+                AppState::EffectsProfile(ProcessingProfile::Dry)
             }
-            AppState::Effects(ProcessingMode::Dry) => {
-                AppState::Effects(ProcessingMode::Autotune)
+            AppState::EffectsProfile(ProcessingProfile::Dry) => {
+                AppState::EffectsProfile(ProcessingProfile::Autotune)
             }
             // If not in Effects state, don't change
             _ => *self,
@@ -222,7 +224,7 @@ impl MenuState {
         values: &mut MenuValues,
     ) -> MenuState {
         match (self, event) {
-            // Navigation in selection mode
+            // Navigation in selection profile
             (MenuState::Selecting(idx), MenuNavEvent::Next) => {
                 MenuState::Selecting((idx + 1) % MENU_ITEMS.len())
             }
@@ -233,7 +235,7 @@ impl MenuState {
                 MenuState::Editing(*idx)
             }
             
-            // Value adjustment in editing mode
+            // Value adjustment in editing profile
             (MenuState::Editing(idx), MenuNavEvent::Next) => {
                 let item = MENU_ITEMS[*idx];
                 let val = values.get(item);
@@ -254,16 +256,44 @@ impl MenuState {
 }
 
 /// Main state machine for the telephone effects box
-pub struct TelephoneEffectsBox {
+pub struct AppStateMachine {
     state: AppState,
     values: MenuValues,
     current_key: i32, // Musical key (0=C, 1=C#, etc.)
     current_octave: i32, // Current octave (-1=low, 0=normal, 1=high)
     current_crush: i32, // Current bit crush (1=crush1, 0=none, 2=crush2)
     current_formant: i32, // Current formant (-1=male, 0=none, 1=female)
+    pub volume: i32,
+    pub note: i32,
+    pub menu_index: usize,
 }
 
-impl TelephoneEffectsBox {
+// Add a snapshot struct to hold all the state information
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct AppStateMachineSnapshot {
+    pub current_state: AppState,
+    pub key: i32,
+    pub octave: i32,
+    pub note: i32,
+    pub volume: i32,
+    pub menu_index: usize,
+    pub crush1: i32,
+    pub crush2: i32,
+    pub formant_male: i32,
+    pub formant_female: i32,
+    pub autotune_speed: i32,
+    pub magnitude: i32,
+    pub pad_matrix: i32,
+}
+
+// Add a MenuContext struct for menu display
+pub struct MenuContext {
+    pub previous_item: (&'static str, i32),
+    pub current_item: (&'static str, i32),
+    pub next_item: (&'static str, i32),
+}
+
+impl AppStateMachine {
     /// Create a new instance of the state machine
     pub fn new() -> Self {
         Self {
@@ -273,6 +303,9 @@ impl TelephoneEffectsBox {
             current_octave: 0, // Start at normal octave
             current_crush: 0, // Start with no crush
             current_formant: 0, // Start with no formant
+            volume: 0,
+            note: 0,
+            menu_index: 0,
         }
     }
     
@@ -280,12 +313,31 @@ impl TelephoneEffectsBox {
     pub fn state(&self) -> AppState {
         self.state
     }
+
+        // Add a snapshot method to provide current state info
+    pub fn snapshot(&self) -> AppStateMachineSnapshot {
+        AppStateMachineSnapshot {
+            current_state: self.state,
+            key: self.current_key,
+            octave: self.current_octave,
+            note: self.note,
+            volume: self.volume,
+            menu_index: self.menu_index,
+            crush1: self.values.crush1,
+            crush2: self.values.crush2,
+            formant_male: self.values.formant_male,
+            formant_female: self.values.formant_female,
+            autotune_speed: self.values.autotune_speed,
+            magnitude: self.values.magnitude,
+            pad_matrix: self.values.pad_matrix,
+        }
+    }
     
     /// Handle incoming events
     pub fn handle_event(&mut self, event: AppEvent) {
         // Handle special events for specific states
         match (&self.state, event) {
-            // Handle keypad presses in Processing mode (for notes)
+            // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
                 if key < 9 {
                     // First 9 buttons are notes
@@ -297,11 +349,11 @@ impl TelephoneEffectsBox {
                     // Raise key
                     self.current_key = (self.current_key + 1) % 12;
                 }
-                // Key 10 does nothing in Processing mode
+                // Key 10 does nothing in Processing profile
             },
             
-            // Handle keypad presses in Effects mode
-            (AppState::Effects(_), AppEvent::KeypadPress(key)) => {
+            // Handle keypad presses in Effects profile
+            (AppState::EffectsProfile(_), AppEvent::KeypadPress(key)) => {
                 match key {
                     // Row 1: Octave controls
                     0 => self.current_octave = -1, // Low
@@ -318,16 +370,16 @@ impl TelephoneEffectsBox {
                     7 => self.current_formant = 0,  // None
                     8 => self.current_formant = 1,  // Female
                     
-                    // Row 4: Key and mode controls
+                    // Row 4: Key and profile controls
                     9 => self.current_key = (self.current_key + 11) % 12, // Key down
-                    10 => self.state = self.cycle_mode(), // Cycle mode
+                    10 => self.state = self.state.cycle_profile(), // Cycle profile
                     11 => self.current_key = (self.current_key + 1) % 12, // Key up
                     
                     _ => (), // Invalid key
                 }
             },
             
-            // Handle encoder rotation in Menu mode
+            // Handle encoder rotation in Menu profile
             (AppState::Menu(menu_state, _), AppEvent::EncoderRotate(delta)) => {
                 // Convert rotation to next/prev events
                 let nav_event = if delta > 0 {
@@ -338,19 +390,19 @@ impl TelephoneEffectsBox {
                 
                 // Update menu state
                 let new_menu_state = menu_state.handle_event(nav_event, &mut self.values);
-                if let AppState::Menu(_, mode) = self.state {
-                    self.state = AppState::Menu(new_menu_state, mode);
+                if let AppState::Menu(_, profile) = self.state {
+                    self.state = AppState::Menu(new_menu_state, profile);
                 }
                 
                 return; // Skip the standard transition
             },
             
-            // Handle encoder press in Menu mode
+            // Handle encoder press in Menu profile
             (AppState::Menu(menu_state, _), AppEvent::EncoderPress) => {
                 // Toggle between selecting and editing
                 let new_menu_state = menu_state.handle_event(MenuNavEvent::Select, &mut self.values);
-                if let AppState::Menu(_, mode) = self.state {
-                    self.state = AppState::Menu(new_menu_state, mode);
+                if let AppState::Menu(_, profile) = self.state {
+                    self.state = AppState::Menu(new_menu_state, profile);
                 }
                 
                 return; // Skip the standard transition
@@ -362,7 +414,31 @@ impl TelephoneEffectsBox {
         // Standard state transition
         self.state = self.state.transition(event);
     }
-    
+
+         // Add a current method to get menu context
+    pub fn current(&self) -> MenuContext {
+        let menu_items = [
+            ("Crush1", self.values.crush1),
+            ("Crush2", self.values.crush2),
+            ("FormantMale", self.values.formant_male),
+            ("FormantFemale", self.values.formant_female),
+            ("Speed", self.values.autotune_speed),
+            ("Magnitude", self.values.magnitude),
+            ("PadMatrix", self.values.pad_matrix),
+        ];
+        
+        let total = menu_items.len();
+        let current = self.menu_index;
+        let previous = if current == 0 { total - 1 } else { current - 1 };
+        let next = (current + 1) % total;
+        
+        MenuContext {
+            previous_item: menu_items[previous],
+            current_item: menu_items[current],
+            next_item: menu_items[next],
+        }
+    }
+
     /// Play a note based on the current key and octave
     fn play_note(&self, key_index: usize) {
         // Convert keypad position to a note in the current key and octave
@@ -383,6 +459,15 @@ impl TelephoneEffectsBox {
     }
 }
 
+/// A small helper function to clamp an i32.
+fn clamp_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
+    (current + delta).clamp(min, max)
+}
+fn wrap_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
+    let range = max - min + 1;
+    ((current + delta - min) % range + range) % range + min
+}
+
 /// Unit tests for the state machine
 #[cfg(test)]
 mod tests {
@@ -390,30 +475,30 @@ mod tests {
 
     #[test]
     fn test_splash_to_processing() {
-        let mut app = TelephoneEffectsBox::new();
+        let mut app = AppStateMachine::new();
         assert!(matches!(app.state(), AppState::Splash));
         
         app.handle_event(AppEvent::SplashComplete);
-        assert!(matches!(app.state(), AppState::Processing(ProcessingMode::Autotune)));
+        assert!(matches!(app.state(), AppState::Processing(ProcessingProfile::Autotune)));
     }
     
     #[test]
     fn test_toggle_effects() {
-        let mut app = TelephoneEffectsBox::new();
+        let mut app = AppStateMachine::new();
         app.handle_event(AppEvent::SplashComplete);
         
         // Toggle to Effects
         app.handle_event(AppEvent::EncoderPress);
-        assert!(matches!(app.state(), AppState::Effects(ProcessingMode::Autotune)));
+        assert!(matches!(app.state(), AppState::EffectsProfile(ProcessingProfile::Autotune)));
         
         // Toggle back to Processing
         app.handle_event(AppEvent::EncoderPress);
-        assert!(matches!(app.state(), AppState::Processing(ProcessingMode::Autotune)));
+        assert!(matches!(app.state(), AppState::Processing(ProcessingProfile::Autotune)));
     }
     
     #[test]
     fn test_menu_navigation() {
-        let mut app = TelephoneEffectsBox::new();
+        let mut app = AppStateMachine::new();
         app.handle_event(AppEvent::SplashComplete);
         
         // Enter menu
@@ -424,7 +509,7 @@ mod tests {
         app.handle_event(AppEvent::EncoderRotate(1));
         assert!(matches!(app.state(), AppState::Menu(MenuState::Selecting(1), _)));
         
-        // Enter edit mode
+        // Enter edit profile
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(app.state(), AppState::Menu(MenuState::Editing(1), _)));
         
@@ -433,18 +518,18 @@ mod tests {
         let values = app.get_values();
         assert_eq!(values.crush2, 6); // Default was 5, now 6
         
-        // Exit edit mode
+        // Exit edit profile
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(app.state(), AppState::Menu(MenuState::Selecting(1), _)));
         
         // Exit menu
         app.handle_event(AppEvent::EncoderDoublePress);
-        assert!(matches!(app.state(), AppState::Processing(ProcessingMode::Autotune)));
+        assert!(matches!(app.state(), AppState::Processing(ProcessingProfile::Autotune)));
     }
     
     #[test]
     fn test_effects_controls() {
-        let mut app = TelephoneEffectsBox::new();
+        let mut app = AppStateMachine::new();
         app.handle_event(AppEvent::SplashComplete);
         app.handle_event(AppEvent::EncoderPress); // Enter Effects
         
@@ -463,14 +548,14 @@ mod tests {
         let (_, _, _, formant) = app.get_processing_params();
         assert_eq!(formant, -1);
         
-        // Test cycle mode
-        app.handle_event(AppEvent::KeypadPress(10)); // Cycle mode
-        assert!(matches!(app.state(), AppState::Effects(ProcessingMode::Vocode)));
+        // Test cycle profile
+        app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile
+        assert!(matches!(app.state(), AppState::EffectsProfile(ProcessingProfile::Vocode)));
         
-        app.handle_event(AppEvent::KeypadPress(10)); // Cycle mode again
-        assert!(matches!(app.state(), AppState::Effects(ProcessingMode::Dry)));
+        app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile again
+        assert!(matches!(app.state(), AppState::EffectsProfile(ProcessingProfile::Dry)));
         
-        app.handle_event(AppEvent::KeypadPress(10)); // Cycle mode again
-        assert!(matches!(app.state(), AppState::Effects(ProcessingMode::Autotune)));
+        app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile again
+        assert!(matches!(app.state(), AppState::EffectsProfile(ProcessingProfile::Autotune)));
     }
 }

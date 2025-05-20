@@ -31,7 +31,7 @@ mod rtic_app {
     device = stm32h7xx_hal::stm32,
     peripherals = true,
     dispatchers = [DMA1_STR0]
-)]
+    )]
     mod app {
         use autotune::{
             frequencies::{
@@ -52,7 +52,7 @@ mod rtic_app {
         use libdaisy::{audio, hid, logger, prelude::{Output, PushPull, Input}, system, gpio::*};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf, roundf};
         use log::{info, warn};
-        use state_machines::{MenuState, MenuStateMachine};
+        use state_machines::{AppState, MenuState, ProcessingProfile, AppStateMachine};
         use stm32h7xx_hal::{ i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
         };
         use tinybmp::Bmp;
@@ -97,7 +97,7 @@ mod rtic_app {
             synthesis_frequencies: [f32; FFT_SIZE],
             previous_pitch_shift_ratio: f32,
             hop_counter: u32,
-            menu_state_machine: MenuStateMachine,
+            app_state_machine: AppStateMachine,
             old_matrix_state: [[bool; 3]; 4],
             // For sample-rate reduction
             sr_hold_counter: i32,
@@ -220,7 +220,7 @@ mod rtic_app {
             display.clear();
 
             // Create a text style
-            let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+            //let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
 
             let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
@@ -246,7 +246,7 @@ mod rtic_app {
                     synthesis_frequencies: [0.0; FFT_SIZE],
                     previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
-                    menu_state_machine: MenuStateMachine::new(),
+                    app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
                     // For sample-rate reduction
                     sr_hold_counter: 0,
@@ -279,7 +279,7 @@ mod rtic_app {
         last_input_phases,
         last_output_phases,
         hop_counter,
-        menu_state_machine,
+        app_state_machine,
         sr_hold_counter,
         sr_held_value,
     ], priority = 8)]
@@ -293,28 +293,46 @@ mod rtic_app {
                 for (left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
                     let mut out_sample = *left;
 
+
+                    // Get current processing mode
+                    let mut current_mode = ProcessingProfile::Autotune;
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        let snapshot = msm.snapshot();
+                        match snapshot.current_state {
+                            AppState::Processing(mode) | AppState::EffectsProfile(mode) | AppState::Menu(_, mode) => {
+                                current_mode = mode;
+                            },
+                            AppState::Splash => {}
+                        }
+                    });
+
                     // Lock to write to in_buffer
                     ctx.shared.in_buffer.lock(|in_buffer| {
                         in_buffer.write(*left);
                     });
 
-                    // Lock to read from out_buffer and reset the value
-                    ctx.shared.out_buffer.lock(|out_buffer| {
-                        if button_pressed {
+                    // Process based on current mode
+                    let apply_effects = match current_mode {
+                        ProcessingProfile::Autotune => true,  // Apply autotune
+                        ProcessingProfile::Vocode => true,    // Apply vocoder
+                        ProcessingProfile::Dry => false,      // Passthrough (no processing)
+                    };
+
+                    // Get the processed audio if effects are enabled
+                    if apply_effects {
+                        ctx.shared.out_buffer.lock(|out_buffer| {
                             out_sample = out_buffer.read_and_reset();
-                        } else {
-                            out_sample = *left
-                        }
-                    });
+                        });
+                    }
 
                     // ************** SAMPLE-RATE REDUCE **************
-                    // 1) Get user-chosen factor from your menu
+                    // Apply sample rate reduction effect
                     let mut sr_factor = 1;
-                    ctx.shared.menu_state_machine.lock(|msm| {
-                        sr_factor = msm.sample_reduction;
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        sr_factor = msm.snapshot().crush1; 
                     });
 
-                    // 2) “Downsample” the out_sample
+                    // Apply the effect
                     ctx.shared.sr_hold_counter.lock(|hold_ctr| {
                         ctx.shared.sr_held_value.lock(|held_val| {
                             out_sample = sample_rate_reduce(out_sample, sr_factor, hold_ctr, held_val);
@@ -324,12 +342,12 @@ mod rtic_app {
                     // ************** BIT DEPTH REDUCE **************
                     // 3) Get bit depth from your menu
                     let mut bit_depth = 32;
-                    ctx.shared.menu_state_machine.lock(|msm| { 
-                        bit_depth = msm.crush;
+                    ctx.shared.app_state_machine.lock(|msm| { 
+                        bit_depth = msm.snapshot().crush2;
                     });
                     out_sample = bitcrush(out_sample, bit_depth as u8);
 
-                    // ************** NORMALIZE / FINAL OUT **************
+                    // Normalize final output
                     out_sample = normalize_sample(out_sample, 0.8);
 
                     // Check and handle hop counter
@@ -378,7 +396,7 @@ mod rtic_app {
             row_3_pin, 
             row_4_pin,
             encoder_button,
-            ], shared = [menu_state_machine, old_matrix_state])]
+            ], shared = [app_state_machine, old_matrix_state])]
         fn interface_handler(mut ctx: interface_handler::Context) {
             ctx.local.timer2.clear_irq();
 
@@ -396,14 +414,14 @@ mod rtic_app {
 
 
             // info!("{:?}", new_matrix_state);
-
+            // Process button matrix changes
             for row in 0..4 {
                 for col in 0..3 {
                     let was_pressed = ctx.shared.old_matrix_state.lock(|oms| {
                         oms[row][col]
                     });
-                    let is_pressed  = new_matrix_state[row][col];
-        
+                    let is_pressed = new_matrix_state[row][col];
+
                     // If there is a change, decide how to handle it
                     if is_pressed != was_pressed {
                         ctx.shared.old_matrix_state.lock(|oms| {
@@ -411,84 +429,124 @@ mod rtic_app {
                         });
                         if is_pressed {
                             update_state = true;
-                            // 3a) Button has just been pressed
-                            ctx.shared.menu_state_machine.lock(|msm|
-                                {
-                                    msm.handle_event(handle_button_press(row, col));
-                            })
+                            // Button has just been pressed
+                            ctx.shared.app_state_machine.lock(|msm| {
+                                msm.handle_event(handle_button_press(row, col, msm.snapshot().current_state));
+                            });
                         } else {
                             update_state = true;
-                            // 3b) Button has just been released
-                            ctx.shared.menu_state_machine.lock(|msm|
-                                {
-                            msm.handle_event(handle_button_release(row, col));
-                        })
-
+                            // Button has just been released
+                            ctx.shared.app_state_machine.lock(|msm| {
+                                msm.handle_event(handle_button_release(row, col, msm.snapshot().current_state));
+                            });
                         }
                     }
                 }
             }
 
+            // Handle encoder button - single press vs double press
             ctx.local.encoder_button.update();
-            if ctx.local.encoder_button.is_falling() {
-                // The user is pushing (or has just pushed) the encoder button
-                info!("Encoder button pressed!");
-                
-                update_state = true;
 
-                // , forward an event to your menu:
-                ctx.shared.menu_state_machine.lock(|msm| {
-                    msm.handle_event(state_machines::MenuEvent::Select);
-                    if msm.snapshot().current_state == MenuState::Volume {
-                        info!("RING RING RING!")
-                    }
+            // Check for double press first
+            if ctx.local.encoder_button.is_double() {
+                info!("Encoder double press detected!");
+                update_state = true;
+                
+                ctx.shared.app_state_machine.lock(|msm| {
+                    msm.handle_event(state_machines::AppEvent::EncoderDoublePress);
+                });
+            } 
+            // Check for single press if not a double press
+            else if ctx.local.encoder_button.is_falling() {
+                info!("Encoder single press detected!");
+                update_state = true;
+                
+                ctx.shared.app_state_machine.lock(|msm| {
+                    msm.handle_event(state_machines::AppEvent::EncoderPress);
                 });
             }
 
+            // Handle encoder rotation
             match ctx.local.knob_1.rotary_encoder.update() {
                 Direction::Clockwise => {
                     update_state = true;
-
-                    ctx.shared.menu_state_machine.lock(|msm| {
-                        msm.handle_event(state_machines::MenuEvent::Adjust(1));
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        msm.handle_event(state_machines::AppEvent::EncoderRotate(1));
                     });
                 }
                 Direction::Anticlockwise => {
                     update_state = true;
-                    
-                        ctx.shared.menu_state_machine.lock(|msm| {
-                            msm.handle_event(state_machines::MenuEvent::Adjust(-1));
-                        });
-                        // ctx.local.knob_1.value -= 1;
-                    
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        msm.handle_event(state_machines::AppEvent::EncoderRotate(-1));
+                    });
                 }
-                Direction::None => {
-                    
-                }
+                Direction::None => { }
             }
 
 
-            ctx.shared.menu_state_machine.lock(|msm|
-                {
-                    if update_state {
+             // Update display if state changed
+            ctx.shared.app_state_machine.lock(|msm| {
+                if update_state {
+                    let snapshot = msm.snapshot();
+                    info!("state - {:?} -", snapshot.current_state);
+                    
+                    match snapshot.current_state {
+                        // For splash screen
+                        AppState::Splash => {
+                            draw_splash_screen(ctx.local.display);
+                        },
                         
-                        let snapshot = msm.snapshot();
-                        info!("state - {:?} -", msm.snapshot());
-                        if snapshot.current_state == MenuState::SubMenu 
-                            || snapshot.current_state == MenuState::DryWet 
-                            || snapshot.current_state == MenuState::Effect 
-                            || snapshot.current_state == MenuState::Speed
-                            || snapshot.current_state == MenuState::Magnitude 
-                            || snapshot.current_state == MenuState::Crush
-                            || snapshot.current_state == MenuState::SampleReduction{
-                                let sub_menu_context = msm.current();
-                                draw_submenu(sub_menu_context.next_item, sub_menu_context.previous_item, sub_menu_context.current_item, snapshot.current_state, ctx.local.display);
-                        } else {
-                            draw_screen_values(snapshot.key, snapshot.key, snapshot.note, snapshot.octave, snapshot.volume,  ctx.local.display);
+                        // For processing modes
+                        AppState::Processing(mode) => {
+                            draw_processing_screen(
+                                mode, 
+                                snapshot.key, 
+                                snapshot.octave, 
+                                snapshot.note, 
+                                snapshot.volume, 
+                                ctx.local.display
+                            );
+                        },
+                        
+                        // For effects screen
+                        AppState::EffectsProfile(mode) => {
+                            draw_effects_screen(
+                                mode,
+                                snapshot.key,
+                                ctx.local.display
+                            );
+                        },
+                        
+                        // For menu screens
+                        AppState::Menu(nav_state, _) => {
+                            match nav_state {
+                                MenuState::Selecting(idx) => {
+                                    let menu_context = msm.current();
+                                    draw_menu_screen(
+                                        menu_context.previous_item,
+                                        menu_context.current_item,
+                                        menu_context.next_item,
+                                        false,
+                                        ctx.local.display
+                                    );
+                                },
+                                MenuState::Editing(idx) => {
+                                    let menu_context = msm.current();
+                                    draw_menu_screen(
+                                        menu_context.previous_item,
+                                        menu_context.current_item,
+                                        menu_context.next_item,
+                                        true,
+                                        ctx.local.display
+                                    );
+                                }
+                            }
                         }
-                        ctx.local.display.flush().expect("could not draw to screen");
-                        update_state = false;
                     }
+                    
+                    ctx.local.display.flush().expect("could not draw to screen");
+                    update_state = false;
+                }
             });
 
         }
@@ -502,7 +560,7 @@ mod rtic_app {
         synthesis_magnitudes,
         synthesis_frequencies,
         previous_pitch_shift_ratio,
-        menu_state_machine
+        app_state_machine
     ], local = [], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // START ACTUAL FFT PROCESSING
@@ -537,7 +595,7 @@ mod rtic_app {
 
                 //cut out noise
                 // let mut magnitude_threshold = 0.05; // Adjust this threshold as needed
-                // ctx.shared.menu_state_machine.lock(|msm| {
+                // ctx.shared.app_state_machine.lock(|msm| {
                 //     magnitude_threshold = msm.magnitude as f32 / 100.0;
                 // });
                 // if amplitude < magnitude_threshold {
@@ -657,11 +715,11 @@ mod rtic_app {
                 let mut scale_frequencies = &C_MAJOR_SCALE_FREQUENCIES;
 
                 let mut octave_factor = 1.0; // Adjust this threshold as needed
-                ctx.shared.menu_state_machine.lock(|msm| {
+                ctx.shared.app_state_machine.lock(|msm| {
                     octave_factor = msm.snapshot().octave as f32 * 0.5;//todo snapshot?!?! nate halp
                 });
                 
-                ctx.shared.menu_state_machine.lock(|msm| {
+                ctx.shared.app_state_machine.lock(|msm| {
                     scale_frequencies = get_scale_by_key(msm.snapshot().key);
                 });
                 let target_frequency =
@@ -678,7 +736,7 @@ mod rtic_app {
 
                 
                 let mut formant_ratio = 1.0;
-                // ctx.shared.menu_state_machine.lock(|msm| {
+                // ctx.shared.app_state_machine.lock(|msm| {
                 //     formant_ratio = 20.0;//msm.speed as f32 / 10.0;//TODO: change to real var
                 // });
 
@@ -817,72 +875,35 @@ mod rtic_app {
             display
         }
 
-
-        fn draw_submenu(next:(&str, i32), prev: (&str, i32), current: (&str, i32), current_state: MenuState,  display: &mut LcdDisplay){
+        fn draw_splash_screen(display: &mut LcdDisplay) {
+            display.clear();
             
-            display.clear();
-
-            let text_style = MonoTextStyleBuilder::new()
-                .font(&FONT_6X9)
-                .text_color(BinaryColor::On) 
-                .background_color(BinaryColor::Off) 
-                .build();
-        
-            let h1_style = MonoTextStyleBuilder::new()
-                .font(&FONT_6X13)
-                .text_color(BinaryColor::On)   
-                .background_color(BinaryColor::Off) 
-                .build();
-
-            let options = [prev, current, next];
-
-            if current_state == MenuState::SubMenu {
-                Line::new(Point::new(2, 22), Point::new(103, 22))
-                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
-                .draw(display)
-                .expect("Failed to draw underline");
-            } else {
-                Line::new(Point::new(108, 22), Point::new(123, 22))
-                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
-                .draw(display)
-                .expect("Failed to draw underline");
-            }
-
-            for (i, &option) in options.iter().enumerate() {
+            // Display the splash image
+            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp"))
+                .expect("Could not load splash BMP");
                 
-                let style = if i == 1 { h1_style } else { text_style };
-
-                let y = 4 + (i as i32 * 12);
-
-                Text::with_baseline(option.0, Point::new(5, y), style, Baseline::Middle)
-                    .draw(display)
-                    .expect("Failed to draw option name");
-
-                let mut option_value_buffer: String<3> = String::new();
-                    write!(&mut option_value_buffer, "{}", option.1) 
-                        .expect("failed converting option value to string");
-
-                Text::with_baseline(&option_value_buffer, Point::new(110, y), style, Baseline::Middle)
-                    .draw(display)
-                    .expect("Failed to draw option value");
-            }
+            let image = Image::new(&bmp, Point::new(0, 0));
+            image.draw(display).expect("Failed to display splash image");
         }
-        
 
-        fn draw_screen_values(key: i32, mode: i32, note: i32, oct: i32, vol: i32, display: &mut LcdDisplay){
-
-            //TODO: only draw boxes over needed sections?
+        fn draw_processing_screen(
+            mode: ProcessingProfile, 
+            key: i32, 
+            octave: i32, 
+            note: i32, 
+            volume: i32, 
+            display: &mut LcdDisplay
+        ) {
             display.clear();
-
-            // Load the BMP image (16BPP).
+            
+            // Load the background image
             let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE_MenuBlank.bmp"))
                 .expect("Could not load BMP");
-        
-            // Wrap the BMP in an `Image` to position it. Draw at (0,0) for full coverage on a 128×32 display.
+            
             let image = Image::new(&bmp, Point::new(0, 0));
-            image.draw(display).expect("Draw thing");
-        
-            // Build a simple white-on-black text style using an ASCII font
+            image.draw(display).expect("Draw background");
+            
+            // Styles for text
             let text_style = MonoTextStyleBuilder::new()
                 .font(&FONT_6X9)
                 .text_color(BinaryColor::Off) 
@@ -894,35 +915,136 @@ mod rtic_app {
                 .text_color(BinaryColor::Off)   
                 .background_color(BinaryColor::On) 
                 .build();
-
-            // Example: fill a buffer with something to display
+            
+            // Format mode name
+            let mode_name = match mode {
+                ProcessingProfile::Autotune => "AUTO",
+                ProcessingProfile::Vocode => "VOCODE",
+                ProcessingProfile::Dry => "DRY",
+            };
+            
+            // Create text buffers
             let mut key_buffer: String<2> = String::new();
-                write!(&mut key_buffer, "{}", get_key_name(key)) 
-                    .expect("failed converting key to string");
-        
-            let mut mode_buffer: String<5> = String::new();
-                write!(&mut mode_buffer, "{}", get_mode_name(mode)) 
-                .expect("failed converting mode to string");
-        
+            write!(&mut key_buffer, "{}", get_key_name(key))
+                .expect("Failed converting key to string");
+            
+            let mut mode_buffer: String<6> = String::new();
+            write!(&mut mode_buffer, "{}", mode_name)
+                .expect("Failed converting mode to string");
+            
             let mut note_buffer: String<2> = String::new();
-                write!(&mut note_buffer, "{}", get_note_name(note, get_key(key))) 
-                .expect("failed converting note to string");
-        
+            write!(&mut note_buffer, "{}", get_note_name(note, get_key(key)))
+                .expect("Failed converting note to string");
+            
             let mut oct_buffer: String<1> = String::new();
-                write!(&mut oct_buffer, "{oct}")
-                .expect("failed converting oct to string");
-        
+            write!(&mut oct_buffer, "{octave}")
+                .expect("Failed converting octave to string");
+            
             let mut vol_buffer: String<3> = String::new();
-            write!(&mut vol_buffer, "{vol}")
-                .expect("failed converting vol to string");
-        
-        
-            // Draw the text on top of the image at coordinates (62,16)
+            write!(&mut vol_buffer, "{volume}")
+                .expect("Failed converting volume to string");
+            
+            // Draw text
             draw_text(display, &key_buffer, Point::new(26, 3), &text_style);
             draw_text(display, &mode_buffer, Point::new(80, 3), &text_style);
             draw_centered_text(display, &note_buffer, Point::new(62, 15), h1_style);
             draw_text(display, &oct_buffer, Point::new(14, 28), &text_style);
             draw_text(display, &vol_buffer, Point::new(112, 28), &text_style);
+        }
+
+        fn draw_effects_screen(
+            mode: ProcessingProfile,
+            key: i32,
+            display: &mut LcdDisplay
+        ) {
+            display.clear();
+            
+            // Load the background image
+            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE_MenuBlank.bmp"))
+                .expect("Could not load BMP");
+            
+            let image = Image::new(&bmp, Point::new(0, 0));
+            image.draw(display).expect("Draw background");
+            
+            // Styles for text
+            let text_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X9)
+                .text_color(BinaryColor::Off) 
+                .background_color(BinaryColor::On) 
+                .build();
+        
+            let h1_style = MonoTextStyleBuilder::new()
+                .font(&FONT_10X20)
+                .text_color(BinaryColor::Off)   
+                .background_color(BinaryColor::On) 
+                .build();
+            
+            // Format mode name
+            let mode_name = match mode {
+                ProcessingProfile::Autotune => "EFFECTS (Auto)",
+                ProcessingProfile::Vocode => "EFFECTS (Vocode)",
+                ProcessingProfile::Dry => "EFFECTS (Dry)",
+            };
+
+        }
+
+        fn draw_menu_screen(
+            prev: (&str, i32),
+            current: (&str, i32),
+            next: (&str, i32),
+            is_editing: bool,
+            display: &mut LcdDisplay
+        ) {
+            display.clear();
+            
+            // Styles for text
+            let text_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X9)
+                .text_color(BinaryColor::On) 
+                .background_color(BinaryColor::Off) 
+                .build();
+        
+            let h1_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X13)
+                .text_color(BinaryColor::On)   
+                .background_color(BinaryColor::Off) 
+                .build();
+            
+            
+            // Draw items
+            let options = [prev, current, next];
+            
+            if is_editing {
+                Line::new(Point::new(2, 22), Point::new(103, 22))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+                    .draw(display)
+                    .expect("Failed to draw name underline");
+            } else {
+                Line::new(Point::new(108, 22), Point::new(123, 22))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+                    .draw(display)
+                    .expect("Failed to draw value underline");
+            }
+            
+            // Draw all menu items (previous, current, next)
+            for (i, &option) in options.iter().enumerate() {
+                let style = if i == 1 { h1_style } else { text_style };
+                let y = 10 + (i as i32 * 12);
+                
+                // Draw option name
+                Text::with_baseline(option.0, Point::new(5, y), style, Baseline::Middle)
+                    .draw(display)
+                    .expect("Failed to draw option name");
+                
+                // Draw option value
+                let mut option_value_buffer: String<3> = String::new();
+                write!(&mut option_value_buffer, "{}", option.1)
+                    .expect("Failed converting option value to string");
+                
+                Text::with_baseline(&option_value_buffer, Point::new(110, y), style, Baseline::Middle)
+                    .draw(display)
+                    .expect("Failed to draw option value");
+            }
         }
 
         fn draw_text<D>(
@@ -1025,49 +1147,109 @@ mod rtic_app {
             state
         }
 
-        fn handle_button_press(row: usize, col: usize) -> state_machines::MenuEvent {
-            match (row, col) {
-                (0,2) => state_machines::MenuEvent::SetNote(1),
-                (0,1) => state_machines::MenuEvent::SetNote(2),
-                (0,0) => state_machines::MenuEvent::SetNote(3),
-                (1,2) => state_machines::MenuEvent::SetNote(4),
-                (1,1) => state_machines::MenuEvent::SetNote(5),
-                (1,0) => state_machines::MenuEvent::SetNote(6),
-                (2,2) => state_machines::MenuEvent::SetNote(7),
-                (2,1) => state_machines::MenuEvent::SetNote(8),
-                (2,0) => state_machines::MenuEvent::SetNote(9),
-                (3,0) => {
-                    info!("BBottom-left button pressed!");
-                    state_machines::MenuEvent::GoToSubMenu
+        // Button press handling based on current state
+        fn handle_button_press(row: usize, col: usize, current_state: AppState) -> state_machines::AppEvent {
+            match current_state {
+                // In Processing state - buttons are notes or key changes
+                AppState::Processing(_) => {
+                    match (row, col) {
+                        // First 9 buttons (3x3 grid) are notes
+                        (0, 0) => state_machines::AppEvent::KeypadPress(1),
+                        (0, 1) => state_machines::AppEvent::KeypadPress(2),
+                        (0, 2) => state_machines::AppEvent::KeypadPress(3),
+                        (1, 0) => state_machines::AppEvent::KeypadPress(4),
+                        (1, 1) => state_machines::AppEvent::KeypadPress(5),
+                        (1, 2) => state_machines::AppEvent::KeypadPress(6),
+                        (2, 0) => state_machines::AppEvent::KeypadPress(7),
+                        (2, 1) => state_machines::AppEvent::KeypadPress(8),
+                        (2, 2) => state_machines::AppEvent::KeypadPress(9),
+                        (3, 0) => state_machines::AppEvent::KeypadPress(10),
+                        (3, 1) => state_machines::AppEvent::KeypadPress(11),
+                        (3, 2) => state_machines::AppEvent::KeypadPress(12),
+                        
+                        _ => state_machines::AppEvent::NoOp
+                    }
                 },
-                (3,1) => {info!("BBottom-middle button pressed!");
-                state_machines::MenuEvent::GoToOctave
-            },
-                (3,2) => {info!("BBottom-right button pressed!");
-                state_machines::MenuEvent::GoToKey
-            },
-                _ => state_machines::MenuEvent::NoOp
+                
+                // In Effects state - buttons control effects
+                AppState::EffectsProfile(_) => {
+                    match (row, col) {
+                        // Row 1: Octave controls
+                        (0, 0) => {
+                            info!("Octave low enabled");
+                            state_machines::AppEvent::NoOp
+                        }
+                        (0, 1) => {
+                            info!("Octave normal enabled");
+                            state_machines::AppEvent::NoOp    
+                        }
+                        (0, 2) => {
+                            info!("Octave High enabled");
+                            state_machines::AppEvent::NoOp    
+                        }
+                        // Row 2: Crush controls
+                        (1, 0) => {
+                            info!("Crush 1 enabled");
+                            state_machines::AppEvent::NoOp
+                        },
+                        (1, 1) => {
+                            info!("No crush");
+                            state_machines::AppEvent::NoOp
+                        },
+                        (1, 2) => {
+                            info!("Crush 2 enabled");
+                            state_machines::AppEvent::NoOp
+                        },
+                        
+                        // Row 3: Formant controls
+                        (2, 0) => {
+                            info!("Formant male");
+                            state_machines::AppEvent::NoOp
+                        },
+                        (2, 1) => {
+                            info!("No formant");
+                            state_machines::AppEvent::NoOp
+                        },
+                        (2, 2) => {
+                            info!("Formant female");
+                            state_machines::AppEvent::NoOp
+                        },
+                        
+                        // Row 4: Key and mode controls
+                        (3, 0) => state_machines::AppEvent::KeyChange(-1), // Key down
+                        (3, 1) => state_machines::AppEvent::CycleProcessingProfile, // Cycle mode
+                        (3, 2) => state_machines::AppEvent::KeyChange(1), // Key up
+                        
+                        _ => state_machines::AppEvent::NoOp
+                    }
+                },
+                
+                // In Menu state - buttons go back to processing
+                AppState::Menu(_, _) => {
+                    state_machines::AppEvent::EncoderDoublePress // Exit menu on any button press
+                },
+                
+                // In Splash state - any button exits splash
+                AppState::Splash => {
+                    state_machines::AppEvent::SplashComplete
+                }
             }
         }
         
-        fn handle_button_release(row: usize, col: usize) -> state_machines::MenuEvent {
-
-            info!("Button ({},{}) released!", row, col);
-            match (row, col) {
-                (0,2) => state_machines::MenuEvent::SetNote(0),
-                (0,1) => state_machines::MenuEvent::SetNote(0),
-                (0,0) => state_machines::MenuEvent::SetNote(0),
-                (1,2) => state_machines::MenuEvent::SetNote(0),
-                (1,1) => state_machines::MenuEvent::SetNote(0),
-                (1,0) => state_machines::MenuEvent::SetNote(0),
-                (2,2) => state_machines::MenuEvent::SetNote(0),
-                (2,1) => state_machines::MenuEvent::SetNote(0),
-                (2,0) => state_machines::MenuEvent::SetNote(0),
-               
-                 _ => (state_machines::MenuEvent::GoToVolume)
+        fn handle_button_release(row: usize, col: usize, current_state: AppState) -> state_machines::AppEvent {
+            match current_state {
+                // In Processing state - release notes
+                AppState::Processing(_) => {
+                    info!("note off (todo)");
+                    match (row, col) {
+                        (0, _) | (1, _) | (2, _) => state_machines::AppEvent::NoOp, // Stop the note
+                        _ => state_machines::AppEvent::NoOp
+                    }
+                },
+                
+                // Other states - button releases don't matter
+                _ => state_machines::AppEvent::NoOp
             }
-            // Possibly do something else on release
-            
         }
         
     }
