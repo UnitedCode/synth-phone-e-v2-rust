@@ -290,13 +290,13 @@ mod rtic_app {
                     let mut out_sample = *left;
 
 
-                    // Get current processing mode
-                    let mut current_mode = ProcessingProfile::Autotune;
+                    // Get current processing profile
+                    let mut current_process = ProcessingProfile::Autotune;
                     ctx.shared.app_state_machine.lock(|msm| {
                         let snapshot = msm.snapshot();
                         match snapshot.current_state {
-                            AppState::Processing(mode) | AppState::EffectsProfile(mode) | AppState::Menu(_, mode) => {
-                                current_mode = mode;
+                            AppState::Processing(process) | AppState::EffectsProfile(process) | AppState::Menu(_, process) => {
+                                current_process = process;
                             },
                             AppState::Splash => {}
                         }
@@ -307,8 +307,8 @@ mod rtic_app {
                         in_buffer.write(*left);
                     });
 
-                    // Process based on current mode
-                    let apply_effects = match current_mode {
+                    // Process based on current processing profile
+                    let apply_effects = match current_process {
                         ProcessingProfile::Autotune => true,  // Apply autotune
                         ProcessingProfile::Vocode => true,    // Apply vocoder
                         ProcessingProfile::Dry => false,      // Passthrough (no processing)
@@ -492,10 +492,10 @@ mod rtic_app {
                             draw_splash_screen(ctx.local.display);
                         },
                         
-                        // For processing modes
-                        AppState::Processing(mode) => {
+                        // For processing profiles
+                        AppState::Processing(process) => {
                             draw_processing_screen(
-                                mode, 
+                                process, 
                                 snapshot.key, 
                                 snapshot.octave, 
                                 snapshot.note, 
@@ -505,9 +505,9 @@ mod rtic_app {
                         },
                         
                         // For effects screen
-                        AppState::EffectsProfile(mode) => {
+                        AppState::EffectsProfile(process) => {
                             draw_effects_screen(
-                                mode,
+                                process,
                                 snapshot.key,
                                 ctx.local.display
                             );
@@ -883,7 +883,7 @@ mod rtic_app {
         }
 
         fn draw_processing_screen(
-            mode: ProcessingProfile, 
+            process: ProcessingProfile, 
             key: i32, 
             octave: i32, 
             note: i32, 
@@ -902,18 +902,18 @@ mod rtic_app {
             // Styles for text
             let text_style = MonoTextStyleBuilder::new()
                 .font(&FONT_6X9)
-                .text_color(BinaryColor::Off) 
-                .background_color(BinaryColor::On) 
+                .text_color(BinaryColor::On) 
+                .background_color(BinaryColor::Off) 
                 .build();
         
             let h1_style = MonoTextStyleBuilder::new()
-                .font(&FONT_10X20)
-                .text_color(BinaryColor::Off)   
-                .background_color(BinaryColor::On) 
+                .font(&FONT_6X13)
+                .text_color(BinaryColor::On)   
+                .background_color(BinaryColor::Off) 
                 .build();
             
-            // Format mode name
-            let mode_name = match mode {
+            // Process profile name
+            let process_profile = match process {
                 ProcessingProfile::Autotune => "AUTO",
                 ProcessingProfile::Vocode => "VOCODE",
                 ProcessingProfile::Dry => "DRY",
@@ -924,9 +924,9 @@ mod rtic_app {
             write!(&mut key_buffer, "{}", get_key_name(key))
                 .expect("Failed converting key to string");
             
-            let mut mode_buffer: String<6> = String::new();
-            write!(&mut mode_buffer, "{}", mode_name)
-                .expect("Failed converting mode to string");
+            let mut mode_buffer: String<5> = String::new();
+                write!(&mut mode_buffer, "{}", get_mode_name(key)) 
+                .expect("failed converting mode to string");
             
             let mut note_buffer: String<2> = String::new();
             info!("note - {:?} -", note);
@@ -950,7 +950,7 @@ mod rtic_app {
         }
 
         fn draw_effects_screen(
-            mode: ProcessingProfile,
+            process: ProcessingProfile,
             key: i32,
             display: &mut LcdDisplay
         ) {
@@ -1050,7 +1050,7 @@ mod rtic_app {
                 .build();
 
             let mut process_profile_name = "";
-            match mode {
+            match process {
                 ProcessingProfile::Autotune => {
                     process_profile_name = "Autotune";
 
@@ -1309,9 +1309,9 @@ mod rtic_app {
                             state_machines::AppEvent::NoOp
                         },
                         
-                        // Row 4: Key and mode controls
+                        // Row 4: Key and Process controls
                         (3, 0) => state_machines::AppEvent::KeyChange(-1), // Key down
-                        (3, 1) => state_machines::AppEvent::CycleProcessingProfile, // Cycle mode
+                        (3, 1) => state_machines::AppEvent::CycleProcessingProfile, // Cycle Process Profiles
                         (3, 2) => state_machines::AppEvent::KeyChange(1), // Key up
                         
                         _ => state_machines::AppEvent::NoOp
