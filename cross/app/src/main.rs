@@ -42,12 +42,7 @@ mod rtic_app {
         use core::fmt::Write;
         use core::f32::consts::PI;
         use embedded_graphics::{
-            image::Image,
-            mono_font::{ascii::{FONT_10X20, FONT_6X10, FONT_6X9, FONT_6X13}, MonoTextStyle, MonoTextStyleBuilder},
-            pixelcolor::BinaryColor,
-            prelude::*,
-            text::{Baseline, Text},
-            primitives::{Line, PrimitiveStyle},
+            image::{Image, ImageRawBE, SubImage}, mono_font::{ascii::{FONT_10X20, FONT_6X10, FONT_6X13, FONT_6X9}, MonoTextStyle, MonoTextStyleBuilder}, pixelcolor::BinaryColor, prelude::*, primitives::{Line, PrimitiveStyle, Rectangle}, text::{Alignment, Baseline, Text}, 
         };
         use libdaisy::{audio, hid, logger, prelude::{Output, PushPull, Input}, system, gpio::*};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf, roundf};
@@ -154,7 +149,7 @@ mod rtic_app {
                 .into_pull_up_input();
 
             let mut encoder_button = hid::Switch::new(encoder_sw_pin, hid::SwitchType::PullUp);
-            encoder_button.set_double_thresh(Some(300)); 
+            encoder_button.set_double_thresh(Some(100)); 
 
             let encoder_1 = RotaryEncoder::new(encoder_dt, encoder_clk).into_standard_mode();
 
@@ -965,28 +960,125 @@ mod rtic_app {
             let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE-PerformanceProfile-Empty.bmp"))
                 .expect("Could not load BMP");
             
+            //TODO:store these so I don't have to make this each time
+            let sprite_atlas = ImageRawBE::<BinaryColor>::new(include_bytes!("../assets/SynthphoneE-Spritesheet.raw"), 65);
+
+            // Extract sub-images from the sprite atlas
+            let low_oct_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 0), Size::new(13, 8)));
+            let med_oct_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 0), Size::new(13, 8)));
+            let high_oct_on    = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 0), Size::new(13, 8)));
+
+            let crush_one_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 8), Size::new(13, 8)));
+            let crush_none_on  = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 8), Size::new(13, 8)));
+            let crush_two_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 8), Size::new(13, 8)));
+
+            let formant_male_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 16), Size::new(13, 8)));
+            let formant_none_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 16), Size::new(13, 8)));
+            let formant_female_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 16), Size::new(13, 8)));
+
+            let key_down_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 24), Size::new(13, 8)));
+            let key_up_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 24), Size::new(13, 8)));
+
+            let voice_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 0), Size::new(13, 8)));
+            let voice_off    = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 0), Size::new(13, 8)));
+            let vocode_on    = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 24), Size::new(13, 8)));
+            let vocode_off   = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 16), Size::new(13, 8)));
+            let autotune_on  = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 24), Size::new(13, 8)));
+            let autotune_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 8), Size::new(13, 8)));
+
+
+            // Convert BMPs into Image objects
+            let bg = Image::new(&bmp, Point::new(0, 0));
+
+            let low_oct_on_img = Image::new(&low_oct_on, Point::new(0, 0));
+            let med_oct_on_img = Image::new(&med_oct_on, Point::new(13, 0));
+            let high_oct_on_img = Image::new(&high_oct_on, Point::new(25, 0));
+
+            let crush_one_on_img = Image::new(&crush_one_on, Point::new(0, 8));
+            let crush_none_on_img = Image::new(&crush_none_on, Point::new(13, 8));
+            let crush_two_on_img = Image::new(&crush_two_on, Point::new(25, 8));
+
+            let formant_male_on_img = Image::new(&formant_male_on, Point::new(0, 16));
+            let formant_none_on_img = Image::new(&formant_none_on, Point::new(13, 16));
+            let formant_female_on_img = Image::new(&formant_female_on, Point::new(25, 16));
+
+            let key_down_on_img = Image::new(&key_down_on, Point::new(0, 24));
+            let key_up_on_img = Image::new(&key_up_on, Point::new(25, 24));
+
+            let voice_on_img = Image::new(&voice_on, Point::new(13, 24));
+            let voice_off_img = Image::new(&voice_off, Point::new(13, 24));
+            let vocode_on_img = Image::new(&vocode_on, Point::new(13, 24));
+            let vocode_off_img = Image::new(&vocode_off, Point::new(13, 24));
+            let autotune_on_img = Image::new(&autotune_on, Point::new(13, 24));
+            let autotune_off_img = Image::new(&autotune_off, Point::new(13, 24));
+
             let image = Image::new(&bmp, Point::new(0, 0));
             image.draw(display).expect("Draw background");
+
+                // Row 1: Octaves
+            //low_oct_on_img.draw(display).expect("Draw background");
+            //med_oct_on_img.draw(display).expect("Draw background");
+            high_oct_on_img.draw(display).expect("Draw background");
+
+            // Row 2: Crush
+            crush_one_on_img.draw(display).expect("Draw background");
+            //crush_none_on_img.draw(display).expect("Draw background");
+            //crush_two_on_img.draw(display).expect("Draw background");
+
+            // Row 3: Formant
+            //formant_male_on_img.draw(display).expect("Draw background");
+            formant_none_on_img.draw(display).expect("Draw background");
+            //formant_female_on_img.draw(display).expect("Draw background");
+
+            // Row 4: Key & Voice
+            //key_down_on_img.draw(display).expect("Draw background");
+            //vocode_on_img.draw(display).expect("Draw background");
+            //key_up_on_img.draw(display).expect("Draw background");
+            
             
             // Styles for text
             let text_style = MonoTextStyleBuilder::new()
                 .font(&FONT_6X9)
-                .text_color(BinaryColor::Off) 
-                .background_color(BinaryColor::On) 
+                .text_color(BinaryColor::On) 
+                .background_color(BinaryColor::Off) 
                 .build();
         
             let h1_style = MonoTextStyleBuilder::new()
                 .font(&FONT_10X20)
-                .text_color(BinaryColor::Off)   
-                .background_color(BinaryColor::On) 
+                .text_color(BinaryColor::On)   
+                .background_color(BinaryColor::Off) 
                 .build();
-            
-            // Format mode name
-            let mode_name = match mode {
-                ProcessingProfile::Autotune => "EFFECTS (Auto)",
-                ProcessingProfile::Vocode => "EFFECTS (Vocode)",
-                ProcessingProfile::Dry => "EFFECTS (Dry)",
-            };
+
+            let mut process_profile_name = "";
+            match mode {
+                ProcessingProfile::Autotune => {
+                    process_profile_name = "Autotune";
+
+                },
+                ProcessingProfile::Vocode => {
+                    process_profile_name = "Vocode";
+
+                },
+                ProcessingProfile::Dry => {
+                    process_profile_name = "Dry Vox";
+                }
+            }
+
+            Text::with_alignment(
+                process_profile_name,
+                display.bounding_box().center() + Point::new(26, 3),
+                text_style,
+                Alignment::Center,
+            )
+            .draw(display).expect("Draw process text");
+
+            Text::with_alignment(
+                get_key_name(key),
+                display.bounding_box().center() + Point::new(26, 14),
+                text_style,
+                Alignment::Center,
+            )
+            .draw(display).expect("Draw key text");
 
         }
 
