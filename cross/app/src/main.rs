@@ -1325,11 +1325,11 @@ mod rtic_app {
             match current_state {
                 // In Processing state - release notes
                 AppState::Processing(_) => {
-                    info!("note off");
-                    match (row, col) {
-                        (0, _) | (1, _) | (2, _) => state_machines::AppEvent::KeypadPress(0), // Stop the note
-                        _ => state_machines::AppEvent::NoOp
-                    }
+                    state_machines::AppEvent::KeypadPress(0)
+                },
+
+                AppState::EffectsProfile(_) => {
+                    state_machines::AppEvent::KeypadPress(0)
                 },
                 
                 // Other states - button releases don't matter
