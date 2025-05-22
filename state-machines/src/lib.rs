@@ -337,6 +337,13 @@ impl AppStateMachine {
     pub fn handle_event(&mut self, event: AppEvent) {
         // Handle special events for specific states
         match (&self.state, event) {
+            
+            //adjust volume
+            (AppState::Processing(_), AppEvent::EncoderRotate(delta))
+            | (AppState::EffectsProfile(_), AppEvent::EncoderRotate(delta)) => {
+                self.volume = clamp_value(self.volume, delta, 0, 10);
+            },
+
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
                 if key <= 9 {
