@@ -42,7 +42,7 @@ mod rtic_app {
         use core::fmt::Write;
         use core::f32::consts::PI;
         use embedded_graphics::{
-            image::{Image, ImageRawBE, SubImage}, mono_font::{ascii::{FONT_10X20, FONT_6X10, FONT_6X13, FONT_6X9}, MonoTextStyle, MonoTextStyleBuilder}, pixelcolor::BinaryColor, prelude::*, primitives::{Line, PrimitiveStyle, Rectangle}, text::{Alignment, Baseline, Text}, 
+            image::{Image, ImageRawBE, SubImage}, mono_font::{ascii::{FONT_10X20, FONT_5X7, FONT_6X13, FONT_6X9}, MonoTextStyle, MonoTextStyleBuilder}, pixelcolor::BinaryColor, prelude::*, primitives::{Line, PrimitiveStyle, Rectangle}, text::{Alignment, Baseline, Text}, 
         };
         use libdaisy::{audio, hid, logger, prelude::{Output, PushPull, Input}, system, gpio::*};
         use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf, roundf};
@@ -325,7 +325,7 @@ mod rtic_app {
                     // Apply sample rate reduction effect
                     let mut sr_factor = 1;
                     ctx.shared.app_state_machine.lock(|msm| {
-                        sr_factor = msm.snapshot().crush1; 
+                        //sr_factor = msm.snapshot().crush1; 
                     });
 
                     // Apply the effect
@@ -339,7 +339,7 @@ mod rtic_app {
                     // 3) Get bit depth from your menu
                     let mut bit_depth = 32;
                     ctx.shared.app_state_machine.lock(|msm| { 
-                        bit_depth = msm.snapshot().crush2;
+                        //bit_depth = msm.snapshot().crush2;
                     });
                     out_sample = bitcrush(out_sample, bit_depth as u8);
 
@@ -509,6 +509,9 @@ mod rtic_app {
                             draw_effects_screen(
                                 process,
                                 snapshot.key,
+                                snapshot.octave,
+                                snapshot.crush,
+                                snapshot.formant,
                                 ctx.local.display
                             );
                         },
@@ -902,22 +905,30 @@ mod rtic_app {
             // Styles for text
             let text_style = MonoTextStyleBuilder::new()
                 .font(&FONT_6X9)
+                .text_color(BinaryColor::Off) 
+                .background_color(BinaryColor::On) 
+                .build();
+
+            let text_style2 = MonoTextStyleBuilder::new()
+                .font(&FONT_5X7)
                 .text_color(BinaryColor::On) 
                 .background_color(BinaryColor::Off) 
                 .build();
         
             let h1_style = MonoTextStyleBuilder::new()
-                .font(&FONT_6X13)
-                .text_color(BinaryColor::On)   
-                .background_color(BinaryColor::Off) 
+                .font(&FONT_10X20)
+                .text_color(BinaryColor::Off)   
+                .background_color(BinaryColor::On) 
                 .build();
             
             // Process profile name
             let process_profile = match process {
-                ProcessingProfile::Autotune => "AUTO",
-                ProcessingProfile::Vocode => "VOCODE",
-                ProcessingProfile::Dry => "DRY",
+                ProcessingProfile::Autotune => "Autotune",
+                ProcessingProfile::Vocode => "Vocode",
+                ProcessingProfile::Dry => "Dry Vox",
             };
+
+            info!("{}", process_profile);
             
             // Create text buffers
             let mut key_buffer: String<2> = String::new();
@@ -947,11 +958,15 @@ mod rtic_app {
             draw_centered_text(display, &note_buffer, Point::new(62, 15), h1_style);
             draw_text(display, &oct_buffer, Point::new(14, 28), &text_style);
             draw_text(display, &vol_buffer, Point::new(112, 28), &text_style);
+            draw_centered_text(display, &process_profile, Point::new(62, 28), text_style2);
         }
 
         fn draw_effects_screen(
             process: ProcessingProfile,
             key: i32,
+            octave: i32,
+            crush: i32,
+            formant: i32,
             display: &mut LcdDisplay
         ) {
             display.clear();
@@ -1015,20 +1030,29 @@ mod rtic_app {
             let image = Image::new(&bmp, Point::new(0, 0));
             image.draw(display).expect("Draw background");
 
-                // Row 1: Octaves
-            //low_oct_on_img.draw(display).expect("Draw background");
-            //med_oct_on_img.draw(display).expect("Draw background");
-            high_oct_on_img.draw(display).expect("Draw background");
+            // Row 1: Octave
+            match octave {
+                0 => med_oct_on_img.draw(display).expect("Draw med octave"),
+                1 => low_oct_on_img.draw(display).expect("Draw low octave"),
+                2 => high_oct_on_img.draw(display).expect("Draw high octave"),
+                _ => med_oct_on_img.draw(display).expect("Draw med octave (default)")
+            }
 
             // Row 2: Crush
-            crush_one_on_img.draw(display).expect("Draw background");
-            //crush_none_on_img.draw(display).expect("Draw background");
-            //crush_two_on_img.draw(display).expect("Draw background");
+            match crush {
+                0 => crush_none_on_img.draw(display).expect("Draw no crush"),
+                1 => crush_one_on_img.draw(display).expect("Draw crush 1"),
+                2 => crush_two_on_img.draw(display).expect("Draw crush 2"),
+                _ => crush_none_on_img.draw(display).expect("Draw no crush (default)")
+            }
 
             // Row 3: Formant
-            //formant_male_on_img.draw(display).expect("Draw background");
-            formant_none_on_img.draw(display).expect("Draw background");
-            //formant_female_on_img.draw(display).expect("Draw background");
+            match formant {
+                0 => formant_none_on_img.draw(display).expect("Draw no formant"),
+                1 => formant_male_on_img.draw(display).expect("Draw formant male"),
+                2 => formant_female_on_img.draw(display).expect("Draw formant female"),
+                _ => formant_none_on_img.draw(display).expect("Draw no formant (default)")
+            }
 
             // Row 4: Key & Voice
             //key_down_on_img.draw(display).expect("Draw background");
@@ -1049,23 +1073,19 @@ mod rtic_app {
                 .background_color(BinaryColor::Off) 
                 .build();
 
-            let mut process_profile_name = "";
-            match process {
-                ProcessingProfile::Autotune => {
-                    process_profile_name = "Autotune";
+            let mut mode_buffer: String<8> = String::new();
+                write!(&mut mode_buffer, "{} {}", get_key_name(key), get_mode_name(key)) 
+                .expect("failed converting mode to string");
 
-                },
-                ProcessingProfile::Vocode => {
-                    process_profile_name = "Vocode";
-
-                },
-                ProcessingProfile::Dry => {
-                    process_profile_name = "Dry Vox";
-                }
-            }
+            // Process profile name
+            let process_profile = match process {
+                ProcessingProfile::Autotune => "Autotune",
+                ProcessingProfile::Vocode => "Vocode",
+                ProcessingProfile::Dry => "Dry Vox",
+            };
 
             Text::with_alignment(
-                process_profile_name,
+                &mode_buffer,
                 display.bounding_box().center() + Point::new(26, 3),
                 text_style,
                 Alignment::Center,
@@ -1073,7 +1093,7 @@ mod rtic_app {
             .draw(display).expect("Draw process text");
 
             Text::with_alignment(
-                get_key_name(key),
+                process_profile,
                 display.bounding_box().center() + Point::new(26, 14),
                 text_style,
                 Alignment::Center,
@@ -1192,24 +1212,31 @@ mod rtic_app {
             row_4: &Daisy18<Input>,
         ) -> [[bool; 3]; 4] {
             let mut state = [[false; 3]; 4];
-    
-            // Helper closure to read rows
+
+            // Helper closure to read rows in correct order
             let read_rows = |
                             r1: &Daisy15<Input>,
                             r2: &Daisy16<Input>,
                             r3: &Daisy17<Input>,
                             r4: &Daisy18<Input>| -> [bool; 4] {
                 [
-                    r1.is_low(), // true if button pressed
-                    r2.is_low(),
-                    r3.is_low(),
-                    r4.is_low(),
+                    r1.is_low(), // Row 1 (top) - pins match rows
+                    r2.is_low(), // Row 2
+                    r3.is_low(), // Row 3
+                    r4.is_low(), // Row 4 (bottom)
                 ]
             };
-    
 
-    
-            // // Drive COL_2 low, others high
+            // Drive COL_1 low, others high (first/left column)
+            col_1.set_low();
+            col_2.set_high();
+            col_3.set_high();
+            let col1_rows = read_rows(row_1, row_2, row_3, row_4);
+            for (r, pressed) in col1_rows.iter().enumerate() {
+                state[r][0] = *pressed;
+            }
+
+            // Drive COL_2 low, others high (middle column)
             col_1.set_high();
             col_2.set_low();
             col_3.set_high();
@@ -1218,16 +1245,7 @@ mod rtic_app {
                 state[r][1] = *pressed;
             }
 
-            // Drive COL_1 low, others high
-            col_2.set_high();
-            col_1.set_low();
-            col_3.set_high();
-            let col1_rows = read_rows(row_1, row_2, row_3, row_4);
-            for (r, pressed) in col1_rows.iter().enumerate() {
-                state[r][0] = *pressed;
-            }
-    
-            // Drive COL_3 low, others high
+            // Drive COL_3 low, others high (right column)
             col_1.set_high();
             col_2.set_high();
             col_3.set_low();
@@ -1235,87 +1253,26 @@ mod rtic_app {
             for (r, pressed) in col3_rows.iter().enumerate() {
                 state[r][2] = *pressed;
             }
-    
-            // Finally, return all keys states
-            // state[row][col] = true means that button is pressed
+
+            // Return state with the correct mapping
             state
         }
 
         // Button press handling based on current state
         fn handle_button_press(row: usize, col: usize, current_state: AppState) -> state_machines::AppEvent {
+
+            let key_num = row * 3 + col + 1;
+            info!("{}", key_num);
+
             match current_state {
                 // In Processing state - buttons are notes or key changes
                 AppState::Processing(_) => {
-                    match (row, col) {
-                        // First 9 buttons (3x3 grid) are notes
-                        (0, 0) => state_machines::AppEvent::KeypadPress(1),
-                        (0, 1) => state_machines::AppEvent::KeypadPress(2),
-                        (0, 2) => state_machines::AppEvent::KeypadPress(3),
-                        (1, 0) => state_machines::AppEvent::KeypadPress(4),
-                        (1, 1) => state_machines::AppEvent::KeypadPress(5),
-                        (1, 2) => state_machines::AppEvent::KeypadPress(6),
-                        (2, 0) => state_machines::AppEvent::KeypadPress(7),
-                        (2, 1) => state_machines::AppEvent::KeypadPress(8),
-                        (2, 2) => state_machines::AppEvent::KeypadPress(9),
-                        (3, 0) => state_machines::AppEvent::KeypadPress(10),
-                        (3, 1) => state_machines::AppEvent::KeypadPress(11),
-                        (3, 2) => state_machines::AppEvent::KeypadPress(12),
-                        
-                        _ => state_machines::AppEvent::NoOp
-                    }
+                    state_machines::AppEvent::KeypadPress(key_num)
                 },
                 
                 // In Effects state - buttons control effects
                 AppState::EffectsProfile(_) => {
-                    match (row, col) {
-                        // Row 1: Octave controls
-                        (0, 0) => {
-                            info!("Octave low enabled");
-                            state_machines::AppEvent::NoOp
-                        }
-                        (0, 1) => {
-                            info!("Octave normal enabled");
-                            state_machines::AppEvent::NoOp    
-                        }
-                        (0, 2) => {
-                            info!("Octave High enabled");
-                            state_machines::AppEvent::NoOp    
-                        }
-                        // Row 2: Crush controls
-                        (1, 0) => {
-                            info!("Crush 1 enabled");
-                            state_machines::AppEvent::NoOp
-                        },
-                        (1, 1) => {
-                            info!("No crush");
-                            state_machines::AppEvent::NoOp
-                        },
-                        (1, 2) => {
-                            info!("Crush 2 enabled");
-                            state_machines::AppEvent::NoOp
-                        },
-                        
-                        // Row 3: Formant controls
-                        (2, 0) => {
-                            info!("Formant male");
-                            state_machines::AppEvent::NoOp
-                        },
-                        (2, 1) => {
-                            info!("No formant");
-                            state_machines::AppEvent::NoOp
-                        },
-                        (2, 2) => {
-                            info!("Formant female");
-                            state_machines::AppEvent::NoOp
-                        },
-                        
-                        // Row 4: Key and Process controls
-                        (3, 0) => state_machines::AppEvent::KeyChange(-1), // Key down
-                        (3, 1) => state_machines::AppEvent::CycleProcessingProfile, // Cycle Process Profiles
-                        (3, 2) => state_machines::AppEvent::KeyChange(1), // Key up
-                        
-                        _ => state_machines::AppEvent::NoOp
-                    }
+                    state_machines::AppEvent::KeypadPress(key_num)
                 },
                 
                 // In Menu state - buttons go back to processing
