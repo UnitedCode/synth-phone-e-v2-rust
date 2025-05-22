@@ -275,6 +275,9 @@ pub struct AppStateMachine {
     pub volume: i32,
     pub note: i32,
     pub menu_index: usize,
+    pub key_down_pressed: bool,
+    pub process_cycle_pressed: bool,
+    pub key_up_pressed: bool
 }
 
 // Add a snapshot struct to hold all the state information
@@ -291,6 +294,9 @@ pub struct AppStateMachineSnapshot {
     pub autotune_speed: i32,
     pub magnitude: i32,
     pub pad_matrix: i32,
+    pub key_down_pressed: bool,
+    pub process_cycle_pressed: bool,
+    pub key_up_pressed: bool
 }
 
 // Add a MenuContext struct for menu display
@@ -313,6 +319,9 @@ impl AppStateMachine {
             volume: 0,
             note: 0,
             menu_index: 0,
+            key_down_pressed: false,
+            process_cycle_pressed: false,
+            key_up_pressed: false,
         }
     }
     
@@ -335,6 +344,9 @@ impl AppStateMachine {
             autotune_speed: self.values.autotune_speed,
             magnitude: self.values.magnitude,
             pad_matrix: self.values.pad_matrix,
+            key_down_pressed: self.key_down_pressed,
+            process_cycle_pressed: self.process_cycle_pressed,
+            key_up_pressed: self.key_up_pressed,
         }
     }
     
@@ -385,11 +397,24 @@ impl AppStateMachine {
                     9 => self.current_formant = 2,  // Female
                     
                     // Row 4: Key and profile controls (keys 10-12)
-                    10 => self.current_key = (self.current_key + 23) % 24, // Key down
-                    11 => self.state = self.state.cycle_profile(),         // Cycle profile
-                    12 => self.current_key = (self.current_key + 1) % 24,  // Key up
+                    10 => {
+                        self.key_down_pressed = true;
+                        self.current_key = (self.current_key + 23) % 24; // Key down
+                    },
+                    11 => {
+                        self.process_cycle_pressed = true;
+                        self.state = self.state.cycle_profile();         // Cycle profile
+                    },
+                    12 => {
+                        self.key_up_pressed = true;
+                        self.current_key = (self.current_key + 1) % 24;  // Key up
+                    },
                     
-                    _ => (), // Invalid key
+                    _ => {
+                        self.key_down_pressed = false;
+                        self.process_cycle_pressed = false;
+                        self.key_up_pressed = false;
+                    }, // Key Released
                 }
             },
             

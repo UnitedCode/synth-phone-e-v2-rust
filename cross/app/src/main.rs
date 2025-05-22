@@ -512,6 +512,9 @@ mod rtic_app {
                                 snapshot.octave,
                                 snapshot.crush,
                                 snapshot.formant,
+                                snapshot.key_down_pressed,
+                                snapshot.process_cycle_pressed,
+                                snapshot.key_up_pressed,
                                 ctx.local.display
                             );
                         },
@@ -967,6 +970,9 @@ mod rtic_app {
             octave: i32,
             crush: i32,
             formant: i32,
+            key_up_pressed: bool,
+            process_cycle_pressed: bool,
+            key_down_pressed: bool,
             display: &mut LcdDisplay
         ) {
             display.clear();
@@ -1055,9 +1061,44 @@ mod rtic_app {
             }
 
             // Row 4: Key & Voice
-            //key_down_on_img.draw(display).expect("Draw background");
-            //vocode_on_img.draw(display).expect("Draw background");
-            //key_up_on_img.draw(display).expect("Draw background");
+            if(key_down_pressed){
+                key_down_on_img.draw(display).expect("Draw key down");
+            }
+
+            // Process profile name
+            let mut process_profile = "skibidi";
+            match process {
+                ProcessingProfile::Autotune => {
+                    process_profile = "Autotune";
+                    if(process_cycle_pressed){
+                        autotune_on_img.draw(display).expect("Draw autotune on");
+                    }else{
+                        autotune_off_img.draw(display).expect("Draw autotune off");
+                    }
+                },
+                ProcessingProfile::Vocode => {
+                    process_profile = "Vocode";
+                    if(process_cycle_pressed){
+                        vocode_on_img.draw(display).expect("Draw vocode on");
+                    }else{
+                        vocode_off_img.draw(display).expect("Draw vocode off");
+                    }
+                },
+                ProcessingProfile::Dry => {
+                    process_profile = "Dry Vox";
+                    if(process_cycle_pressed){
+                        voice_on_img.draw(display).expect("Draw voice on");
+                    }else{
+                        voice_off_img.draw(display).expect("Draw voice off");
+                    }
+                },
+            };
+            
+
+            if(key_up_pressed)
+            {
+                key_up_on_img.draw(display).expect("Draw key up");
+            }
             
             
             // Styles for text
@@ -1076,13 +1117,6 @@ mod rtic_app {
             let mut mode_buffer: String<8> = String::new();
                 write!(&mut mode_buffer, "{} {}", get_key_name(key), get_mode_name(key)) 
                 .expect("failed converting mode to string");
-
-            // Process profile name
-            let process_profile = match process {
-                ProcessingProfile::Autotune => "Autotune",
-                ProcessingProfile::Vocode => "Vocode",
-                ProcessingProfile::Dry => "Dry Vox",
-            };
 
             Text::with_alignment(
                 &mode_buffer,
