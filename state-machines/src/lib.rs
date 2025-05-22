@@ -192,20 +192,29 @@ impl AppState {
     
     /// Helper function to cycle through processing profiles
     pub fn cycle_profile(&self) -> Self {
-        match self {
-            AppState::EffectsProfile(ProcessingProfile::Autotune) => {
-                AppState::EffectsProfile(ProcessingProfile::Vocode)
-            }
-            AppState::EffectsProfile(ProcessingProfile::Vocode) => {
-                AppState::EffectsProfile(ProcessingProfile::Dry)
-            }
-            AppState::EffectsProfile(ProcessingProfile::Dry) => {
-                AppState::EffectsProfile(ProcessingProfile::Autotune)
-            }
-            // If not in Effects state, don't change
-            _ => *self,
+    match self {
+        AppState::EffectsProfile(ProcessingProfile::Autotune) => {
+            AppState::EffectsProfile(ProcessingProfile::Vocode)
         }
+        AppState::EffectsProfile(ProcessingProfile::Vocode) => {
+            AppState::EffectsProfile(ProcessingProfile::Dry)
+        }
+        AppState::EffectsProfile(ProcessingProfile::Dry) => {
+            AppState::EffectsProfile(ProcessingProfile::Autotune)
+        }
+        AppState::Processing(ProcessingProfile::Autotune) => {
+            AppState::Processing(ProcessingProfile::Vocode)
+        }
+        AppState::Processing(ProcessingProfile::Vocode) => {
+            AppState::Processing(ProcessingProfile::Dry)
+        }
+        AppState::Processing(ProcessingProfile::Dry) => {
+            AppState::Processing(ProcessingProfile::Autotune)
+        }
+        // For any other state, don't change
+        _ => *self,
     }
+}
 }
 
 /// Events for navigating the menu
@@ -277,10 +286,8 @@ pub struct AppStateMachineSnapshot {
     pub note: i32,
     pub volume: i32,
     pub menu_index: usize,
-    pub crush1: i32,
-    pub crush2: i32,
-    pub formant_male: i32,
-    pub formant_female: i32,
+    pub crush: i32,
+    pub formant: i32,
     pub autotune_speed: i32,
     pub magnitude: i32,
     pub pad_matrix: i32,
@@ -323,10 +330,8 @@ impl AppStateMachine {
             note: self.note,
             volume: self.volume,
             menu_index: self.menu_index,
-            crush1: self.values.crush1,
-            crush2: self.values.crush2,
-            formant_male: self.values.formant_male,
-            formant_female: self.values.formant_female,
+            crush: self.current_crush,
+            formant: self.current_formant,
             autotune_speed: self.values.autotune_speed,
             magnitude: self.values.magnitude,
             pad_matrix: self.values.pad_matrix,
@@ -345,21 +350,22 @@ impl AppStateMachine {
                     self.note = key as i32;
                 } else if key ==  10{
                     // Lower key
-                    self.current_key = (self.current_key + 11) % 12;
+                    self.current_key = (self.current_key + 23) % 24;
+                } else if key == 11{
+                    self.state = self.state.cycle_profile();
                 } else if key == 12 {
                     // Raise key
-                    self.current_key = (self.current_key + 1) % 12;
+                    self.current_key = (self.current_key + 1) % 24;
                 }
-                // Key 10 does nothing in Processing profile
             },
             
             // Handle keypad presses in Effects profile
             (AppState::EffectsProfile(_), AppEvent::KeypadPress(key)) => {
                 match key {
                     // Row 1: Octave controls
-                    1 => self.current_octave = -1, // Low
+                    1 => self.current_octave = 1, // Low
                     2 => self.current_octave = 0,  // Normal
-                    3 => self.current_octave = 1,  // High
+                    3 => self.current_octave = 2,  // High
                     
                     // Row 2: Bit crush controls
                     4 => self.current_crush = 1,   // Crush 1
@@ -367,14 +373,14 @@ impl AppStateMachine {
                     6 => self.current_crush = 2,   // Crush 2
                     
                     // Row 3: Formant controls
-                    7 => self.current_formant = -1, // Male
+                    7 => self.current_formant = 1, // Male
                     8 => self.current_formant = 0,  // None
-                    9 => self.current_formant = 1,  // Female
+                    9 => self.current_formant = 2,  // Female
                     
-                    // Row 4: Key and profile controls
-                    10 => self.current_key = (self.current_key + 11) % 12, // Key down
-                    11 => self.state = self.state.cycle_profile(), // Cycle profile
-                    12 => self.current_key = (self.current_key + 1) % 12, // Key up
+                    // Row 4: Key and profile controls (keys 10-12)
+                    10 => self.current_key = (self.current_key + 23) % 24, // Key down
+                    11 => self.state = self.state.cycle_profile(),         // Cycle profile
+                    12 => self.current_key = (self.current_key + 1) % 24,  // Key up
                     
                     _ => (), // Invalid key
                 }
