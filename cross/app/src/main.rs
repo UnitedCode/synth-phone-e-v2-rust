@@ -1177,7 +1177,7 @@ mod rtic_app {
             // Draw all menu items (previous, current, next)
             for (i, &option) in options.iter().enumerate() {
                 let style = if i == 1 { h1_style } else { text_style };
-                let y = 10 + (i as i32 * 12);
+                let y = 4 + (i as i32 * 12);
                 
                 // Draw option name
                 Text::with_baseline(option.0, Point::new(5, y), style, Baseline::Middle)

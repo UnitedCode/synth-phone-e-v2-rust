@@ -274,7 +274,6 @@ pub struct AppStateMachine {
     current_formant: i32, // Current formant (-1=male, 0=none, 1=female)
     pub volume: i32,
     pub note: i32,
-    pub menu_index: usize,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool
@@ -288,7 +287,6 @@ pub struct AppStateMachineSnapshot {
     pub octave: i32,
     pub note: i32,
     pub volume: i32,
-    pub menu_index: usize,
     pub crush: i32,
     pub formant: i32,
     pub autotune_speed: i32,
@@ -318,7 +316,6 @@ impl AppStateMachine {
             current_formant: 0, // Start with no formant
             volume: 0,
             note: 0,
-            menu_index: 0,
             key_down_pressed: false,
             process_cycle_pressed: false,
             key_up_pressed: false,
@@ -338,7 +335,6 @@ impl AppStateMachine {
             octave: self.current_octave,
             note: self.note,
             volume: self.volume,
-            menu_index: self.menu_index,
             crush: self.current_crush,
             formant: self.current_formant,
             autotune_speed: self.values.autotune_speed,
@@ -454,8 +450,11 @@ impl AppStateMachine {
         self.state = self.state.transition(event);
     }
 
-         // Add a current method to get menu context
+
+
+    // Add a current method to get menu context
     pub fn current(&self) -> MenuContext {
+        let idx = self.active_menu_index().unwrap_or(0);
         let menu_items = [
             ("Crush1", self.values.crush1),
             ("Crush2", self.values.crush2),
@@ -467,14 +466,21 @@ impl AppStateMachine {
         ];
         
         let total = menu_items.len();
-        let current = self.menu_index;
-        let previous = if current == 0 { total - 1 } else { current - 1 };
-        let next = (current + 1) % total;
         
         MenuContext {
-            previous_item: menu_items[previous],
-            current_item: menu_items[current],
-            next_item: menu_items[next],
+            previous_item: menu_items[(idx + total - 1) % total],
+            current_item : menu_items[idx],
+            next_item    : menu_items[(idx + 1) % total],
+        }
+    }
+
+    fn active_menu_index(&self) -> Option<usize> {
+        if let AppState::Menu(ref menu_state, _) = self.state {
+            Some(match menu_state {
+                MenuState::Selecting(i) | MenuState::Editing(i) => *i,
+            })
+        } else {
+            None
         }
     }
 
