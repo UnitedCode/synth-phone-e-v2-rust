@@ -5087,22 +5087,10 @@
 		(uuid "414449f3-42ba-4875-80e0-da6cd6f5a443")
 	)
 	(junction
-		(at 189.23 130.81)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "49bf56ce-4e9f-49eb-81a1-d3e9acf82890")
-	)
-	(junction
 		(at 30.48 120.65)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "4a10e77d-0a72-4bb2-91fb-b2f720c67c15")
-	)
-	(junction
-		(at 189.23 138.43)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "5c3f1798-5668-496a-b195-353443a767b8")
 	)
 	(junction
 		(at 274.32 109.22)
@@ -5206,16 +5194,6 @@
 	)
 	(wire
 		(pts
-			(xy 189.23 138.43) (xy 199.39 138.43)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "08998fe2-0a4c-4313-9e95-76c10373b414")
-	)
-	(wire
-		(pts
 			(xy 115.57 147.32) (xy 120.65 147.32)
 		)
 		(stroke
@@ -5256,7 +5234,7 @@
 	)
 	(wire
 		(pts
-			(xy 189.23 130.81) (xy 190.5 130.81)
+			(xy 187.96 130.81) (xy 190.5 130.81)
 		)
 		(stroke
 			(width 0)
@@ -5306,7 +5284,7 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 138.43) (xy 189.23 138.43)
+			(xy 180.34 138.43) (xy 199.39 138.43)
 		)
 		(stroke
 			(width 0)
@@ -5903,16 +5881,6 @@
 			(type default)
 		)
 		(uuid "802ea435-a40b-4c4c-af6c-75394b049a79")
-	)
-	(wire
-		(pts
-			(xy 189.23 130.81) (xy 187.96 130.81)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "820bcb05-e741-41de-9c7a-c66c8318d075")
 	)
 	(wire
 		(pts
@@ -9049,76 +9017,6 @@
 			(project "synth-phone-e-v2-hardware"
 				(path "/75d2a775-5539-423d-a5af-ebbe708c65a6"
 					(reference "J15")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 189.23 134.62 180)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "b50cd4c8-2e07-40d6-9e41-61a8f01daafd")
-		(property "Reference" "R3"
-			(at 191.77 133.3499 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "?"
-			(at 191.77 135.8899 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P15.24mm_Horizontal"
-			(at 188.214 134.366 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 189.23 134.62 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 189.23 134.62 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "2"
-			(uuid "462991d7-5921-45bb-ba90-f147d54d657c")
-		)
-		(pin "1"
-			(uuid "bb12898f-024f-478e-83a9-304ff73b103d")
-		)
-		(instances
-			(project "synth-phone-e-v2-hardware"
-				(path "/75d2a775-5539-423d-a5af-ebbe708c65a6"
-					(reference "R3")
 					(unit 1)
 				)
 			)
