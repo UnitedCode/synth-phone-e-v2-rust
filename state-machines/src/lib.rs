@@ -126,7 +126,8 @@ pub enum AppEvent {
     EncoderRotate(i32),   // Rotation of the encoder (positive or negative)
     
     // Button presses in different profiles
-    KeypadPress(usize),   // Press of a keypad button (0-11)
+    KeypadPress(usize),   // Press of a keypad button (1-12)
+    KeypadRelease(usize), // Release of a keypad button (1-12)
     
     // Processing profile selection
     CycleProcessingProfile,  // Cycle to next processing profile
@@ -411,6 +412,15 @@ impl AppStateMachine {
                         self.process_cycle_pressed = false;
                         self.key_up_pressed = false;
                     }, // Key Released
+                }
+            },
+
+            (AppState::EffectsProfile(_), AppEvent::KeypadRelease(key)) => {
+                match key {
+                    10 => self.key_down_pressed = false,
+                    11 => self.process_cycle_pressed = false,
+                    12 => self.key_up_pressed = false,
+                    _ => {}
                 }
             },
             

@@ -970,9 +970,9 @@ mod rtic_app {
             octave: i32,
             crush: i32,
             formant: i32,
-            key_up_pressed: bool,
-            process_cycle_pressed: bool,
             key_down_pressed: bool,
+            process_cycle_pressed: bool,
+            key_up_pressed: bool,
             display: &mut LcdDisplay
         ) {
             display.clear();
@@ -1097,6 +1097,7 @@ mod rtic_app {
 
             if(key_up_pressed)
             {
+                info!("kay up pressed, should be 12");
                 key_up_on_img.draw(display).expect("Draw key up");
             }
             
@@ -1247,56 +1248,63 @@ mod rtic_app {
         ) -> [[bool; 3]; 4] {
             let mut state = [[false; 3]; 4];
 
-            // Helper closure to read rows in correct order
-            let read_rows = |
-                            r1: &Daisy15<Input>,
+            // Helper closure to read rows
+            let read_rows = |r1: &Daisy15<Input>,
                             r2: &Daisy16<Input>,
                             r3: &Daisy17<Input>,
                             r4: &Daisy18<Input>| -> [bool; 4] {
                 [
-                    r1.is_low(), // Row 1 (top) - pins match rows
-                    r2.is_low(), // Row 2
-                    r3.is_low(), // Row 3
-                    r4.is_low(), // Row 4 (bottom)
+                    r1.is_low(),
+                    r2.is_low(),
+                    r3.is_low(),
+                    r4.is_low(),
                 ]
             };
 
-            // Drive COL_1 low, others high (first/left column)
+            // Scan each column with proper delays
+            // Column 1
             col_1.set_low();
             col_2.set_high();
             col_3.set_high();
+            cortex_m::asm::delay(10000); // Increased delay for better settling
             let col1_rows = read_rows(row_1, row_2, row_3, row_4);
-            for (r, pressed) in col1_rows.iter().enumerate() {
-                state[r][0] = *pressed;
-            }
-
-            // Drive COL_2 low, others high (middle column)
+            
+            // Column 2
             col_1.set_high();
             col_2.set_low();
             col_3.set_high();
+            cortex_m::asm::delay(10000);
             let col2_rows = read_rows(row_1, row_2, row_3, row_4);
-            for (r, pressed) in col2_rows.iter().enumerate() {
-                state[r][1] = *pressed;
-            }
-
-            // Drive COL_3 low, others high (right column)
+            
+            // Column 3
             col_1.set_high();
             col_2.set_high();
             col_3.set_low();
+            cortex_m::asm::delay(10000);
             let col3_rows = read_rows(row_1, row_2, row_3, row_4);
+
+            // Fill state array
+            for (r, pressed) in col1_rows.iter().enumerate() {
+                state[r][0] = *pressed;
+            }
+            for (r, pressed) in col2_rows.iter().enumerate() {
+                state[r][1] = *pressed;
+            }
             for (r, pressed) in col3_rows.iter().enumerate() {
                 state[r][2] = *pressed;
             }
 
-            // Return state with the correct mapping
             state
         }
 
         // Button press handling based on current state
         fn handle_button_press(row: usize, col: usize, current_state: AppState) -> state_machines::AppEvent {
 
-            let key_num = row * 3 + col + 1;
-            info!("{}", key_num);
+             // Temporarily use direct mapping to see what's actually happening
+            let actual_col = 2 - col;  // This reverses: 0→2, 1→1, 2→0
+            let key_num = row * 3 + actual_col + 1;
+    
+            info!("Button pressed - Row: {}, Col: {}, Key: {}", row, col, key_num);
 
             match current_state {
                 // In Processing state - buttons are notes or key changes
@@ -1306,6 +1314,7 @@ mod rtic_app {
                 
                 // In Effects state - buttons control effects
                 AppState::EffectsProfile(_) => {
+                    info!("In Processing state, sending KeypadPress({})", key_num);
                     state_machines::AppEvent::KeypadPress(key_num)
                 },
                 
@@ -1322,17 +1331,14 @@ mod rtic_app {
         }
         
         fn handle_button_release(row: usize, col: usize, current_state: AppState) -> state_machines::AppEvent {
+            // Use the same mapping as press
+            let actual_col = 2 - col;
+            let key_num = row * 3 + actual_col + 1;
+            
             match current_state {
-                // In Processing state - release notes
-                AppState::Processing(_) => {
-                    state_machines::AppEvent::KeypadPress(0)
+                AppState::Processing(_) | AppState::EffectsProfile(_) => {
+                    state_machines::AppEvent::KeypadRelease(key_num)
                 },
-
-                AppState::EffectsProfile(_) => {
-                    state_machines::AppEvent::KeypadPress(0)
-                },
-                
-                // Other states - button releases don't matter
                 _ => state_machines::AppEvent::NoOp
             }
         }
