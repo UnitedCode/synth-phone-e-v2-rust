@@ -8,12 +8,24 @@
   ],
 "cSpell.words": [
   "autotune",
+  "ccdr",
   "cosf",
   "floorf",
+  "fmodf",
   "hann",
+  "heapless",
+  "libdaisy",
+  "libm",
   "microfft",
+  "Monotonics",
+  "pixelcolor",
+  "rtic",
   "rustfmt",
-  "sinf"
+  "sinf",
+  "sqrtf",
+  "synthophone",
+  "SYSCFG",
+  "tinybmp"
 ],
 
 

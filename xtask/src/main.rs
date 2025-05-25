@@ -55,7 +55,7 @@ fn test_target() -> Result<(), anyhow::Error> {
 fn flash() -> Result<(), anyhow::Error> {
     let sh = Shell::new()?;
     let _p = sh.push_dir(root_dir().join("cross"));
-    cmd!(sh, "cargo embed --chip stm32h750v --release").run()?;
+    cmd!(sh, "cargo embed --chip stm32h750vb --release").run()?;
     Ok(())
 }
 

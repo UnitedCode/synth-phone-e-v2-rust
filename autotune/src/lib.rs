@@ -4,3 +4,4 @@ pub mod frequencies;
 pub mod hann_window;
 pub mod process_frequencies;
 pub mod prototype;
+pub mod keys;

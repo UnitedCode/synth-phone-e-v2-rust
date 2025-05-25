@@ -23,7 +23,7 @@ const BUFFER_SIZE: usize = FFT_SIZE * 2;
 const HOP_SIZE: usize = 256;
 const BLOCK_SIZE: usize = 2;
 const BIN_WIDTH: f32 = SAMPLE_RATE as f32 / FFT_SIZE as f32 * 2.0;
-use autotune;
+use autotune::{self, keys};
 use autotune::hann_window;
 
 mod rtic_app {
@@ -31,42 +31,36 @@ mod rtic_app {
     device = stm32h7xx_hal::stm32,
     peripherals = true,
     dispatchers = [DMA1_STR0]
-)]
+    )]
     mod app {
         use autotune::{
             frequencies::{
                 find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES,
-            },
-            process_frequencies::find_fundamental_frequency,
+            }, keys::{get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, C_MAJOR_SCALE, E_MAJOR_SCALE}, process_frequencies::{cepstral_smoothing, bitcrush, sample_rate_reduce, find_fundamental_frequency, normalize_sample}
         };
         use heapless::String;
         use core::fmt::Write;
         use core::f32::consts::PI;
         use embedded_graphics::{
-            mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder, MonoTextStyle},
-            image::Image,
-            pixelcolor::BinaryColor,
-            prelude::*,
-            text::{Baseline, Text},
+            image::{Image, ImageRawBE, SubImage}, mono_font::{ascii::{FONT_10X20, FONT_5X7, FONT_6X13, FONT_6X9}, MonoTextStyle, MonoTextStyleBuilder}, pixelcolor::BinaryColor, prelude::*, primitives::{Line, PrimitiveStyle, Rectangle}, text::{Alignment, Baseline, Text}, 
         };
         use libdaisy::{audio, hid, logger, prelude::{Output, PushPull, Input}, system, gpio::*};
-        use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
+        use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf, roundf};
         use log::{info, warn};
-        use state_machines::MenuStateMachine;
-        use stm32h7xx_hal::{
-            adc, i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
+        use state_machines::{AppState, MenuState, ProcessingProfile, AppStateMachine};
+        use stm32h7xx_hal::{ i2c::{I2c, I2cExt}, stm32, time::MilliSeconds, timer::Timer
         };
         use tinybmp::Bmp;
-
         use crate::{
             autotune::circular_buffer::CircularBuffer, hann_window, BIN_WIDTH, BLOCK_SIZE,
             BUFFER_SIZE, FFT_SIZE, HOP_SIZE,
         };
         use fugit::RateExtU32;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
-
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::{Direction, RotaryEncoder};
+
+        type LcdDisplay = Ssd1306<ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>, ssd1306::prelude::DisplaySize128x32, BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>>;
 
         pub struct Knob {
             rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
@@ -98,7 +92,11 @@ mod rtic_app {
             synthesis_frequencies: [f32; FFT_SIZE],
             previous_pitch_shift_ratio: f32,
             hop_counter: u32,
-            menu_state_machine: MenuStateMachine,
+            app_state_machine: AppStateMachine,
+            old_matrix_state: [[bool; 3]; 4],
+            // For sample-rate reduction
+            sr_hold_counter: i32,
+            sr_held_value: f32,
         }
 
         #[local]
@@ -106,10 +104,9 @@ mod rtic_app {
             audio: audio::Audio,
             buffer: audio::AudioBuffer,
             button: hid::Switch<Daisy28<Input>>,
-            adc1: adc::Adc<stm32::ADC1, adc::Enabled>,
             timer2: Timer<stm32::TIM2>,
             knob_1: Knob,
-            display: Ssd1306<ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>, ssd1306::prelude::DisplaySize128x32, BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>>,
+            display: LcdDisplay,
             col_1_pin: Daisy21<Output<PushPull>>,
             col_2_pin: Daisy20<Output<PushPull>>,
             col_3_pin: Daisy19<Output<PushPull>>,
@@ -117,8 +114,9 @@ mod rtic_app {
             row_2_pin: Daisy16<Input>,
             row_3_pin: Daisy17<Input>,
             row_4_pin: Daisy18<Input>,
+            encoder_button: hid::Switch<Daisy2<Input>>,
         }
-
+        
         #[init]
         fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
             logger::init();
@@ -129,13 +127,7 @@ mod rtic_app {
             let mut system = libdaisy::system_init!(core, device, ccdr, BLOCK_SIZE);
 
             let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
-            // Encoder business
 
-            // let encoder_btn_sw = system.gpio.daisy2.take();
-
-            // Configure Pins connected to encoder as floating input (only if your encoder
-            // board already has pull-up resistors, use 'into_pull_up_input' otherwise)
-            // and Obtain Handle.
             let encoder_dt = system
                 .gpio
                 .daisy3
@@ -148,11 +140,22 @@ mod rtic_app {
                 .take()
                 .expect("failed to get pin daisy4")
                 .into_floating_input();
+
+            let encoder_sw_pin = system
+                .gpio
+                .daisy2
+                .take()
+                .expect("Failed to get pin daisy2")
+                .into_pull_up_input();
+
+            let mut encoder_button = hid::Switch::new(encoder_sw_pin, hid::SwitchType::PullUp);
+            encoder_button.set_double_thresh(Some(100)); 
+
             let encoder_1 = RotaryEncoder::new(encoder_dt, encoder_clk).into_standard_mode();
 
             let knob_1 = Knob::new(encoder_1);
 
-            let daisy28 = system
+            let daisy28_btn = system
                 .gpio
                 .daisy28
                 .take()
@@ -199,43 +202,26 @@ mod rtic_app {
 
             display.init().expect("Failed to initialize display");
 
-            // Create a text style
-            // Clear the display buffer
             display.clear();
 
             let bmp: Bmp<BinaryColor> =
                 Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp")).unwrap();
 
-            // To draw the `bmp` object to the display it needs to be wrapped in an `Image` object to set
-            // the position at which it should drawn. Here, the top left corner of the image is set to
-            // `(32, 32)`.
             let image = Image::new(&bmp, Point::new(0, 0));
 
             // Display the image
-            image.draw(&mut display);
+            image.draw(&mut display).expect("Failed to display image");
 
             display.flush().expect("Could not write to display");
             display.clear();
 
             // Create a text style
-            let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+            //let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
 
-            Text::with_baseline("Nathan is wrong! its a fallacy", Point::zero(), text_style, Baseline::Top)
-                .draw(&mut display)
-                .unwrap();
-
-            // Send the buffer to the display
-            display.flush().expect("Could not write to display");
-
-            let mut switch1 = hid::Switch::new(daisy28, hid::SwitchType::PullUp);
+            let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
             switch1.set_held_thresh(Some(150));
 
-            let mut adc1 = system.adc1.enable();
-            adc1.set_resolution(adc::Resolution::EightBit);
-            let adc1_max = adc1.slope() as f32;
-
-;
             let mut timer2 = stm32h7xx_hal::timer::TimerExt::timer(
                 device.TIM2,
                 MilliSeconds::from_ticks(1).into_rate(),
@@ -256,17 +242,21 @@ mod rtic_app {
                     synthesis_frequencies: [0.0; FFT_SIZE],
                     previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
-                    menu_state_machine: MenuStateMachine::new(),
+                    app_state_machine: AppStateMachine::new(),
+                    old_matrix_state: [[false; 3]; 4],
+                    // For sample-rate reduction
+                    sr_hold_counter: 0,
+                    sr_held_value: 0.0,
                 },
                 Local {
-                    adc1,
                     audio: system.audio,
                     buffer,
                     button: switch1,
                     timer2,
                     knob_1,
                     display,
-                    col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin
+                    col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin,
+                    encoder_button
                 },
                 init::Monotonics(),
             )
@@ -285,7 +275,9 @@ mod rtic_app {
         last_input_phases,
         last_output_phases,
         hop_counter,
-        menu_state_machine,
+        app_state_machine,
+        sr_hold_counter,
+        sr_held_value,
     ], priority = 8)]
         fn update_handler(mut ctx: update_handler::Context) {
             let audio = ctx.local.audio;
@@ -296,21 +288,63 @@ mod rtic_app {
             if audio.get_stereo(buffer) {
                 for (left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
                     let mut out_sample = *left;
-                    // info!("{out_sample}");
+
+
+                    // Get current processing profile
+                    let mut current_process = ProcessingProfile::Autotune;
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        let snapshot = msm.snapshot();
+                        match snapshot.current_state {
+                            AppState::Processing(process) | AppState::EffectsProfile(process) | AppState::Menu(_, process) => {
+                                current_process = process;
+                            },
+                            AppState::Splash => {}
+                        }
+                    });
 
                     // Lock to write to in_buffer
                     ctx.shared.in_buffer.lock(|in_buffer| {
                         in_buffer.write(*left);
                     });
 
-                    // Lock to read from out_buffer and reset the value
-                    ctx.shared.out_buffer.lock(|out_buffer| {
-                        if button_pressed {
+                    // Process based on current processing profile
+                    let apply_effects = match current_process {
+                        ProcessingProfile::Autotune => true,  // Apply autotune
+                        ProcessingProfile::Vocode => true,    // Apply vocoder
+                        ProcessingProfile::Dry => false,      // Passthrough (no processing)
+                    };
+
+                    // Get the processed audio if effects are enabled
+                    if apply_effects {
+                        ctx.shared.out_buffer.lock(|out_buffer| {
                             out_sample = out_buffer.read_and_reset();
-                        } else {
-                            out_sample = *left
-                        }
+                        });
+                    }
+
+                    // ************** SAMPLE-RATE REDUCE **************
+                    // Apply sample rate reduction effect
+                    let mut sr_factor = 1;
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        //sr_factor = msm.snapshot().crush1; 
                     });
+
+                    // Apply the effect
+                    ctx.shared.sr_hold_counter.lock(|hold_ctr| {
+                        ctx.shared.sr_held_value.lock(|held_val| {
+                            out_sample = sample_rate_reduce(out_sample, sr_factor, hold_ctr, held_val);
+                        });
+                    });
+
+                    // ************** BIT DEPTH REDUCE **************
+                    // 3) Get bit depth from your menu
+                    let mut bit_depth = 32;
+                    ctx.shared.app_state_machine.lock(|msm| { 
+                        //bit_depth = msm.snapshot().crush2;
+                    });
+                    out_sample = bitcrush(out_sample, bit_depth as u8);
+
+                    // Normalize final output
+                    out_sample = normalize_sample(out_sample, 0.8);
 
                     // Check and handle hop counter
                     let mut local_hop_counter: u32 = 0;
@@ -346,12 +380,25 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = TIM2, local = [knob_1, timer2, display, col_1_pin, col_2_pin, col_3_pin, row_1_pin, row_2_pin, row_3_pin, row_4_pin], shared = [])]
+        #[task(binds = TIM2, local = [
+            knob_1, 
+            timer2, 
+            display, 
+            col_1_pin, 
+            col_2_pin, 
+            col_3_pin, 
+            row_1_pin, 
+            row_2_pin, 
+            row_3_pin, 
+            row_4_pin,
+            encoder_button,
+            ], shared = [app_state_machine, old_matrix_state])]
         fn interface_handler(mut ctx: interface_handler::Context) {
             ctx.local.timer2.clear_irq();
 
+            let mut update_state: bool = false;
 
-            let matrix_state = scan_button_matrix(
+            let new_matrix_state = scan_button_matrix(
                 ctx.local.col_1_pin,
                 ctx.local.col_2_pin,
                 ctx.local.col_3_pin,
@@ -361,60 +408,148 @@ mod rtic_app {
                 ctx.local.row_4_pin,
             );
 
-            info!("{:?}", matrix_state);
 
-            let text_style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-            
-            let text_style2 = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+            // info!("{:?}", new_matrix_state);
+            // Process button matrix changes
+            for row in 0..4 {
+                for col in 0..3 {
+                    let was_pressed = ctx.shared.old_matrix_state.lock(|oms| {
+                        oms[row][col]
+                    });
+                    let is_pressed = new_matrix_state[row][col];
 
-            Text::with_baseline("piss", Point::new(54, 14), text_style2, Baseline::Top)
-                            .draw(ctx.local.display)
-                            .unwrap();
-
-            
-            // TODO this function needs to be updated to handle encoder business
-            // SEE: https://github.com/rtic-rs/rtic/blob/master/examples/stm32f411_encoder_polling/src/main.rs
-            // and: https://github.com/nathansbradshaw/libdaisy-rust/commit/f08c01fd8f950675c6c1051c2310c1cdf7309d8b
-            match ctx.local.knob_1.rotary_encoder.update() {
-                Direction::Clockwise => {
-
-                    if ctx.local.knob_1.value < 255 { 
-
-                        ctx.local.knob_1.value += 1;
-
-                        let mut buffer: String<3> = String::new();
-                        write!(&mut buffer, "{}", ctx.local.knob_1.value).unwrap();
-
-                        ctx.local.display.clear();
-                        Text::with_baseline(&buffer, Point::new(110, 20), text_style, Baseline::Top)
-                            .draw(ctx.local.display)
-                            .unwrap();
-                        ctx.local.display.flush().expect("could not draw to screen");
-                        
-                        info!("Value increased")
+                    // If there is a change, decide how to handle it
+                    if is_pressed != was_pressed {
+                        ctx.shared.old_matrix_state.lock(|oms| {
+                            oms[row][col] = is_pressed;
+                        });
+                        if is_pressed {
+                            update_state = true;
+                            // Button has just been pressed
+                            ctx.shared.app_state_machine.lock(|msm| {
+                                msm.handle_event(handle_button_press(row, col, msm.snapshot().current_state));
+                            });
+                        } else {
+                            update_state = true;
+                            // Button has just been released
+                            ctx.shared.app_state_machine.lock(|msm| {
+                                msm.handle_event(handle_button_release(row, col, msm.snapshot().current_state));
+                            });
+                        }
                     }
-                }
-                Direction::Anticlockwise => {
-                    if ctx.local.knob_1.value > 0 {
-
-                        ctx.local.knob_1.value -= 1;
-
-                        let mut buffer: String<3> = String::new();
-                        write!(&mut buffer, "{}", ctx.local.knob_1.value).unwrap();
-
-                        ctx.local.display.clear();
-                        Text::with_baseline(&buffer, Point::new(110, 20), text_style, Baseline::Top)
-                            .draw(ctx.local.display)
-                            .unwrap();
-                        ctx.local.display.flush().expect("could not draw to screen");
-
-                        info!("Value decreased")
-                    }
-                }
-                Direction::None => {
-                    
                 }
             }
+
+            // Handle encoder button - single press vs double press
+            ctx.local.encoder_button.update();
+
+            // Check for double press first
+            if ctx.local.encoder_button.is_double() {
+                info!("Encoder double press detected!");
+                update_state = true;
+                
+                ctx.shared.app_state_machine.lock(|msm| {
+                    msm.handle_event(state_machines::AppEvent::EncoderDoublePress);
+                });
+            } 
+            // Check for single press if not a double press
+            else if ctx.local.encoder_button.is_falling() {
+                info!("Encoder single press detected!");
+                update_state = true;
+                
+                ctx.shared.app_state_machine.lock(|msm| {
+                    msm.handle_event(state_machines::AppEvent::EncoderPress);
+                });
+            }
+
+            // Handle encoder rotation
+            match ctx.local.knob_1.rotary_encoder.update() {
+                Direction::Clockwise => {
+                    update_state = true;
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        msm.handle_event(state_machines::AppEvent::EncoderRotate(1));
+                    });
+                }
+                Direction::Anticlockwise => {
+                    update_state = true;
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        msm.handle_event(state_machines::AppEvent::EncoderRotate(-1));
+                    });
+                }
+                Direction::None => { }
+            }
+
+
+             // Update display if state changed
+            ctx.shared.app_state_machine.lock(|msm| {
+                if update_state {
+                    let snapshot = msm.snapshot();
+                    info!("state - {:?} -", snapshot.current_state);
+                    
+                    match snapshot.current_state {
+                        // For splash screen
+                        AppState::Splash => {
+                            draw_splash_screen(ctx.local.display);
+                        },
+                        
+                        // For processing profiles
+                        AppState::Processing(process) => {
+                            draw_processing_screen(
+                                process, 
+                                snapshot.key, 
+                                snapshot.octave, 
+                                snapshot.note, 
+                                snapshot.volume, 
+                                ctx.local.display
+                            );
+                        },
+                        
+                        // For effects screen
+                        AppState::EffectsProfile(process) => {
+                            draw_effects_screen(
+                                process,
+                                snapshot.key,
+                                snapshot.octave,
+                                snapshot.crush,
+                                snapshot.formant,
+                                snapshot.key_down_pressed,
+                                snapshot.process_cycle_pressed,
+                                snapshot.key_up_pressed,
+                                ctx.local.display
+                            );
+                        },
+                        
+                        // For menu screens
+                        AppState::Menu(nav_state, _) => {
+                            match nav_state {
+                                MenuState::Selecting(idx) => {
+                                    let menu_context = msm.current();
+                                    draw_menu_screen(
+                                        menu_context.previous_item,
+                                        menu_context.current_item,
+                                        menu_context.next_item,
+                                        false,
+                                        ctx.local.display
+                                    );
+                                },
+                                MenuState::Editing(idx) => {
+                                    let menu_context = msm.current();
+                                    draw_menu_screen(
+                                        menu_context.previous_item,
+                                        menu_context.current_item,
+                                        menu_context.next_item,
+                                        true,
+                                        ctx.local.display
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    
+                    ctx.local.display.flush().expect("could not draw to screen");
+                    update_state = false;
+                }
+            });
 
         }
 
@@ -427,14 +562,9 @@ mod rtic_app {
         synthesis_magnitudes,
         synthesis_frequencies,
         previous_pitch_shift_ratio,
+        app_state_machine
     ], local = [], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
-            // info!("running task");
-
-            // let adc_result = adc1.read_sample().unwrap_or(1);
-            // let pitch_shift = 0.15 * adc_result as f32 - 1.15;
-            // info!("ADC result: {}, pitch shift: {}", adc_result, pitch_shift);
-
             // START ACTUAL FFT PROCESSING
             let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
@@ -466,10 +596,13 @@ mod rtic_app {
                 let phase = atan2f(fft[i].im, fft[i].re);
 
                 //cut out noise
-                let magnitude_threshold = 0.05; // Adjust this threshold as needed
-                if amplitude < magnitude_threshold {
-                    continue; // Skip this bin if the magnitude is too low
-                }
+                // let mut magnitude_threshold = 0.05; // Adjust this threshold as needed
+                // ctx.shared.app_state_machine.lock(|msm| {
+                //     magnitude_threshold = msm.magnitude as f32 / 100.0;
+                // });
+                // if amplitude < magnitude_threshold {
+                //     continue; // Skip this bin if the magnitude is too low
+                // }
 
                 // Calculate the phase difference in this bin between the last
                 // hop and this one, which will indirectly give us the exact frequency
@@ -499,18 +632,100 @@ mod rtic_app {
             }
 
             // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
+            ctx.shared.synthesis_magnitudes.lock(|syn_mag| {
+                for bin in syn_mag.iter_mut() {
+                    *bin = 0.0;
+                }
+            });
+            ctx.shared.synthesis_frequencies.lock(|syn_freq| {
+                for bin in syn_freq.iter_mut() {
+                    *bin = 0.0;
+                }
+            });
 
+            let mut analysis_magnitudes_full = [0.0f32; FFT_SIZE];
+            // Set the DC component.
+            analysis_magnitudes_full[0] = analysis_magnitudes[0];
+            // For bins 1 to FFT_SIZE/2 - 1, mirror the half-spectrum.
+            for i in 1..(FFT_SIZE / 2) {
+                analysis_magnitudes_full[i] = analysis_magnitudes[i];
+                analysis_magnitudes_full[FFT_SIZE - i] = analysis_magnitudes[i];
+            }
+
+            // Now compute the envelope using cepstral smoothing.
+            let envelope = cepstral_smoothing(&analysis_magnitudes_full);
+
+            // 1) Create our carrier in freq domain: a harmonic stack at 440 Hz
+            // let mut freq_domain_carrier: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+
+            // let bin_for_440 = roundf(440.0 / BIN_WIDTH) as usize;
+
+            // let max_harmonic = (FFT_SIZE / 2) / bin_for_440;
+
+            // // Example amplitude roll-off for each harmonic. Tweak as you wish.
+            // fn amplitude_function(h: usize) -> f32 {
+            //     // A simple 1/h rolloff, or do something fancier
+            //     100.0 / (h as f32)
+            // }
+
+            // // Populate the carrier bins for each harmonic
+            // for h in 1..=max_harmonic {
+            //     let bin = bin_for_440 * h;
+            //     freq_domain_carrier[bin].re = amplitude_function(h);
+            // }
+
+            // // Mirror them for a real IFFT
+            // for i in 1..(FFT_SIZE / 2) {
+            //     freq_domain_carrier[FFT_SIZE - i] = freq_domain_carrier[i].conj();
+            // }
+
+            // // 2) Multiply the carrier bins by the voice envelope
+            // for i in 0..(FFT_SIZE / 2) {
+            //     let amp_scale = envelope[i];
+            //     freq_domain_carrier[i].re *= amp_scale;
+            //     freq_domain_carrier[i].im *= amp_scale;
+
+            //     // Mirror side
+            //     if i != 0 {
+            //         freq_domain_carrier[FFT_SIZE - i].re *= amp_scale;
+            //         freq_domain_carrier[FFT_SIZE - i].im *= amp_scale;
+            //     }
+            // }
+
+            // // 3) Inverse FFT to get time-domain data
+            // microfft::inverse::ifft_1024(&mut freq_domain_carrier);
+
+            // // 4) Overlap-add or window it into out_buffer
+            // for (n, val) in freq_domain_carrier.iter().enumerate() {
+            //     let windowed_val = val.re * analysis_window_buffer[n]; // or skip the window if you prefer
+            //     ctx.shared.out_buffer.lock(|out_buffer| {
+            //         out_buffer.add_value(windowed_val);
+            //     });
+            // }
+
+
+            // TODO: the fundimental can now be found from the spectral analysis
             // Get the fundamental frequency (Loudest)
             let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
-            // let harmonics = collect_harmonics(fundamental_index);
+            let harmonics = collect_harmonics(fundamental_index);
 
             // Exact frequency is tied to the bin.
             let exact_frequency = analysis_frequencies[fundamental_index] * BIN_WIDTH;
 
             // We cannot divide by 0
-            if exact_frequency > 0.1 {
+            if exact_frequency > 0.001 {
+                let mut scale_frequencies = &C_MAJOR_SCALE_FREQUENCIES;
+
+                let mut octave_factor = 1.0; // Adjust this threshold as needed
+                ctx.shared.app_state_machine.lock(|msm| {
+                    octave_factor = msm.snapshot().octave as f32 * 0.5;//todo snapshot?!?! nate halp
+                });
+                
+                ctx.shared.app_state_machine.lock(|msm| {
+                    scale_frequencies = get_scale_by_key(msm.snapshot().key);
+                });
                 let target_frequency =
-                    find_nearest_note_in_key(exact_frequency, &C_MAJOR_SCALE_FREQUENCIES);
+                    find_nearest_note_in_key(exact_frequency, scale_frequencies);
                 let current_pitch_shift_ratio = target_frequency / exact_frequency;
 
                 let previous_pitch_shift_ratio = ctx
@@ -519,24 +734,60 @@ mod rtic_app {
                     .lock(|previous_pitch_shift_ratio| *previous_pitch_shift_ratio);
 
                 let pitch_shift_ratio =
-                    0.99 * current_pitch_shift_ratio + 0.01 * previous_pitch_shift_ratio;
+                    0.999 * current_pitch_shift_ratio + 0.001 * previous_pitch_shift_ratio;
+
+                
+                let mut formant_ratio = 1.0;
+                // ctx.shared.app_state_machine.lock(|msm| {
+                //     formant_ratio = 20.0;//msm.speed as f32 / 10.0;//TODO: change to real var
+                // });
 
                 // shift all bins by the ratio
                 for i in 0..FFT_SIZE / 2 {
-                    let new_bin = floorf(i as f32 * pitch_shift_ratio + 0.5) as usize;
+                    let amplitude_in = analysis_magnitudes[i];
+                    let old_envelope = envelope[i].max(1e-9);
+                    let new_bin = (floorf(i as f32 * pitch_shift_ratio + 0.5) * octave_factor) as usize;//*2 to test octave
                     if new_bin < FFT_SIZE / 2 {
+                        // find new envelope at new_bin
+
+                        // clamp so we don't go out of bounds
+                        let mut shifted_env_bin_f32 = (i as f32 * formant_ratio)
+                            .clamp(0.0, FFT_SIZE as f32 / 2.0 - 1.0); 
+                        
+                        shifted_env_bin_f32 = floorf(shifted_env_bin_f32 + 0.5);
+
+                        let shifted_env_bin = shifted_env_bin_f32 as usize;
+
+                        let shifted_env_bin = shifted_env_bin.min(FFT_SIZE/2 - 1);
+
+                        let new_envelope = envelope[shifted_env_bin];
+                        let adjusted_mag = amplitude_in * (new_envelope / old_envelope);
+                        
                         ctx.shared
                             .synthesis_magnitudes
                             .lock(|synthesis_magnitudes| {
-                                synthesis_magnitudes[new_bin] = analysis_magnitudes[i];
+                                synthesis_magnitudes[new_bin] = adjusted_mag;
+                                //synthesis_magnitudes[i] = analysis_magnitudes[i];
                             });
                         ctx.shared
                             .synthesis_frequencies
                             .lock(|synthesis_frequencies| {
-                                synthesis_frequencies[new_bin] =
-                                    analysis_frequencies[i] * pitch_shift_ratio;
+                                synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio * octave_factor;
+                                //synthesis_frequencies[i] = analysis_frequencies[i];
                             });
                     }
+                    // ctx.shared
+                    //     .synthesis_magnitudes
+                    //     .lock(|synthesis_magnitudes| {
+                    //         //synthesis_magnitudes[new_bin] = adjusted_mag;
+                    //         synthesis_magnitudes[i] = analysis_magnitudes[i];
+                    //     });
+                    // ctx.shared
+                    //     .synthesis_frequencies
+                    //     .lock(|synthesis_frequencies| {
+                    //         //synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio * octave_factor;
+                    //         synthesis_frequencies[i] = analysis_frequencies[i];
+                    //     });
                 }
             }
 
@@ -585,9 +836,6 @@ mod rtic_app {
                     out_buffer.add_value(windowed_val);
                 });
             }
-
-            // let elapsed = start_cycles.wrapping_sub(end_cycle);
-            // info!("FFT Process Time{elapsed}");
         }
 
         #[inline(always)]
@@ -629,6 +877,363 @@ mod rtic_app {
             display
         }
 
+        fn draw_splash_screen(display: &mut LcdDisplay) {
+            display.clear();
+            
+            // Display the splash image
+            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp"))
+                .expect("Could not load splash BMP");
+                
+            let image = Image::new(&bmp, Point::new(0, 0));
+            image.draw(display).expect("Failed to display splash image");
+        }
+
+        fn draw_processing_screen(
+            process: ProcessingProfile, 
+            key: i32, 
+            octave: i32, 
+            note: i32, 
+            volume: i32, 
+            display: &mut LcdDisplay
+        ) {
+            display.clear();
+            
+            // Load the background image
+            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE_MenuBlank.bmp"))
+                .expect("Could not load BMP");
+            
+            let image = Image::new(&bmp, Point::new(0, 0));
+            image.draw(display).expect("Draw background");
+            
+            // Styles for text
+            let text_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X9)
+                .text_color(BinaryColor::Off) 
+                .background_color(BinaryColor::On) 
+                .build();
+
+            let text_style2 = MonoTextStyleBuilder::new()
+                .font(&FONT_5X7)
+                .text_color(BinaryColor::On) 
+                .background_color(BinaryColor::Off) 
+                .build();
+        
+            let h1_style = MonoTextStyleBuilder::new()
+                .font(&FONT_10X20)
+                .text_color(BinaryColor::Off)   
+                .background_color(BinaryColor::On) 
+                .build();
+            
+            // Process profile name
+            let process_profile = match process {
+                ProcessingProfile::Autotune => "Autotune",
+                ProcessingProfile::Vocode => "Vocode",
+                ProcessingProfile::Dry => "Dry Vox",
+            };
+
+            info!("{}", process_profile);
+            
+            // Create text buffers
+            let mut key_buffer: String<2> = String::new();
+            write!(&mut key_buffer, "{}", get_key_name(key))
+                .expect("Failed converting key to string");
+            
+            let mut mode_buffer: String<5> = String::new();
+                write!(&mut mode_buffer, "{}", get_mode_name(key)) 
+                .expect("failed converting mode to string");
+            
+            let mut note_buffer: String<2> = String::new();
+            info!("note - {:?} -", note);
+            write!(&mut note_buffer, "{}", get_note_name(note, get_key(key)))
+                .expect("Failed converting note to string");
+            
+            let mut oct_buffer: String<1> = String::new();
+            write!(&mut oct_buffer, "{octave}")
+                .expect("Failed converting octave to string");
+            
+            let mut vol_buffer: String<3> = String::new();
+            write!(&mut vol_buffer, "{volume}")
+                .expect("Failed converting volume to string");
+            
+            // Draw text
+            draw_text(display, &key_buffer, Point::new(26, 3), &text_style);
+            draw_text(display, &mode_buffer, Point::new(80, 3), &text_style);
+            draw_centered_text(display, &note_buffer, Point::new(62, 15), h1_style);
+            draw_text(display, &oct_buffer, Point::new(14, 28), &text_style);
+            draw_text(display, &vol_buffer, Point::new(112, 28), &text_style);
+            draw_centered_text(display, &process_profile, Point::new(62, 28), text_style2);
+        }
+
+        fn draw_effects_screen(
+            process: ProcessingProfile,
+            key: i32,
+            octave: i32,
+            crush: i32,
+            formant: i32,
+            key_down_pressed: bool,
+            process_cycle_pressed: bool,
+            key_up_pressed: bool,
+            display: &mut LcdDisplay
+        ) {
+            display.clear();
+            
+            // Load the background image
+            let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../assets/SynthphoneE-PerformanceProfile-Empty.bmp"))
+                .expect("Could not load BMP");
+            
+            //TODO:store these so I don't have to make this each time
+            let sprite_atlas = ImageRawBE::<BinaryColor>::new(include_bytes!("../assets/SynthphoneE-Spritesheet.raw"), 65);
+
+            // Extract sub-images from the sprite atlas
+            let low_oct_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 0), Size::new(13, 8)));
+            let med_oct_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 0), Size::new(13, 8)));
+            let high_oct_on    = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 0), Size::new(13, 8)));
+
+            let crush_one_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 8), Size::new(13, 8)));
+            let crush_none_on  = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 8), Size::new(13, 8)));
+            let crush_two_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 8), Size::new(13, 8)));
+
+            let formant_male_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 16), Size::new(13, 8)));
+            let formant_none_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 16), Size::new(13, 8)));
+            let formant_female_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 16), Size::new(13, 8)));
+
+            let key_down_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 24), Size::new(13, 8)));
+            let key_up_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 24), Size::new(13, 8)));
+
+            let voice_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 0), Size::new(13, 8)));
+            let voice_off    = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 0), Size::new(13, 8)));
+            let vocode_on    = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 24), Size::new(13, 8)));
+            let vocode_off   = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 16), Size::new(13, 8)));
+            let autotune_on  = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 24), Size::new(13, 8)));
+            let autotune_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 8), Size::new(13, 8)));
+
+
+            // Convert BMPs into Image objects
+            let bg = Image::new(&bmp, Point::new(0, 0));
+
+            let low_oct_on_img = Image::new(&low_oct_on, Point::new(0, 0));
+            let med_oct_on_img = Image::new(&med_oct_on, Point::new(13, 0));
+            let high_oct_on_img = Image::new(&high_oct_on, Point::new(25, 0));
+
+            let crush_one_on_img = Image::new(&crush_one_on, Point::new(0, 8));
+            let crush_none_on_img = Image::new(&crush_none_on, Point::new(13, 8));
+            let crush_two_on_img = Image::new(&crush_two_on, Point::new(25, 8));
+
+            let formant_male_on_img = Image::new(&formant_male_on, Point::new(0, 16));
+            let formant_none_on_img = Image::new(&formant_none_on, Point::new(13, 16));
+            let formant_female_on_img = Image::new(&formant_female_on, Point::new(25, 16));
+
+            let key_down_on_img = Image::new(&key_down_on, Point::new(0, 24));
+            let key_up_on_img = Image::new(&key_up_on, Point::new(25, 24));
+
+            let voice_on_img = Image::new(&voice_on, Point::new(13, 24));
+            let voice_off_img = Image::new(&voice_off, Point::new(13, 24));
+            let vocode_on_img = Image::new(&vocode_on, Point::new(13, 24));
+            let vocode_off_img = Image::new(&vocode_off, Point::new(13, 24));
+            let autotune_on_img = Image::new(&autotune_on, Point::new(13, 24));
+            let autotune_off_img = Image::new(&autotune_off, Point::new(13, 24));
+
+            let image = Image::new(&bmp, Point::new(0, 0));
+            image.draw(display).expect("Draw background");
+
+            // Row 1: Octave
+            match octave {
+                0 => med_oct_on_img.draw(display).expect("Draw med octave"),
+                1 => low_oct_on_img.draw(display).expect("Draw low octave"),
+                2 => high_oct_on_img.draw(display).expect("Draw high octave"),
+                _ => med_oct_on_img.draw(display).expect("Draw med octave (default)")
+            }
+
+            // Row 2: Crush
+            match crush {
+                0 => crush_none_on_img.draw(display).expect("Draw no crush"),
+                1 => crush_one_on_img.draw(display).expect("Draw crush 1"),
+                2 => crush_two_on_img.draw(display).expect("Draw crush 2"),
+                _ => crush_none_on_img.draw(display).expect("Draw no crush (default)")
+            }
+
+            // Row 3: Formant
+            match formant {
+                0 => formant_none_on_img.draw(display).expect("Draw no formant"),
+                1 => formant_male_on_img.draw(display).expect("Draw formant male"),
+                2 => formant_female_on_img.draw(display).expect("Draw formant female"),
+                _ => formant_none_on_img.draw(display).expect("Draw no formant (default)")
+            }
+
+            // Row 4: Key & Voice
+            if(key_down_pressed){
+                key_down_on_img.draw(display).expect("Draw key down");
+            }
+
+            // Process profile name
+            let mut process_profile = "skibidi";
+            match process {
+                ProcessingProfile::Autotune => {
+                    process_profile = "Autotune";
+                    if(process_cycle_pressed){
+                        autotune_on_img.draw(display).expect("Draw autotune on");
+                    }else{
+                        autotune_off_img.draw(display).expect("Draw autotune off");
+                    }
+                },
+                ProcessingProfile::Vocode => {
+                    process_profile = "Vocode";
+                    if(process_cycle_pressed){
+                        vocode_on_img.draw(display).expect("Draw vocode on");
+                    }else{
+                        vocode_off_img.draw(display).expect("Draw vocode off");
+                    }
+                },
+                ProcessingProfile::Dry => {
+                    process_profile = "Dry Vox";
+                    if(process_cycle_pressed){
+                        voice_on_img.draw(display).expect("Draw voice on");
+                    }else{
+                        voice_off_img.draw(display).expect("Draw voice off");
+                    }
+                },
+            };
+            
+
+            if(key_up_pressed)
+            {
+                info!("kay up pressed, should be 12");
+                key_up_on_img.draw(display).expect("Draw key up");
+            }
+            
+            
+            // Styles for text
+            let text_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X9)
+                .text_color(BinaryColor::On) 
+                .background_color(BinaryColor::Off) 
+                .build();
+        
+            let h1_style = MonoTextStyleBuilder::new()
+                .font(&FONT_10X20)
+                .text_color(BinaryColor::On)   
+                .background_color(BinaryColor::Off) 
+                .build();
+
+            let mut mode_buffer: String<8> = String::new();
+                write!(&mut mode_buffer, "{} {}", get_key_name(key), get_mode_name(key)) 
+                .expect("failed converting mode to string");
+
+            Text::with_alignment(
+                &mode_buffer,
+                display.bounding_box().center() + Point::new(26, 3),
+                text_style,
+                Alignment::Center,
+            )
+            .draw(display).expect("Draw process text");
+
+            Text::with_alignment(
+                process_profile,
+                display.bounding_box().center() + Point::new(26, 14),
+                text_style,
+                Alignment::Center,
+            )
+            .draw(display).expect("Draw key text");
+
+        }
+
+        fn draw_menu_screen(
+            prev: (&str, i32),
+            current: (&str, i32),
+            next: (&str, i32),
+            is_editing: bool,
+            display: &mut LcdDisplay
+        ) {
+            display.clear();
+            
+            // Styles for text
+            let text_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X9)
+                .text_color(BinaryColor::On) 
+                .background_color(BinaryColor::Off) 
+                .build();
+        
+            let h1_style = MonoTextStyleBuilder::new()
+                .font(&FONT_6X13)
+                .text_color(BinaryColor::On)   
+                .background_color(BinaryColor::Off) 
+                .build();
+            
+            
+            // Draw items
+            let options = [prev, current, next];
+            
+            if is_editing {
+                Line::new(Point::new(2, 22), Point::new(103, 22))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+                    .draw(display)
+                    .expect("Failed to draw name underline");
+            } else {
+                Line::new(Point::new(108, 22), Point::new(123, 22))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+                    .draw(display)
+                    .expect("Failed to draw value underline");
+            }
+            
+            // Draw all menu items (previous, current, next)
+            for (i, &option) in options.iter().enumerate() {
+                let style = if i == 1 { h1_style } else { text_style };
+                let y = 4 + (i as i32 * 12);
+                
+                // Draw option name
+                Text::with_baseline(option.0, Point::new(5, y), style, Baseline::Middle)
+                    .draw(display)
+                    .expect("Failed to draw option name");
+                
+                // Draw option value
+                let mut option_value_buffer: String<3> = String::new();
+                write!(&mut option_value_buffer, "{}", option.1)
+                    .expect("Failed converting option value to string");
+                
+                Text::with_baseline(&option_value_buffer, Point::new(110, y), style, Baseline::Middle)
+                    .draw(display)
+                    .expect("Failed to draw option value");
+            }
+        }
+
+        fn draw_text<D>(
+            display: &mut D,
+            text: &str,
+            position: Point,
+            style: &MonoTextStyle<BinaryColor>,
+        )
+        where
+            D: DrawTarget<Color = BinaryColor>,
+        {
+            Text::with_baseline(text, position, *style, Baseline::Middle).draw(display);
+        }
+        
+        fn draw_centered_text<D>(
+            display: &mut D,
+            text: &str,
+            center: Point,
+            style: MonoTextStyle<BinaryColor>,
+        )
+        where
+            D: DrawTarget<Color = BinaryColor>,
+        {
+            // 1) Create a Text at (0,0) just to measure it
+            let text_obj = Text::with_baseline(text, Point::zero(), style, Baseline::Top);
+        
+            // 2) bounding_box() gives us the width/height of this text
+            let bbox = text_obj.bounding_box();
+            let text_width = bbox.size.width as i32;
+            let text_height = bbox.size.height as i32;
+        
+            // 3) Compute a new top-left so that the text is centered on `center`
+            let draw_x = center.x - text_width / 2;
+            let draw_y = center.y - text_height / 2;
+        
+            // 4) Draw the text at the adjusted position
+            Text::with_baseline(text, Point::new(draw_x, draw_y), style, Baseline::Top)
+                .draw(display);
+        }
+
         /// Scans a 4x3 button matrix without diodes.
         /// The returned structure could be a 2D array or vector of booleans.
         /// For simplicity, this returns a nested array: [4 rows][3 cols].
@@ -642,55 +1247,105 @@ mod rtic_app {
             row_4: &Daisy18<Input>,
         ) -> [[bool; 3]; 4] {
             let mut state = [[false; 3]; 4];
-    
+
             // Helper closure to read rows
-            let read_rows = |
-                            r1: &Daisy15<Input>,
+            let read_rows = |r1: &Daisy15<Input>,
                             r2: &Daisy16<Input>,
                             r3: &Daisy17<Input>,
                             r4: &Daisy18<Input>| -> [bool; 4] {
                 [
-                    r1.is_low(), // true if button pressed
+                    r1.is_low(),
                     r2.is_low(),
                     r3.is_low(),
                     r4.is_low(),
                 ]
             };
-    
 
-    
-            // // Drive COL_2 low, others high
+            // Scan each column with proper delays
+            // Column 1
+            col_1.set_low();
+            col_2.set_high();
+            col_3.set_high();
+            cortex_m::asm::delay(10000); // Increased delay for better settling
+            let col1_rows = read_rows(row_1, row_2, row_3, row_4);
+            
+            // Column 2
             col_1.set_high();
             col_2.set_low();
             col_3.set_high();
+            cortex_m::asm::delay(10000);
             let col2_rows = read_rows(row_1, row_2, row_3, row_4);
-            for (r, pressed) in col2_rows.iter().enumerate() {
-                state[r][1] = *pressed;
-            }
-
-            // Drive COL_1 low, others high
-            col_2.set_high();
-            col_1.set_low();
-            col_3.set_high();
-            let col1_rows = read_rows(row_1, row_2, row_3, row_4);
-            for (r, pressed) in col1_rows.iter().enumerate() {
-                state[r][0] = *pressed;
-            }
-    
-            // Drive COL_3 low, others high
+            
+            // Column 3
             col_1.set_high();
             col_2.set_high();
             col_3.set_low();
+            cortex_m::asm::delay(10000);
             let col3_rows = read_rows(row_1, row_2, row_3, row_4);
+
+            // Fill state array
+            for (r, pressed) in col1_rows.iter().enumerate() {
+                state[r][0] = *pressed;
+            }
+            for (r, pressed) in col2_rows.iter().enumerate() {
+                state[r][1] = *pressed;
+            }
             for (r, pressed) in col3_rows.iter().enumerate() {
                 state[r][2] = *pressed;
             }
-    
-            // Finally, return all keys states
-            // state[row][col] = true means that button is pressed
+
             state
         }
+
+        // Button press handling based on current state
+        fn handle_button_press(row: usize, col: usize, current_state: AppState) -> state_machines::AppEvent {
+
+             // Temporarily use direct mapping to see what's actually happening
+            let actual_col = 2 - col;  // This reverses: 0→2, 1→1, 2→0
+            let key_num = row * 3 + actual_col + 1;
+    
+            info!("Button pressed - Row: {}, Col: {}, Key: {}", row, col, key_num);
+
+            match current_state {
+                // In Processing state - buttons are notes or key changes
+                AppState::Processing(_) => {
+                    state_machines::AppEvent::KeypadPress(key_num)
+                },
+                
+                // In Effects state - buttons control effects
+                AppState::EffectsProfile(_) => {
+                    info!("In Processing state, sending KeypadPress({})", key_num);
+                    state_machines::AppEvent::KeypadPress(key_num)
+                },
+                
+                // In Menu state - buttons go back to processing
+                AppState::Menu(_, _) => {
+                    state_machines::AppEvent::EncoderDoublePress // Exit menu on any button press
+                },
+                
+                // In Splash state - any button exits splash
+                AppState::Splash => {
+                    state_machines::AppEvent::SplashComplete
+                }
+            }
+        }
+        
+        fn handle_button_release(row: usize, col: usize, current_state: AppState) -> state_machines::AppEvent {
+            // Use the same mapping as press
+            let actual_col = 2 - col;
+            let key_num = row * 3 + actual_col + 1;
+            
+            match current_state {
+                AppState::Processing(_) | AppState::EffectsProfile(_) => {
+                    state_machines::AppEvent::KeypadRelease(key_num)
+                },
+                _ => state_machines::AppEvent::NoOp
+            }
+        }
+        
     }
+
+
 
 
 }
