@@ -1164,15 +1164,15 @@ mod rtic_app {
             let options = [prev, current, next];
             
             if is_editing {
-                Line::new(Point::new(2, 22), Point::new(103, 22))
-                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
-                    .draw(display)
-                    .expect("Failed to draw name underline");
-            } else {
                 Line::new(Point::new(108, 22), Point::new(123, 22))
                     .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
                     .draw(display)
                     .expect("Failed to draw value underline");
+            } else {
+                Line::new(Point::new(2, 22), Point::new(103, 22))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+                    .draw(display)
+                    .expect("Failed to draw name underline");
             }
             
             // Draw all menu items (previous, current, next)
