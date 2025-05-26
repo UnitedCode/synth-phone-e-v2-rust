@@ -89,6 +89,9 @@ dependencies = [
 [[package]]
 name = "state-machines"
 version = "0.1.0"
+dependencies = [
+ "log",
+]
 
 [[package]]
 name = "static_assertions"

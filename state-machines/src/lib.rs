@@ -75,6 +75,8 @@ impl Default for MenuValues {
     }
 }
 
+use log::{info, warn};
+
 impl MenuValues {
     /// Get a value for a specific menu item
     pub fn get(&self, item: MenuItem) -> i32 {
@@ -360,19 +362,17 @@ impl AppStateMachine {
 
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
-                if key <= 9 {
-                    // First 9 buttons are notes
-                    self.play_note(key);
-                    self.note = key as i32;
-                } else if key ==  10{
-                    // Lower key
-                    self.current_key = (self.current_key + 23) % 24;
-                } else if key == 11{
-                    self.state = self.state.cycle_profile();
-                } else if key == 12 {
-                    // Raise key
-                    self.current_key = (self.current_key + 1) % 24;
-                }
+                match key {
+                    1..=9 => {
+                        // First 9 buttons are notes
+                        self.play_note(key);
+                        self.note = key as i32;
+                    },
+                    10 => self.current_key = (self.current_key + 23) % 24,
+                    11 => self.state = self.state.cycle_profile(),
+                    12 => self.current_key = (self.current_key + 1) % 24,
+                    _ => {}
+                } 
             },
             
             // Handle keypad presses in Effects profile
@@ -421,6 +421,12 @@ impl AppStateMachine {
                     11 => self.process_cycle_pressed = false,
                     12 => self.key_up_pressed = false,
                     _ => {}
+                }
+            },
+
+            (AppState::Processing(_), AppEvent::KeypadRelease(key)) => {
+                match key {
+                    _ => self.play_note(0)
                 }
             },
             
@@ -495,12 +501,14 @@ impl AppStateMachine {
     }
 
     /// Play a note based on the current key and octave
-    fn play_note(&self, key_index: usize) {
+    fn play_note(&mut self, key_index: usize) {
+        info!("the note before {}",key_index);
         // Convert keypad position to a note in the current key and octave
         // Implementation depends on your audio system
         // This is just a placeholder
-        let _note = self.current_key + (key_index as i32) + (self.current_octave * 12);
+        self.note = key_index as i32;//self.current_key + (key_index as i32) + (self.current_octave * 12);
         // Play the note with current effects
+        info!("the note after {}", self.note);
     }
     
     /// Get a snapshot of all current values
