@@ -391,15 +391,15 @@ mod tests {
     #[test]
     fn print_major_scale_frequencies() {
         // Generate the C Major scale frequencies
-        const C_MAJOR_SCALE_FREQUENCIES: [f32; SCALE_NOTES * MAX_OCTAVES] =
+        let c_major_scale_frequencies_var: [f32; SCALE_NOTES * MAX_OCTAVES] =
             generate_major_scale_frequencies("C");
 
         // Print the result as a Rust array
         println!(
             "pub const C_MAJOR_SCALE_FREQUENCIES: [f32; {}] = [",
-            C_MAJOR_SCALE_FREQUENCIES.len()
+            c_major_scale_frequencies_var.len()
         );
-        for &freq in C_MAJOR_SCALE_FREQUENCIES.iter() {
+        for &freq in c_major_scale_frequencies_var.iter() {
             print!("{:.2}, ", freq);
         }
         println!("];");
