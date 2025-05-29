@@ -1,4 +1,4 @@
-use libm::{floorf, roundf, fabsf, logf, expf};
+use libm::{expf, fabsf, floorf, logf, roundf};
 use microfft;
 
 use crate::frequencies::find_nearest_note_frequency;
@@ -98,7 +98,8 @@ pub fn normalize_sample(sample: f32, target_peak: f32) -> f32 {
 #[inline(always)]
 pub fn cepstral_smoothing(input_magnitude: &[f32; FFT_SIZE]) -> [f32; FFT_SIZE / 2] {
     // Step 1: Compute log magnitude for each FFT bin.
-    let mut log_spec: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+    let mut log_spec: [microfft::Complex32; FFT_SIZE] =
+        [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
     for i in 0..FFT_SIZE {
         // Use libm::logf instead of .ln(), adding a small constant to avoid log(0)
         log_spec[i].re = logf(input_magnitude[i].max(1e-12));

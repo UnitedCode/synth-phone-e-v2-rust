@@ -4,6 +4,8 @@
 use std::{env, path::PathBuf};
 use xshell::{cmd, Shell};
 
+const EMBEDDED_FOLDER: &str = "synthfone_e";
+
 fn main() -> Result<(), anyhow::Error> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     let args = args.iter().map(|s| &**s).collect::<Vec<_>>();
@@ -47,21 +49,21 @@ fn test_host_target() -> Result<(), anyhow::Error> {
 
 fn test_target() -> Result<(), anyhow::Error> {
     let sh = Shell::new()?;
-    let _p = sh.push_dir(root_dir().join("cross"));
+    let _p = sh.push_dir(root_dir().join(EMBEDDED_FOLDER));
     cmd!(sh, "cargo test -p self-tests").run()?;
     Ok(())
 }
 
 fn flash() -> Result<(), anyhow::Error> {
     let sh = Shell::new()?;
-    let _p = sh.push_dir(root_dir().join("cross"));
+    let _p = sh.push_dir(root_dir().join(EMBEDDED_FOLDER));
     cmd!(sh, "cargo embed --chip stm32h750vb --release").run()?;
     Ok(())
 }
 
 fn build() -> Result<(), anyhow::Error> {
     let sh = Shell::new()?;
-    let _p = sh.push_dir(root_dir().join("cross"));
+    let _p = sh.push_dir(root_dir().join(EMBEDDED_FOLDER));
     cmd!(
         sh,
         "cargo build --verbose --release --target thumbv7em-none-eabihf"
