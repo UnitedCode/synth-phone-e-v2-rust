@@ -1,32 +1,34 @@
 {
-"rust-analyzer.check.allTargets": false,
-"cortex-debug.liveWatchRefreshRate": 225,
-"rust-analyzer.linkedProjects": [
+  "rust-analyzer.check.allTargets": false,
+  "cortex-debug.liveWatchRefreshRate": 225,
+  "rust-analyzer.linkedProjects": [
     // order is important (rust-analyzer/rust-analyzer#7764)
     "Cargo.toml",
-    "cross/Cargo.toml",
+    "synthfone_e/Cargo.toml",
+    "autotune/Cargo.toml",
+    "state-machines/Cargo.toml",
+    "host-tests/Cargo.toml",
+    "xtask/Cargo.toml"
   ],
-"cSpell.words": [
-  "autotune",
-  "ccdr",
-  "cosf",
-  "floorf",
-  "fmodf",
-  "hann",
-  "heapless",
-  "libdaisy",
-  "libm",
-  "microfft",
-  "Monotonics",
-  "pixelcolor",
-  "rtic",
-  "rustfmt",
-  "sinf",
-  "sqrtf",
-  "synthophone",
-  "SYSCFG",
-  "tinybmp"
-],
-
-
+  "cSpell.words": [
+    "autotune",
+    "ccdr",
+    "cosf",
+    "floorf",
+    "fmodf",
+    "hann",
+    "heapless",
+    "libdaisy",
+    "libm",
+    "microfft",
+    "Monotonics",
+    "pixelcolor",
+    "rtic",
+    "rustfmt",
+    "sinf",
+    "sqrtf",
+    "synthophone",
+    "SYSCFG",
+    "tinybmp"
+  ]
 }
