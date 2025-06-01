@@ -34,8 +34,7 @@ mod rtic_app {
     )]
     mod app {
         use crate::{
-            autotune::circular_buffer::CircularBuffer, constants::BLOCK_SIZE,
-            constants::BUFFER_SIZE, constants::FFT_SIZE, constants::HOP_SIZE,
+            autotune::{circular_buffer::CircularBuffer, oscillator::{Oscillator, Waveform}}, constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
         };
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
         use fugit::RateExtU32;
@@ -96,6 +95,7 @@ mod rtic_app {
             // For sample-rate reduction
             sr_hold_counter: i32,
             sr_held_value: f32,
+            carrier_osc: Oscillator,
         }
 
         #[local]
@@ -257,6 +257,8 @@ mod rtic_app {
             );
             timer2.listen(stm32h7xx_hal::timer::Event::TimeOut);
 
+
+
             info!("Startup done!! yo!");
 
             (
@@ -273,6 +275,7 @@ mod rtic_app {
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
+                    carrier_osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
                 },
                 Local {
                     audio: system.audio,
@@ -310,6 +313,7 @@ mod rtic_app {
         app_state_machine,
         sr_hold_counter,
         sr_held_value,
+        carrier_osc,
     ], priority = 8)]
         fn update_handler(mut ctx: update_handler::Context) {
             crate::handler::update_handler(ctx.local.audio, ctx.local.buffer, &mut ctx.shared);
@@ -341,7 +345,8 @@ mod rtic_app {
         synthesis_magnitudes,
         synthesis_frequencies,
         previous_pitch_shift_ratio,
-        app_state_machine
+        app_state_machine,
+        carrier_osc,
     ], local = [], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // Call audio processing from handler module

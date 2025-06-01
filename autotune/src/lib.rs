@@ -5,3 +5,4 @@ pub mod hann_window;
 pub mod keys;
 pub mod process_frequencies;
 pub mod prototype;
+pub mod oscillator;
