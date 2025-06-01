@@ -140,3 +140,20 @@ pub fn get_scale_by_key(key:i32) -> &'static KeyScaleFrequencies {
         &KEYS[0].0.1
     }
 }
+
+/// Gets a frequency for a given key, scale degree (0 to 6), and octave (0=low, 1=mid, 2=high).
+/// Octave 0 starts at row 4 (index 21) of the 70-length frequency array.
+pub fn get_frequency(key: i32, note: i32, octave: i32) -> f32 {
+    if key < 0 || note < 0 || octave < 0 {
+        return 0.0; // prevent negative index access
+    }
+
+    let key_index = key as usize;
+    let note_index = 21 + (octave as usize * 7) + note as usize;
+
+    if key_index >= KEYS.len() || note as usize >= 7 || note_index >= 70 {
+        return 0.0; // fallback or out-of-bounds
+    }
+
+    KEYS[key_index].0.1[note_index]
+}

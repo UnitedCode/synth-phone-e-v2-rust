@@ -40,7 +40,7 @@ mod rtic_app {
         use autotune::{
             frequencies::{find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES},
             keys::{
-                get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key,
+                get_key, get_key_name, get_mode_name, get_note_name, get_scale_by_key, get_frequency,
                 C_MAJOR_SCALE, E_MAJOR_SCALE,
             },
             process_frequencies::{
@@ -70,7 +70,7 @@ mod rtic_app {
             prelude::{Input, Output, PushPull},
             system,
         };
-        use libm::{atan2f, cosf, floorf, fmodf, roundf, sinf, sqrtf};
+        use libm::{atan2f, cosf, floorf, fmodf, roundf, sinf, powf, sqrtf};
         use log::{info, warn};
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::{Direction, RotaryEncoder};
@@ -390,9 +390,9 @@ mod rtic_app {
                     // ************** SAMPLE-RATE REDUCE **************
                     // Apply sample rate reduction effect
                     let mut sr_factor = 1;
-                    // ctx.shared.app_state_machine.lock(|msm| {
-                    //     // sr_factor = msm.snapshot().crush1;
-                    // });
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        sr_factor = msm.snapshot().sample_rate;
+                    });
 
                     // Apply the effect
                     ctx.shared.sr_hold_counter.lock(|hold_ctr| {
@@ -405,9 +405,9 @@ mod rtic_app {
                     // ************** BIT DEPTH REDUCE **************
                     // 3) Get bit depth from your menu
                     let mut bit_depth = 32;
-                    // ctx.shared.app_state_machine.lock(|msm| {
-                    //     //bit_depth = msm.snapshot().crush2;
-                    // });
+                    ctx.shared.app_state_machine.lock(|msm| {
+                        bit_depth = msm.snapshot().bit_rate;
+                    });
                     out_sample = bitcrush(out_sample, bit_depth as u8);
 
                     // Normalize final output
@@ -581,8 +581,8 @@ mod rtic_app {
                                 process,
                                 snapshot.key,
                                 snapshot.octave,
-                                snapshot.crush,
                                 snapshot.formant,
+                                snapshot.crush,
                                 snapshot.key_down_pressed,
                                 snapshot.process_cycle_pressed,
                                 snapshot.key_up_pressed,
@@ -720,56 +720,45 @@ mod rtic_app {
                 analysis_magnitudes_full[FFT_SIZE - i] = analysis_magnitudes[i];
             }
 
-            // Now compute the envelope using cepstral smoothing.
+            // //start here
+            // //1) compute the envelope using cepstral smoothing.
             let envelope = cepstral_smoothing(&analysis_magnitudes_full);
 
-            // 1) Create our carrier in freq domain: a harmonic stack at 440 Hz
+            // //2) Create our carrier in freq domain: a harmonic stack at 440 Hz
             // let mut freq_domain_carrier: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
 
-            // let bin_for_440 = roundf(440.0 / BIN_WIDTH) as usize;
+            // // 2a. Get the note (keypad / menu) the player is currently holding
+            // let (key, note, octave) = ctx.shared.app_state_machine.lock(|msm| {
+            //     let snap = msm.snapshot();
+            //     (snap.key, snap.note, snap.octave)
+            // });
 
-            // let max_harmonic = (FFT_SIZE / 2) / bin_for_440;
+            // // 2b. Fundamental frequency with a safe 40 Hz floor so bin_f0 ≥ 1
+            // let mut f0 = get_frequency(key, note, octave);
+            // if f0 < 40.0 { f0 = 40.0; }
 
-            // // Example amplitude roll-off for each harmonic. Tweak as you wish.
-            // fn amplitude_function(h: usize) -> f32 {
-            //     // A simple 1/h rolloff, or do something fancier
-            //     100.0 / (h as f32)
+            // // 2d. Per‑frame seed for the PRNG (cheap unique counter)
+            // let frame_ctr = ctx.shared.hop_counter.lock(|hc| *hc); // ok ‑ just a running u32
+
+            // // 2e. Fill every bin with a saw‑ish spectrum + random phase
+            // for bin in 1..FFT_SIZE / 2 {
+            //     // fractional harmonic index of *this* bin
+            //     let h = (bin as f32 * BIN_WIDTH) / f0;
+            //     // gentle 1/h^0.3 roll‑off (tweak to taste)
+            //     let amp = 1.0 / h.powf(0.3);
+            //     // random but deterministic phase for this (frame,bin)
+            //     let phase = prng01(bin, frame_ctr) * 2.0 * PI;
+
+            //     freq_domain_carrier[bin].re = amp * phase.cosf();
+            //     freq_domain_carrier[bin].im = amp * phase.sinf();
+
+            //     // mirror for a real‑valued IFFT
+            //     freq_domain_carrier[FFT_SIZE - bin] = freq_domain_carrier[bin].conj();
             // }
 
-            // // Populate the carrier bins for each harmonic
-            // for h in 1..=max_harmonic {
-            //     let bin = bin_for_440 * h;
-            //     freq_domain_carrier[bin].re = amplitude_function(h);
-            // }
+            // //3) Modulate the carrier wave with the speech envelope
 
-            // // Mirror them for a real IFFT
-            // for i in 1..(FFT_SIZE / 2) {
-            //     freq_domain_carrier[FFT_SIZE - i] = freq_domain_carrier[i].conj();
-            // }
-
-            // // 2) Multiply the carrier bins by the voice envelope
-            // for i in 0..(FFT_SIZE / 2) {
-            //     let amp_scale = envelope[i];
-            //     freq_domain_carrier[i].re *= amp_scale;
-            //     freq_domain_carrier[i].im *= amp_scale;
-
-            //     // Mirror side
-            //     if i != 0 {
-            //         freq_domain_carrier[FFT_SIZE - i].re *= amp_scale;
-            //         freq_domain_carrier[FFT_SIZE - i].im *= amp_scale;
-            //     }
-            // }
-
-            // // 3) Inverse FFT to get time-domain data
-            // microfft::inverse::ifft_1024(&mut freq_domain_carrier);
-
-            // // 4) Overlap-add or window it into out_buffer
-            // for (n, val) in freq_domain_carrier.iter().enumerate() {
-            //     let windowed_val = val.re * analysis_window_buffer[n]; // or skip the window if you prefer
-            //     ctx.shared.out_buffer.lock(|out_buffer| {
-            //         out_buffer.add_value(windowed_val);
-            //     });
-            // }
+            //end here
 
             // TODO: the fundimental can now be found from the spectral analysis
             // Get the fundamental frequency (Loudest)
@@ -779,7 +768,7 @@ mod rtic_app {
             // Exact frequency is tied to the bin.
             let exact_frequency = analysis_frequencies[fundamental_index] * BIN_WIDTH;
 
-            // We cannot divide by 0
+            //We cannot divide by 0
             if exact_frequency > 0.001 {
                 let mut scale_frequencies = &C_MAJOR_SCALE_FREQUENCIES;
 
@@ -1038,8 +1027,8 @@ mod rtic_app {
             process: ProcessingProfile,
             key: i32,
             octave: i32,
-            crush: i32,
             formant: i32,
+            crush: i32,
             key_down_pressed: bool,
             process_cycle_pressed: bool,
             key_up_pressed: bool,
@@ -1127,11 +1116,13 @@ mod rtic_app {
             let image = Image::new(&bmp, Point::new(0, 0));
             image.draw(display).expect("Draw background");
 
+            info!("oct:{}",octave);
+
             // Row 1: Octave
             match octave {
-                0 => med_oct_on_img.draw(display).expect("Draw med octave"),
+                0 => med_oct_on_img.draw(display).expect("Draw mid octave"),
                 1 => low_oct_on_img.draw(display).expect("Draw low octave"),
-                2 => high_oct_on_img.draw(display).expect("Draw high octave"),
+                4 => high_oct_on_img.draw(display).expect("Draw high octave"),
                 _ => med_oct_on_img
                     .draw(display)
                     .expect("Draw med octave (default)"),
@@ -1356,10 +1347,10 @@ mod rtic_app {
 
             // Helper closure to read rows
             let read_rows = |r1: &Daisy15<Input>,
-                             r2: &Daisy16<Input>,
-                             r3: &Daisy17<Input>,
-                             r4: &Daisy18<Input>|
-             -> [bool; 4] {
+                            r2: &Daisy16<Input>,
+                            r3: &Daisy17<Input>,
+                            r4: &Daisy18<Input>|
+            -> [bool; 4] {
                 [r1.is_low(), r2.is_low(), r3.is_low(), r4.is_low()]
             };
 
