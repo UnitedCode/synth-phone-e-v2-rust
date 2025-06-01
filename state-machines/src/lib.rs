@@ -29,8 +29,10 @@ pub enum MenuState {
 /// Menu items available for adjustment
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MenuItem {
-    Crush1,
-    Crush2,
+    BitRate1,
+    BitRate2,
+    SampleRate1,
+    SampleRate2,
     FormantMale,
     FormantFemale,
     AutotuneSpeed,
@@ -39,9 +41,11 @@ pub enum MenuItem {
 }
 
 /// Array of all menu items for iteration
-pub const MENU_ITEMS: [MenuItem; 7] = [
-    MenuItem::Crush1,
-    MenuItem::Crush2,
+pub const MENU_ITEMS: [MenuItem; 9] = [
+    MenuItem::BitRate1,
+    MenuItem::BitRate2,
+    MenuItem::SampleRate1,
+    MenuItem::SampleRate2,
     MenuItem::FormantMale,
     MenuItem::FormantFemale,
     MenuItem::AutotuneSpeed,
@@ -52,20 +56,24 @@ pub const MENU_ITEMS: [MenuItem; 7] = [
 /// Storage for all adjustable menu values
 #[derive(Debug, Clone, Copy)]
 pub struct MenuValues {
-    pub crush1: i32,         // 1-10
-    pub crush2: i32,         // 1-10
-    pub formant_male: i32,   // 1-10
-    pub formant_female: i32, // 1-10
-    pub autotune_speed: i32, // 1-10
-    pub magnitude: i32,      // 1-10
-    pub pad_matrix: i32,     // 0 or 1
+    pub bit_rate_1: i32,
+    pub bit_rate_2: i32,
+    pub sample_rate_1: i32,
+    pub sample_rate_2: i32,
+    pub formant_male: i32,
+    pub formant_female: i32,
+    pub autotune_speed: i32,
+    pub magnitude: i32,
+    pub pad_matrix: i32,
 }
 
 impl Default for MenuValues {
     fn default() -> Self {
         Self {
-            crush1: 5,
-            crush2: 5,
+            bit_rate_1: 32,
+            bit_rate_2: 10,
+            sample_rate_1: 5,
+            sample_rate_2: 16,
             formant_male: 5,
             formant_female: 5,
             autotune_speed: 5,
@@ -81,8 +89,10 @@ impl MenuValues {
     /// Get a value for a specific menu item
     pub fn get(&self, item: MenuItem) -> i32 {
         match item {
-            MenuItem::Crush1 => self.crush1,
-            MenuItem::Crush2 => self.crush2,
+            MenuItem::BitRate1 => self.bit_rate_1,
+            MenuItem::BitRate2 => self.bit_rate_2,
+            MenuItem::SampleRate1 => self.sample_rate_1,
+            MenuItem::SampleRate2 => self.sample_rate_2,
             MenuItem::FormantMale => self.formant_male,
             MenuItem::FormantFemale => self.formant_female,
             MenuItem::AutotuneSpeed => self.autotune_speed,
@@ -94,8 +104,10 @@ impl MenuValues {
     /// Set a value for a specific menu item (with appropriate clamping)
     pub fn set(&mut self, item: MenuItem, value: i32) {
         match item {
-            MenuItem::Crush1 => self.crush1 = value.clamp(1, 10),
-            MenuItem::Crush2 => self.crush2 = value.clamp(1, 10),
+            MenuItem::BitRate1 => self.bit_rate_1 = value.clamp(4, 32),
+            MenuItem::BitRate2 => self.bit_rate_2 = value.clamp(4, 32),
+            MenuItem::SampleRate1 => self.sample_rate_1 = value.clamp(1, 32),
+            MenuItem::SampleRate2 => self.sample_rate_2 = value.clamp(1, 32),
             MenuItem::FormantMale => self.formant_male = value.clamp(1, 10),
             MenuItem::FormantFemale => self.formant_female = value.clamp(1, 10),
             MenuItem::AutotuneSpeed => self.autotune_speed = value.clamp(1, 10),
@@ -107,8 +119,10 @@ impl MenuValues {
     /// Get a user-friendly name for a menu item
     pub fn get_item_name(item: MenuItem) -> &'static str {
         match item {
-            MenuItem::Crush1 => "Crush 1",
-            MenuItem::Crush2 => "Crush 2",
+            MenuItem::BitRate1 => "Bit Rate 1",
+            MenuItem::BitRate2 => "Bit Rate 2",
+            MenuItem::SampleRate1 => "Sample Rate 1",
+            MenuItem::SampleRate2 => "Sample Rate 2",
             MenuItem::FormantMale => "Formant Male",
             MenuItem::FormantFemale => "Formant Female",
             MenuItem::AutotuneSpeed => "Autotune Speed",
@@ -263,10 +277,12 @@ impl MenuState {
 pub struct AppStateMachine {
     state: AppState,
     values: MenuValues,
-    current_key: i32,     // Musical key (0=C, 1=C#, etc.)
-    current_octave: i32,  // Current octave (-1=low, 0=normal, 1=high)
-    current_crush: i32,   // Current bit crush (1=crush1, 0=none, 2=crush2)
-    current_formant: i32, // Current formant (-1=male, 0=none, 1=female)
+    current_key: i32,
+    current_octave: i32,
+    current_bitcrush: i32,
+    current_formant: i32, 
+    sample_rate: i32,
+    bit_rate: i32,
     pub volume: i32,
     pub note: i32,
     pub key_down_pressed: bool,
@@ -283,6 +299,8 @@ pub struct AppStateMachineSnapshot {
     pub note: i32,
     pub volume: i32,
     pub crush: i32,
+    pub sample_rate: i32,
+    pub bit_rate: i32,
     pub formant: i32,
     pub autotune_speed: i32,
     pub magnitude: i32,
@@ -305,10 +323,12 @@ impl AppStateMachine {
         Self {
             state: AppState::new(),
             values: MenuValues::default(),
-            current_key: 0,     // Start in C
-            current_octave: 0,  // Start at normal octave
-            current_crush: 0,   // Start with no crush
-            current_formant: 0, // Start with no formant
+            current_key: 0,
+            current_octave: 2,
+            current_bitcrush: 0,
+            current_formant: 0,
+            sample_rate: 32,
+            bit_rate: 32,
             volume: 0,
             note: 0,
             key_down_pressed: false,
@@ -330,7 +350,9 @@ impl AppStateMachine {
             octave: self.current_octave,
             note: self.note,
             volume: self.volume,
-            crush: self.current_crush,
+            crush: self.current_bitcrush,
+            sample_rate: self.sample_rate,
+            bit_rate: self.bit_rate,
             formant: self.current_formant,
             autotune_speed: self.values.autotune_speed,
             magnitude: self.values.magnitude,
@@ -375,9 +397,21 @@ impl AppStateMachine {
                     3 => self.current_octave = 4, // High
 
                     // Row 2: Bit crush controls
-                    4 => self.current_crush = 1, // Crush 1
-                    5 => self.current_crush = 0, // No crush
-                    6 => self.current_crush = 2, // Crush 2
+                    4 => {
+                        self.current_bitcrush = 1;
+                        self.bit_rate = self.values.bit_rate_1;
+                        self.sample_rate = self.values.sample_rate_1;
+                    },
+                    5 => {
+                        self.current_bitcrush = 0;
+                        self.bit_rate = 32;
+                        self.sample_rate = 1;
+                    },
+                    6 => {
+                        self.current_bitcrush = 2;
+                        self.bit_rate = self.values.bit_rate_2;
+                        self.sample_rate = self.values.sample_rate_2;
+                    },
 
                     // Row 3: Formant controls
                     7 => self.current_formant = 1, // Male
@@ -458,8 +492,10 @@ impl AppStateMachine {
     pub fn current(&self) -> MenuContext {
         let idx = self.active_menu_index().unwrap_or(0);
         let menu_items = [
-            ("Crush1", self.values.crush1),
-            ("Crush2", self.values.crush2),
+            ("BitRate1", self.values.bit_rate_1),
+            ("BitRate2", self.values.bit_rate_2),
+            ("SampleRate1", self.values.sample_rate_1),
+            ("SampleRate2", self.values.sample_rate_2),
             ("FormantMale", self.values.formant_male),
             ("FormantFemale", self.values.formant_female),
             ("Speed", self.values.autotune_speed),
@@ -502,15 +538,15 @@ impl AppStateMachine {
         self.values
     }
 
-    /// Get processing-related parameters
-    pub fn get_processing_params(&self) -> (i32, i32, i32, i32) {
-        (
-            self.current_key,
-            self.current_octave,
-            self.current_crush,
-            self.current_formant,
-        )
-    }
+    // Get processing-related parameters
+    // pub fn get_processing_params(&self) -> (i32, i32, i32, i32) {
+    //     (
+    //         self.current_key,
+    //         self.current_octave,
+    //         self.current_crush,
+    //         self.current_formant,
+    //     )
+    // }
 }
 
 /// A small helper function to clamp an i32.
