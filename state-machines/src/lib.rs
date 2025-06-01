@@ -58,8 +58,8 @@ pub const MENU_ITEMS: [MenuItem; 9] = [
 pub struct MenuValues {
     pub bit_rate_1: i32,
     pub bit_rate_2: i32,
-    pub sample_rate_1: i32,
-    pub sample_rate_2: i32,
+    pub sample_reduction_1: i32,
+    pub sample_reduction_2: i32,
     pub formant_male: i32,
     pub formant_female: i32,
     pub autotune_speed: i32,
@@ -72,8 +72,8 @@ impl Default for MenuValues {
         Self {
             bit_rate_1: 32,
             bit_rate_2: 10,
-            sample_rate_1: 5,
-            sample_rate_2: 16,
+            sample_reduction_1: 5,
+            sample_reduction_2: 16,
             formant_male: 5,
             formant_female: 5,
             autotune_speed: 5,
@@ -91,8 +91,8 @@ impl MenuValues {
         match item {
             MenuItem::BitRate1 => self.bit_rate_1,
             MenuItem::BitRate2 => self.bit_rate_2,
-            MenuItem::SampleRate1 => self.sample_rate_1,
-            MenuItem::SampleRate2 => self.sample_rate_2,
+            MenuItem::SampleRate1 => self.sample_reduction_1,
+            MenuItem::SampleRate2 => self.sample_reduction_2,
             MenuItem::FormantMale => self.formant_male,
             MenuItem::FormantFemale => self.formant_female,
             MenuItem::AutotuneSpeed => self.autotune_speed,
@@ -106,8 +106,8 @@ impl MenuValues {
         match item {
             MenuItem::BitRate1 => self.bit_rate_1 = value.clamp(4, 32),
             MenuItem::BitRate2 => self.bit_rate_2 = value.clamp(4, 32),
-            MenuItem::SampleRate1 => self.sample_rate_1 = value.clamp(1, 32),
-            MenuItem::SampleRate2 => self.sample_rate_2 = value.clamp(1, 32),
+            MenuItem::SampleRate1 => self.sample_reduction_1 = value.clamp(1, 32),
+            MenuItem::SampleRate2 => self.sample_reduction_2 = value.clamp(1, 32),
             MenuItem::FormantMale => self.formant_male = value.clamp(1, 10),
             MenuItem::FormantFemale => self.formant_female = value.clamp(1, 10),
             MenuItem::AutotuneSpeed => self.autotune_speed = value.clamp(1, 10),
@@ -281,7 +281,7 @@ pub struct AppStateMachine {
     current_octave: i32,
     current_bitcrush: i32,
     current_formant: i32, 
-    sample_rate: i32,
+    sample_reduction: i32,
     bit_rate: i32,
     pub volume: i32,
     pub note: i32,
@@ -299,7 +299,7 @@ pub struct AppStateMachineSnapshot {
     pub note: i32,
     pub volume: i32,
     pub crush: i32,
-    pub sample_rate: i32,
+    pub sample_reduction: i32,
     pub bit_rate: i32,
     pub formant: i32,
     pub autotune_speed: i32,
@@ -327,7 +327,7 @@ impl AppStateMachine {
             current_octave: 2,
             current_bitcrush: 0,
             current_formant: 0,
-            sample_rate: 32,
+            sample_reduction: 32,
             bit_rate: 32,
             volume: 0,
             note: 0,
@@ -351,7 +351,7 @@ impl AppStateMachine {
             note: self.note,
             volume: self.volume,
             crush: self.current_bitcrush,
-            sample_rate: self.sample_rate,
+            sample_reduction: self.sample_reduction,
             bit_rate: self.bit_rate,
             formant: self.current_formant,
             autotune_speed: self.values.autotune_speed,
@@ -400,17 +400,17 @@ impl AppStateMachine {
                     4 => {
                         self.current_bitcrush = 1;
                         self.bit_rate = self.values.bit_rate_1;
-                        self.sample_rate = self.values.sample_rate_1;
+                        self.sample_reduction = self.values.sample_reduction_1;
                     },
                     5 => {
                         self.current_bitcrush = 0;
                         self.bit_rate = 32;
-                        self.sample_rate = 1;
+                        self.sample_reduction = 1;
                     },
                     6 => {
                         self.current_bitcrush = 2;
                         self.bit_rate = self.values.bit_rate_2;
-                        self.sample_rate = self.values.sample_rate_2;
+                        self.sample_reduction = self.values.sample_reduction_2;
                     },
 
                     // Row 3: Formant controls
@@ -494,8 +494,8 @@ impl AppStateMachine {
         let menu_items = [
             ("BitRate1", self.values.bit_rate_1),
             ("BitRate2", self.values.bit_rate_2),
-            ("SampleRate1", self.values.sample_rate_1),
-            ("SampleRate2", self.values.sample_rate_2),
+            ("SampleRate1", self.values.sample_reduction_1),
+            ("SampleRate2", self.values.sample_reduction_2),
             ("FormantMale", self.values.formant_male),
             ("FormantFemale", self.values.formant_female),
             ("Speed", self.values.autotune_speed),

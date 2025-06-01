@@ -49,6 +49,7 @@ pub fn draw_processing_screen(
     let image = Image::new(&bmp, Point::new(0, 0));
     image.draw(display).expect("Draw background");
 
+    //TODO: move these to text?
     // Styles for text
     let text_style = MonoTextStyleBuilder::new()
         .font(&FONT_6X9)
@@ -107,8 +108,8 @@ pub fn draw_effects_screen(
     process: ProcessingProfile,
     key: i32,
     octave: i32,
-    crush: i32,
     formant: i32,
+    crush: i32,
     key_down_pressed: bool,
     process_cycle_pressed: bool,
     key_up_pressed: bool,
@@ -198,9 +199,9 @@ pub fn draw_effects_screen(
 
     // Row 1: Octave
     match octave {
-        0 => med_oct_on_img.draw(display).expect("Draw med octave"),
+        0 => med_oct_on_img.draw(display).expect("Draw mid octave"),
         1 => low_oct_on_img.draw(display).expect("Draw low octave"),
-        2 => high_oct_on_img.draw(display).expect("Draw high octave"),
+        4 => high_oct_on_img.draw(display).expect("Draw high octave"),
         _ => med_oct_on_img
             .draw(display)
             .expect("Draw med octave (default)"),

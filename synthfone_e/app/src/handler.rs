@@ -57,7 +57,11 @@ pub fn update_handler(
             }
 
             // ************** SAMPLE-RATE REDUCE **************
-            let sr_factor = 1;
+            let mut sr_factor = 1;
+
+            shared.app_state_machine.lock(|msm| {
+                sr_factor = msm.snapshot().sample_reduction;
+            });
 
             // Apply the effect
             shared.sr_hold_counter.lock(|hold_ctr| {
@@ -67,7 +71,10 @@ pub fn update_handler(
             });
 
             // ************** BIT DEPTH REDUCE **************
-            let bit_depth = 32;
+            let mut bit_depth = 32;
+            shared.app_state_machine.lock(|msm| {
+                bit_depth = msm.snapshot().bit_rate;
+            });
             out_sample = bitcrush(out_sample, bit_depth as u8);
 
             // Normalize final output
@@ -354,8 +361,13 @@ pub fn dma1_stream0_software_task(
         analysis_magnitudes_full[FFT_SIZE - i] = analysis_magnitudes[i];
     }
 
-    // Now compute the envelope using cepstral smoothing.
+    //start here
+    //1) compute the envelope using cepstral smoothing.
     let envelope = cepstral_smoothing(&analysis_magnitudes_full);
+
+
+
+    // TODO: the fundimental can now be found from the spectral analysis
 
     // Get the fundamental frequency (Loudest)
     let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
