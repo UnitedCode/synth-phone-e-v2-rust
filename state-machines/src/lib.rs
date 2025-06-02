@@ -447,9 +447,11 @@ impl AppStateMachine {
                 _ => {}
             },
 
-            (AppState::Processing(_), AppEvent::KeypadRelease(key)) => match key {
-                _ => self.play_note(0),
-            },
+            (AppState::Processing(profile), AppEvent::KeypadRelease(key)) => {
+                if matches!(profile, ProcessingProfile::Autotune | ProcessingProfile::Dry) {
+                    self.play_note(0);           // stop tone for those modes
+                }
+            }
 
             // Handle encoder rotation in Menu profile
             (AppState::Menu(menu_state, _), AppEvent::EncoderRotate(delta)) => {
