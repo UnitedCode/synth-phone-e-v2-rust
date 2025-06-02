@@ -257,8 +257,6 @@ mod rtic_app {
             );
             timer2.listen(stm32h7xx_hal::timer::Event::TimeOut);
 
-
-
             info!("Startup done!! yo!");
 
             (
@@ -275,7 +273,7 @@ mod rtic_app {
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
-                    carrier_osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
+                    carrier_osc: Oscillator::new(55.0, SAMPLE_RATE, Waveform::Saw),
                 },
                 Local {
                     audio: system.audio,
