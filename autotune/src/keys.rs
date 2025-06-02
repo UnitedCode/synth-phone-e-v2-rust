@@ -212,23 +212,20 @@ pub fn get_scale_by_key(key: i32) -> &'static KeyScaleFrequencies {
 
 
 pub fn get_frequency(key: i32, note: i32, octave: i32) -> f32 {
-    // basic bounds
-    if key < 0 || note < 0 || note > 6 { return 0.0; }
 
     //TODO: maybe i should have the octave store index insted of values so i don't have to convert here?
     // convert flag 1|2|4  →  0|1|2
     let octave_idx = match octave {
-        1 => 0,   // first row
-        2 => 1,   // second row
-        4 => 2,   // third row
+        1 => 1,   // first row
+        2 => 2,   // second row
+        4 => 3,   // third row
         _ => return 0.0, // invalid flag
     };
 
-    // row 3 (index 21) is still the “octave-0” base row
-    let note_index = 21 + octave_idx * 7 + note as usize;
+    let note_index = octave_idx * 7 + note as usize - 1 ;
 
     // out-of-bounds check
-    if (key as usize) >= KEYS.len() || note_index >= 70 {
+    if (key as usize) >= KEYS.len() || note_index >= 22 {
         return 0.0;
     }
 
