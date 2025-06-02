@@ -234,85 +234,33 @@ pub fn interface_handler(
 pub fn dma1_stream0_software_task(
     ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources,
 ) {
-    // Pre-allocated buffers
-    let mut input_buf: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let mut carrier_buf: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    // window + carrier block ------------------------------------------------
+    let mut carrier_buf = [0.0_f32; FFT_SIZE];
+    //let window = hann_window::HANN_WINDOW;
 
-        // VOCODER MODE - Simple and direct
-        
-        // 1. Get windowed input (modulator - voice)
-        ctx.in_buffer.lock(|in_buffer| {
-            in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
-            for i in 0..FFT_SIZE {
-                input_buf[i] = in_buffer.read() * analysis_window_buffer[i];
-            }
-        });
+    // read state → frequency
+    let (note, key, octave) = ctx.app_state_machine.lock(|m| {
+        let s = m.snapshot();
+        (s.note, s.key, s.octave)
+    });
+    let carrier_hz = get_frequency(key, note, octave);
 
-        let (note, key, octave) = ctx.app_state_machine.lock(|msm| {
-            let snapshot = msm.snapshot();
-            (snapshot.note, snapshot.key, snapshot.octave)
-        });
+    
 
-        let carrier_hz = get_frequency(key, note, octave);
-        info!("note: {} key: {} oct: {} == {}", note, key, octave, carrier_hz);
-
-        // 2. Generate windowed carrier
-        ctx.carrier_osc.lock(|osc| {
-            // update pitch first – keeps phase continuity
-            osc.set_freq(carrier_hz);
-
-            for i in 0..FFT_SIZE {
-                carrier_buf[i] = osc.next() * analysis_window_buffer[i];
-            }
-
-            info!("oscillator freq {}", osc.freq)
-        });
-
-
-        // 3. FFT both signals
-        let mod_fft = microfft::real::rfft_1024(&mut input_buf);
-        let car_fft = microfft::real::rfft_1024(&mut carrier_buf);
-
-        // 4. Vocoder processing
-        let mut output_spectrum: [microfft::Complex32; FFT_SIZE] = 
-            [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
-
-        for i in 0..(FFT_SIZE / 2) {
-            // Get modulator magnitude
-            let mod_mag = libm::sqrtf(mod_fft[i].re * mod_fft[i].re + mod_fft[i].im * mod_fft[i].im);
-            
-            // Get carrier magnitude
-            let car_mag = libm::sqrtf(car_fft[i].re * car_fft[i].re + car_fft[i].im * car_fft[i].im);
-            
-            // Scale carrier by modulator envelope
-            let scale_factor = if car_mag > 0.0001 {
-                mod_mag / car_mag
-            } else {
-                0.0
-            };
-            
-            // Apply scaling
-            output_spectrum[i].re = car_fft[i].re * scale_factor;
-            output_spectrum[i].im = car_fft[i].im * scale_factor;
-            
-            // Conjugate symmetry
-            if i > 0 && i < (FFT_SIZE / 2) {
-                output_spectrum[FFT_SIZE - i].re = output_spectrum[i].re;
-                output_spectrum[FFT_SIZE - i].im = -output_spectrum[i].im;
-            }
+    // 1. retune
+    ctx.carrier_osc.lock(|osc| {
+        osc.set_freq(carrier_hz);
+        for i in 0..FFT_SIZE {
+            carrier_buf[i] = osc.next();        // NO window for the test
         }
+    });
 
-        // 5. IFFT back to time domain
-        let output = microfft::inverse::ifft_1024(&mut output_spectrum);
-        
-        // 6. Overlap-add to output buffer
-        ctx.out_buffer.lock(|out_buffer| {
-            for (i, sample) in output.iter().enumerate() {
-                let windowed_sample = sample.re * analysis_window_buffer[i];
-                out_buffer.add_value(windowed_sample);
-            }
-        });
+    // 2. overlap-add – no FFT
+    ctx.out_buffer.lock(|b| {
+        for s in carrier_buf { b.add_value(s); }
+        b.next_hop();
+    });
+
     }
 
 #[inline(always)]
