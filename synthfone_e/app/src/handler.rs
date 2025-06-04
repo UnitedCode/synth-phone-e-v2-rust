@@ -236,7 +236,7 @@ pub fn dma1_stream0_software_task(
 ) {
    
     let mut current_process = ProcessingProfile::Autotune;
-    shared.app_state_machine.lock(|msm| {
+    ctx.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
         match snapshot.current_state {
             AppState::Processing(process)
@@ -250,7 +250,7 @@ pub fn dma1_stream0_software_task(
 
     match current_process {
         ProcessingProfile::Autotune => process_Autotune(ctx),
-        ProcessingProfile::Vocodec => process_Vocode(ctx),
+        ProcessingProfile::Vocode => process_Vocode(ctx),
         ProcessingProfile::Dry => process_Dry(ctx),
     }
 
@@ -259,7 +259,18 @@ pub fn dma1_stream0_software_task(
 //TODO: these have a lot of similar code and processes, deal with it
 #[inline(always)]
 pub fn process_Dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
-
+    //-- copy one frame straight through (no window, no FFT) --
+    ctx.in_buffer.lock(|ib| {
+        ctx.out_buffer.lock(|ob| {
+            ib.push_read_back(FFT_SIZE - HOP_SIZE);      // rewind one hop
+            for _ in 0..FFT_SIZE {
+                ob.add_value( ib.read() );               // dry vocal
+            }
+            ob.next_hop();     // move write pointer to the next 128-sample hop
+            ob.clear_hop();    // zero the region we just finished reading
+        })
+    });
+    
 }
 
 #[inline(always)]
