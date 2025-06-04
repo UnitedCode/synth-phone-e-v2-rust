@@ -266,11 +266,8 @@ pub fn process_Dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
             for _ in 0..FFT_SIZE {
                 ob.add_value( ib.read() );               // dry vocal
             }
-            ob.next_hop();     // move write pointer to the next 128-sample hop
-            ob.clear_hop();    // zero the region we just finished reading
         })
     });
-    
 }
 
 #[inline(always)]
