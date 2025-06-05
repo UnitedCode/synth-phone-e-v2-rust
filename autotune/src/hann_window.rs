@@ -1,5 +1,3 @@
-use libm::cosf;
-
 #[allow(dead_code)]
 pub const FFT_SIZE: usize = 1024;
 #[allow(dead_code)]
