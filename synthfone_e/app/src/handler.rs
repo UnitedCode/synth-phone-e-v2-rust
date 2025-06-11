@@ -1,4 +1,5 @@
 use crate::{constants::*, display::screens::*, input::buttons::*};
+use autotune::circular_buffer;
 use autotune::frequencies::{find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES};
 use autotune::hann_window::{self, PI};
 use autotune::keys::{get_scale_by_key, get_frequency};
@@ -24,11 +25,30 @@ pub fn update_handler(
 
             // Lock to write to in_buffer
             shared.in_buffer.lock(|in_buffer| {
-                in_buffer.write(*_left);
+
+                shared.in_buffer_pointer.lock(|in_buffer_pointer |
+                {
+                    in_buffer[*in_buffer_pointer as usize] = *_left;
+
+                    *in_buffer_pointer += 1;
+                    if *in_buffer_pointer >= BUFFER_SIZE as u32{
+                        *in_buffer_pointer = 0 as u32;
+                    }
+                });
+            
             });
 
             shared.out_buffer.lock(|out_buffer| {
-                out_sample = out_buffer.read_and_reset();
+                shared.out_buffer_read_pointer.lock(|out_buffer_read_pointer |
+                {
+                    out_sample = out_buffer[*out_buffer_read_pointer as usize];
+                    out_buffer[*out_buffer_read_pointer as usize] = 0.0;
+
+                    *out_buffer_read_pointer += 1;
+                    if *out_buffer_read_pointer >= BUFFER_SIZE as u32 {
+                        *out_buffer_read_pointer = 0 as u32;
+                    }
+                });
             });
 
             // Check and handle hop counter
@@ -42,15 +62,19 @@ pub fn update_handler(
                     *count = 0;
                 });
 
+                shared.in_buffer_pointer_cached.lock(|in_buffer_pointer_cached|{
+                    shared.in_buffer_pointer.lock(|in_buffer_pointer |
+                    {
+                        *in_buffer_pointer_cached = *in_buffer_pointer;
+                    });
+                });
+
+
                 // Run FFT Process in new software task
                 if crate::rtic_app::app::dma1_stream0_software_task::spawn().is_err() {
                     warn!("Could not unwrap software task - underrun error");
                 }
 
-                // Lock to advance the output buffer's hop
-                shared.out_buffer.lock(|out_buffer| {
-                    out_buffer.next_hop();
-                });
             }
 
             shared.hop_counter.lock(|count| {
@@ -126,23 +150,23 @@ pub fn interface_handler(
     local.encoder_button.update();
 
     // Check for double press first
-    if local.encoder_button.is_double() {
-        info!("Encoder double press detected!");
-        update_state = true;
+    // if local.encoder_button.is_double() {
+    //     info!("Encoder double press detected!"); 
+    //     update_state = true;
 
-        shared.app_state_machine.lock(|msm| {
-            msm.handle_event(state_machines::AppEvent::EncoderDoublePress);
-        });
-    }
+    //     shared.app_state_machine.lock(|msm| {
+    //         msm.handle_event(state_machines::AppEvent::EncoderDoublePress);
+    //     });
+    // }
     // Check for single press if not a double press
-    else if local.encoder_button.is_falling() {
-        info!("Encoder single press detected!");
-        update_state = true;
+    // else if local.encoder_button.is_falling() {
+    //     info!("Encoder single press detected!");
+    //     update_state = true;
 
-        shared.app_state_machine.lock(|msm| {
-            msm.handle_event(state_machines::AppEvent::EncoderPress);
-        });
-    }
+    //     shared.app_state_machine.lock(|msm| {
+    //         msm.handle_event(state_machines::AppEvent::EncoderPress);
+    //     });
+    // }
 
     // Handle encoder rotation
     match local.knob_1.rotary_encoder.update() {
@@ -234,7 +258,6 @@ pub fn interface_handler(
 pub fn dma1_stream0_software_task(
     ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources,
 ) {
-   
     let mut current_process = ProcessingProfile::Autotune;
     ctx.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
@@ -250,109 +273,142 @@ pub fn dma1_stream0_software_task(
 
     match current_process {
         ProcessingProfile::Autotune => process_Autotune(ctx),
-        ProcessingProfile::Vocode => process_Vocode(ctx),
-        ProcessingProfile::Dry => process_Dry(ctx),
+        ProcessingProfile::Vocode => process_dry(ctx),
+        ProcessingProfile::Dry => process_dry(ctx),
     }
+
+    ctx.out_buffer_write_pointer.lock(|out_buffer_write_pointer |{
+        *out_buffer_write_pointer = (*out_buffer_write_pointer + HOP_SIZE as u32) % BUFFER_SIZE as u32;
+    });
 
 }
 
 //TODO: these have a lot of similar code and processes, deal with it
 #[inline(always)]
-pub fn process_Dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
-    //-- copy one frame straight through (no window, no FFT) --
-    ctx.in_buffer.lock(|ib| {
-        ctx.out_buffer.lock(|ob| {
-            ib.push_read_back(FFT_SIZE - HOP_SIZE);      // rewind one hop
-            for _ in 0..FFT_SIZE {
-                ob.add_value( ib.read() );               // dry vocal
-            }
-        })
-    });
-}
-
-#[inline(always)]
-pub fn process_Vocode(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
-
-    // Pre-allocated buffers
-    let mut input_buf: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let mut carrier_buf: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
+pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
+    let mut unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
+    let mut full_spectrum: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
-    // VOCODER MODE - Simple and direct
-    
-    // 1. Get windowed input (modulator - voice)
-    ctx.in_buffer.lock(|in_buffer| {
-        in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
-        for i in 0..FFT_SIZE {
-            input_buf[i] = in_buffer.read() * analysis_window_buffer[i];
-        }
-    });
-
-    let (note, key, octave) = ctx.app_state_machine.lock(|msm| {
-        let snapshot = msm.snapshot();
-        (snapshot.note, snapshot.key, snapshot.octave)
-    });
-
-    let carrier_hz = get_frequency(key, note, octave);
-    info!("note: {} key: {} oct: {} == {}", note, key, octave, carrier_hz);
-
-    // 2. Generate windowed carrier
-    ctx.carrier_osc.lock(|osc| {
-        // update pitch first – keeps phase continuity
-        osc.set_freq(carrier_hz);
-
-        for i in 0..FFT_SIZE {
-            carrier_buf[i] = osc.next() * analysis_window_buffer[i];
-        }
-
-        info!("oscillator freq {}", osc.freq)
-    });
-
-
-    // 3. FFT both signals
-    let mod_fft = microfft::real::rfft_1024(&mut input_buf);
-    let car_fft = microfft::real::rfft_1024(&mut carrier_buf);
-
-    // 4. Vocoder processing
-    let mut output_spectrum: [microfft::Complex32; FFT_SIZE] = 
-        [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
-
-    for i in 0..(FFT_SIZE / 2) {
-        // Get modulator magnitude
-        let mod_mag = libm::sqrtf(mod_fft[i].re * mod_fft[i].re + mod_fft[i].im * mod_fft[i].im);
-        
-        // Get carrier magnitude
-        let car_mag = libm::sqrtf(car_fft[i].re * car_fft[i].re + car_fft[i].im * car_fft[i].im);
-        
-        // Scale carrier by modulator envelope
-        let scale_factor = if car_mag > 0.0001 {
-            mod_mag / car_mag
-        } else {
-            0.0
-        };
-        
-        // Apply scaling
-        output_spectrum[i].re = car_fft[i].re * scale_factor;
-        output_spectrum[i].im = car_fft[i].im * scale_factor;
-        
-        // Conjugate symmetry
-        if i > 0 && i < (FFT_SIZE / 2) {
-            output_spectrum[FFT_SIZE - i].re = output_spectrum[i].re;
-            output_spectrum[FFT_SIZE - i].im = -output_spectrum[i].im;
-        }
+    for i in 0..FFT_SIZE {
+        ctx.in_buffer_pointer_cached.lock(|in_buffer_pointer_cached| {
+            let circular_buffer_index = (*in_buffer_pointer_cached + i as u32 - FFT_SIZE as u32 + BUFFER_SIZE as u32) % BUFFER_SIZE as u32;
+            ctx.in_buffer.lock(|in_buffer|{
+                unwrapped_buffer[i] = in_buffer[circular_buffer_index as usize];
+            });
+        });
     }
 
-    // 5. IFFT back to time domain
-    let output = microfft::inverse::ifft_1024(&mut output_spectrum);
+    let fft = microfft::real::rfft_1024(&mut unwrapped_buffer);
+
+    // Copy the first half (including DC and Nyquist)
+    for i in 0..512 {  // 0 to 512 inclusive
+        full_spectrum[i] = fft[i];
+    }
     
-    // 6. Overlap-add to output buffer
-    ctx.out_buffer.lock(|out_buffer| {
-        for (i, sample) in output.iter().enumerate() {
-            let windowed_sample = sample.re * analysis_window_buffer[i];
-            out_buffer.add_value(windowed_sample);
-        }
-    });
+    // Fill the second half with complex conjugates (excluding DC and Nyquist)
+    for i in 1..512 {  // 1 to 510
+        full_spectrum[FFT_SIZE - i] = microfft::Complex32 {
+            re: fft[i].re,
+            im: -fft[i].im,  // Complex conjugate
+        };
+    }
+    
+    let res = microfft::inverse::ifft_1024(&mut full_spectrum);
+
+    for i in 0..FFT_SIZE {
+        ctx.out_buffer_write_pointer.lock(|out_buffer_write_pointer| {
+            let circular_buffer_index = (*out_buffer_write_pointer + i as u32) % BUFFER_SIZE as u32;
+            ctx.out_buffer.lock(|out_buffer|{
+                out_buffer[circular_buffer_index as usize] += res[i].re * analysis_window_buffer[i];
+            });
+        });
+    }
 }
+
+// #[inline(always)]
+// pub fn process_Vocode(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
+
+//     // Pre-allocated buffers
+//     let mut input_buf: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
+//     let mut carrier_buf: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
+//     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+
+//     // VOCODER MODE - Simple and direct
+    
+//     // 1. Get windowed input (modulator - voice)
+//     ctx.in_buffer.lock(|in_buffer| {
+//         in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
+//         for i in 0..FFT_SIZE {
+//             input_buf[i] = in_buffer.read() * analysis_window_buffer[i];
+//         }
+//     });
+
+//     let (note, key, octave) = ctx.app_state_machine.lock(|msm| {
+//         let snapshot = msm.snapshot();
+//         (snapshot.note, snapshot.key, snapshot.octave)
+//     });
+
+//     let carrier_hz = get_frequency(key, note, octave);
+//     info!("note: {} key: {} oct: {} == {}", note, key, octave, carrier_hz);
+
+//     // 2. Generate windowed carrier
+//     ctx.carrier_osc.lock(|osc| {
+//         // update pitch first – keeps phase continuity
+//         osc.set_freq(carrier_hz);
+
+//         for i in 0..FFT_SIZE {
+//             carrier_buf[i] = osc.next() * analysis_window_buffer[i];
+//         }
+
+//         info!("oscillator freq {}", osc.freq)
+//     });
+
+
+//     // 3. FFT both signals
+//     let mod_fft = microfft::real::rfft_1024(&mut input_buf);
+//     let car_fft = microfft::real::rfft_1024(&mut carrier_buf);
+
+//     // 4. Vocoder processing
+//     let mut output_spectrum: [microfft::Complex32; FFT_SIZE] = 
+//         [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+
+//     for i in 0..(FFT_SIZE / 2) {
+//         // Get modulator magnitude
+//         let mod_mag = libm::sqrtf(mod_fft[i].re * mod_fft[i].re + mod_fft[i].im * mod_fft[i].im);
+        
+//         // Get carrier magnitude
+//         let car_mag = libm::sqrtf(car_fft[i].re * car_fft[i].re + car_fft[i].im * car_fft[i].im);
+        
+//         // Scale carrier by modulator envelope
+//         let scale_factor = if car_mag > 0.0001 {
+//             mod_mag / car_mag
+//         } else {
+//             0.0
+//         };
+        
+//         // Apply scaling
+//         output_spectrum[i].re = car_fft[i].re * scale_factor;
+//         output_spectrum[i].im = car_fft[i].im * scale_factor;
+        
+//         // Conjugate symmetry
+//         if i > 0 && i < (FFT_SIZE / 2) {
+//             output_spectrum[FFT_SIZE - i].re = output_spectrum[i].re;
+//             output_spectrum[FFT_SIZE - i].im = -output_spectrum[i].im;
+//         }
+//     }
+
+//     // 5. IFFT back to time domain
+//     let output = microfft::inverse::ifft_1024(&mut output_spectrum);
+    
+//     // 6. Overlap-add to output buffer
+//     ctx.out_buffer.lock(|out_buffer| {
+//         for (i, sample) in output.iter().enumerate() {
+//             let windowed_sample = sample.re * analysis_window_buffer[i];
+//             out_buffer.add_value(windowed_sample);
+//         }
+//     });
+// }
 
 #[inline(always)]
 pub fn process_Autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
@@ -368,13 +424,12 @@ pub fn process_Autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_ta
     let mut _synthesis_count = [0; FFT_SIZE / 2];
 
     // Copy buffer into FFT input, starting one window ago
-    ctx.in_buffer.lock(|in_buffer| {
-        in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
-    });
-
-    for n in 0..FFT_SIZE {
-        ctx.in_buffer.lock(|in_buffer| {
-            unwrapped_buffer[n] *= in_buffer.read();
+    for i in 0..FFT_SIZE {
+        ctx.in_buffer_pointer_cached.lock(|in_buffer_pointer_cached| {
+            let circular_buffer_index = (*in_buffer_pointer_cached + i as u32 - FFT_SIZE as u32 + BUFFER_SIZE as u32) % BUFFER_SIZE as u32;
+            ctx.in_buffer.lock(|in_buffer|{
+                unwrapped_buffer[i] *= in_buffer[circular_buffer_index as usize];
+            });
         });
     }
 
@@ -534,10 +589,12 @@ pub fn process_Autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_ta
     let res = microfft::inverse::ifft_1024(&mut full_spectrum);
 
     // Add time domain into the output buffer
-    for (n, val) in res.iter().enumerate() {
-        let windowed_val = val.re * analysis_window_buffer[n]; // Window again and scale
-        ctx.out_buffer.lock(|out_buffer| {
-            out_buffer.add_value(windowed_val);
+    for i in 0..FFT_SIZE {
+        ctx.out_buffer_write_pointer.lock(|out_buffer_write_pointer| {
+            let circular_buffer_index = (*out_buffer_write_pointer + i as u32) % BUFFER_SIZE as u32;
+            ctx.out_buffer.lock(|out_buffer|{
+                out_buffer[circular_buffer_index as usize] += res[i].re * analysis_window_buffer[i];
+            });
         });
     }
 }

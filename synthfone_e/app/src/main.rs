@@ -82,14 +82,18 @@ mod rtic_app {
 
         #[shared]
         struct Shared {
-            in_buffer: CircularBuffer<f32, BUFFER_SIZE>,
-            out_buffer: CircularBuffer<f32, BUFFER_SIZE>,
+            in_buffer: [f32; BUFFER_SIZE],
+            out_buffer: [f32; BUFFER_SIZE],
             last_input_phases: [f32; FFT_SIZE],
             last_output_phases: [f32; FFT_SIZE],
             synthesis_magnitudes: [f32; FFT_SIZE],
             synthesis_frequencies: [f32; FFT_SIZE],
             previous_pitch_shift_ratio: f32,
             hop_counter: u32,
+            in_buffer_pointer: u32,
+            in_buffer_pointer_cached: u32,
+            out_buffer_write_pointer: u32,
+            out_buffer_read_pointer: u32,
             app_state_machine: AppStateMachine,
             old_matrix_state: [[bool; 3]; 4],
             // For sample-rate reduction
@@ -261,14 +265,18 @@ mod rtic_app {
 
             (
                 Shared {
-                    in_buffer: CircularBuffer::new(0.0, None),
-                    out_buffer: CircularBuffer::new(0.0, Some(HOP_SIZE)),
+                    in_buffer: [0.0; BUFFER_SIZE],
+                    out_buffer: [0.0; BUFFER_SIZE],
                     last_input_phases: [0.0; FFT_SIZE],
                     last_output_phases: [0.0; FFT_SIZE],
                     synthesis_magnitudes: [0.0; FFT_SIZE],
                     synthesis_frequencies: [0.0; FFT_SIZE],
                     previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
+                    in_buffer_pointer: 0,
+                    in_buffer_pointer_cached: 0,
+                    out_buffer_write_pointer: FFT_SIZE as u32 + (2 * HOP_SIZE) as u32,
+                    out_buffer_read_pointer: 0,
                     app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
@@ -308,6 +316,10 @@ mod rtic_app {
         last_input_phases,
         last_output_phases,
         hop_counter,
+        in_buffer_pointer,
+        in_buffer_pointer_cached,
+        out_buffer_write_pointer,
+        out_buffer_read_pointer,
         app_state_machine,
         sr_hold_counter,
         sr_held_value,
@@ -344,6 +356,10 @@ mod rtic_app {
         synthesis_frequencies,
         previous_pitch_shift_ratio,
         app_state_machine,
+        in_buffer_pointer,
+        in_buffer_pointer_cached,
+        out_buffer_write_pointer,
+        out_buffer_read_pointer,
         carrier_osc,
     ], local = [], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
