@@ -86,6 +86,31 @@ pub fn update_handler(
                 });
             });
 
+            // ************** SAMPLE-RATE REDUCE **************
+            let mut sr_factor = 1;
+
+            shared.app_state_machine.lock(|msm| {
+                sr_factor = msm.snapshot().sample_reduction;
+            });
+
+            // Apply the effect
+            shared.sr_hold_counter.lock(|hold_ctr| {
+                shared.sr_held_value.lock(|held_val| {
+                    out_sample = sample_rate_reduce(out_sample, sr_factor, hold_ctr, held_val);
+                });
+            });
+
+            // ************** BIT DEPTH REDUCE **************
+            let mut bit_depth = 32;
+            shared.app_state_machine.lock(|msm| {
+                bit_depth = msm.snapshot().bit_rate;
+            });
+            out_sample = bitcrush(out_sample, bit_depth as u8);
+
+            // Normalize final output
+            out_sample = normalize_sample(out_sample, 0.8);
+            // **********************************************
+
             // Check and handle hop counter
             let mut local_hop_counter: u32 = 0;
             shared.hop_counter.lock(|count| {
@@ -250,8 +275,8 @@ pub fn interface_handler(
                         process,
                         snapshot.key,
                         snapshot.octave,
-                        snapshot.crush,
                         snapshot.formant,
+                        snapshot.crush,
                         snapshot.key_down_pressed,
                         snapshot.process_cycle_pressed,
                         snapshot.key_up_pressed,

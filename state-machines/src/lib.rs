@@ -327,7 +327,7 @@ impl AppStateMachine {
             current_octave: 2,
             current_bitcrush: 0,
             current_formant: 0,
-            sample_reduction: 32,
+            sample_reduction: 1,
             bit_rate: 32,
             volume: 0,
             note: 0,

@@ -67,7 +67,11 @@ pub fn sample_rate_reduce(
         *held_value = sample;
     }
     // Increment the hold_counter (wrapping around "factor")
-    *hold_counter = (*hold_counter + 1) % factor;
+    //TODO: this can cause a panic if devide by 0
+    
+    if factor != 0 {
+        *hold_counter = (*hold_counter + 1) % factor;
+    }
 
     // Always return the held_value (which may have just been updated)
     *held_value
