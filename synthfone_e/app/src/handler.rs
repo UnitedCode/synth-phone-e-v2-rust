@@ -38,6 +38,41 @@ pub fn update_handler(
             
             });
 
+            let mut current_process = ProcessingProfile::Autotune;
+            shared.app_state_machine.lock(|msm| {
+                let snapshot = msm.snapshot();
+                match snapshot.current_state {
+                    AppState::Processing(process)
+                    | AppState::EffectsProfile(process)
+                    | AppState::Menu(_, process) => {
+                        current_process = process;
+                    }
+                    AppState::Splash => {}
+                }
+            });
+
+            if(current_process == ProcessingProfile::Vocode){
+                let (note, key, octave) = shared.app_state_machine.lock(|msm| {
+                let snap = msm.snapshot();
+                    (snap.note, snap.key, snap.octave)
+                });
+    
+                let carrier_hz = get_frequency(key, note, octave);
+    
+                let mut sample = shared.carrier_osc.lock(|osc| {
+                    osc.set_freq(carrier_hz);
+                    osc.next()
+                });
+
+                shared.carrier_buffer.lock(|carrier_buffer| {
+                    shared.in_buffer_pointer.lock(|in_buffer_pointer |
+                    {
+                        //TODO: this will be off by 1 and should have its own pointer or fix the buffer system
+                        carrier_buffer[*in_buffer_pointer as usize] = sample;
+                    });
+                });
+            }
+
             shared.out_buffer.lock(|out_buffer| {
                 shared.out_buffer_read_pointer.lock(|out_buffer_read_pointer |
                 {
@@ -150,23 +185,23 @@ pub fn interface_handler(
     local.encoder_button.update();
 
     // Check for double press first
-    // if local.encoder_button.is_double() {
-    //     info!("Encoder double press detected!"); 
-    //     update_state = true;
+    if local.encoder_button.is_double() {
+        info!("Encoder double press detected!"); 
+        update_state = true;
 
-    //     shared.app_state_machine.lock(|msm| {
-    //         msm.handle_event(state_machines::AppEvent::EncoderDoublePress);
-    //     });
-    // }
-    // Check for single press if not a double press
-    // else if local.encoder_button.is_falling() {
-    //     info!("Encoder single press detected!");
-    //     update_state = true;
+        shared.app_state_machine.lock(|msm| {
+            msm.handle_event(state_machines::AppEvent::EncoderDoublePress);
+        });
+    }
+    //Check for single press if not a double press
+    else if local.encoder_button.is_falling() {
+        info!("Encoder single press detected!");
+        update_state = true;
 
-    //     shared.app_state_machine.lock(|msm| {
-    //         msm.handle_event(state_machines::AppEvent::EncoderPress);
-    //     });
-    // }
+        shared.app_state_machine.lock(|msm| {
+            msm.handle_event(state_machines::AppEvent::EncoderPress);
+        });
+    }
 
     // Handle encoder rotation
     match local.knob_1.rotary_encoder.update() {
@@ -272,8 +307,8 @@ pub fn dma1_stream0_software_task(
     });
 
     match current_process {
-        ProcessingProfile::Autotune => process_Autotune(ctx),
-        ProcessingProfile::Vocode => process_dry(ctx),
+        ProcessingProfile::Autotune => process_autotune(ctx),
+        ProcessingProfile::Vocode => process_vocode(ctx),
         ProcessingProfile::Dry => process_dry(ctx),
     }
 
@@ -326,92 +361,69 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
     }
 }
 
-// #[inline(always)]
-// pub fn process_Vocode(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
+#[inline(always)]
+pub fn process_vocode(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
+    let mut input_unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    let mut carrier_unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    let mut full_spectrum: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+    let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
-//     // Pre-allocated buffers
-//     let mut input_buf: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-//     let mut carrier_buf: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-//     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    for i in 0..FFT_SIZE {
+        ctx.in_buffer_pointer_cached.lock(|in_buffer_pointer_cached| {
+            let circular_buffer_index = (*in_buffer_pointer_cached + i as u32 - FFT_SIZE as u32 + BUFFER_SIZE as u32) % BUFFER_SIZE as u32;
+            ctx.in_buffer.lock(|in_buffer|{
+                input_unwrapped_buffer[i] *= in_buffer[circular_buffer_index as usize];
+            });
+            ctx.carrier_buffer.lock(|carrier_buffer|{
+                carrier_unwrapped_buffer[i] *= carrier_buffer[circular_buffer_index as usize]
+            });
+        });
+    }
 
-//     // VOCODER MODE - Simple and direct
+    let modulator_fft = microfft::real::rfft_1024(&mut input_unwrapped_buffer);
+    let carrier_fft = microfft::real::rfft_1024(&mut carrier_unwrapped_buffer);
+
+    // Copy the first half (including DC and Nyquist)
+    for i in 0..(FFT_SIZE / 2) {
+        // Get modulator magnitude
+        let mod_mag = libm::sqrtf(modulator_fft[i].re * modulator_fft[i].re + modulator_fft[i].im * modulator_fft[i].im);
+        
+        // Get carrier magnitude
+        let car_mag = libm::sqrtf(carrier_fft[i].re * carrier_fft[i].re + carrier_fft[i].im * carrier_fft[i].im);
+        
+        // Scale carrier by modulator envelope
+        let scale_factor = if car_mag > 0.0001 {
+            mod_mag / car_mag
+        } else {
+            0.0
+        };
+        
+        // Apply scaling
+        full_spectrum[i].re = carrier_fft[i].re * scale_factor;
+        full_spectrum[i].im = carrier_fft[i].im * scale_factor;
+        
+        // Conjugate symmetry
+        if i > 0 && i < (FFT_SIZE / 2) {
+            full_spectrum[FFT_SIZE - i].re = full_spectrum[i].re;
+            full_spectrum[FFT_SIZE - i].im = -full_spectrum[i].im;
+        }
+    }
+
     
-//     // 1. Get windowed input (modulator - voice)
-//     ctx.in_buffer.lock(|in_buffer| {
-//         in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
-//         for i in 0..FFT_SIZE {
-//             input_buf[i] = in_buffer.read() * analysis_window_buffer[i];
-//         }
-//     });
+    let res = microfft::inverse::ifft_1024(&mut full_spectrum);
 
-//     let (note, key, octave) = ctx.app_state_machine.lock(|msm| {
-//         let snapshot = msm.snapshot();
-//         (snapshot.note, snapshot.key, snapshot.octave)
-//     });
-
-//     let carrier_hz = get_frequency(key, note, octave);
-//     info!("note: {} key: {} oct: {} == {}", note, key, octave, carrier_hz);
-
-//     // 2. Generate windowed carrier
-//     ctx.carrier_osc.lock(|osc| {
-//         // update pitch first – keeps phase continuity
-//         osc.set_freq(carrier_hz);
-
-//         for i in 0..FFT_SIZE {
-//             carrier_buf[i] = osc.next() * analysis_window_buffer[i];
-//         }
-
-//         info!("oscillator freq {}", osc.freq)
-//     });
-
-
-//     // 3. FFT both signals
-//     let mod_fft = microfft::real::rfft_1024(&mut input_buf);
-//     let car_fft = microfft::real::rfft_1024(&mut carrier_buf);
-
-//     // 4. Vocoder processing
-//     let mut output_spectrum: [microfft::Complex32; FFT_SIZE] = 
-//         [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
-
-//     for i in 0..(FFT_SIZE / 2) {
-//         // Get modulator magnitude
-//         let mod_mag = libm::sqrtf(mod_fft[i].re * mod_fft[i].re + mod_fft[i].im * mod_fft[i].im);
-        
-//         // Get carrier magnitude
-//         let car_mag = libm::sqrtf(car_fft[i].re * car_fft[i].re + car_fft[i].im * car_fft[i].im);
-        
-//         // Scale carrier by modulator envelope
-//         let scale_factor = if car_mag > 0.0001 {
-//             mod_mag / car_mag
-//         } else {
-//             0.0
-//         };
-        
-//         // Apply scaling
-//         output_spectrum[i].re = car_fft[i].re * scale_factor;
-//         output_spectrum[i].im = car_fft[i].im * scale_factor;
-        
-//         // Conjugate symmetry
-//         if i > 0 && i < (FFT_SIZE / 2) {
-//             output_spectrum[FFT_SIZE - i].re = output_spectrum[i].re;
-//             output_spectrum[FFT_SIZE - i].im = -output_spectrum[i].im;
-//         }
-//     }
-
-//     // 5. IFFT back to time domain
-//     let output = microfft::inverse::ifft_1024(&mut output_spectrum);
-    
-//     // 6. Overlap-add to output buffer
-//     ctx.out_buffer.lock(|out_buffer| {
-//         for (i, sample) in output.iter().enumerate() {
-//             let windowed_sample = sample.re * analysis_window_buffer[i];
-//             out_buffer.add_value(windowed_sample);
-//         }
-//     });
-// }
+    for i in 0..FFT_SIZE {
+        ctx.out_buffer_write_pointer.lock(|out_buffer_write_pointer| {
+            let circular_buffer_index = (*out_buffer_write_pointer + i as u32) % BUFFER_SIZE as u32;
+            ctx.out_buffer.lock(|out_buffer|{
+                out_buffer[circular_buffer_index as usize] += res[i].re * analysis_window_buffer[i];
+            });
+        });
+    }
+}
 
 #[inline(always)]
-pub fn process_Autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
+pub fn process_autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
 
      // START ACTUAL FFT PROCESSING
     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;

@@ -84,6 +84,7 @@ mod rtic_app {
         struct Shared {
             in_buffer: [f32; BUFFER_SIZE],
             out_buffer: [f32; BUFFER_SIZE],
+            carrier_buffer: [f32; BUFFER_SIZE],
             last_input_phases: [f32; FFT_SIZE],
             last_output_phases: [f32; FFT_SIZE],
             synthesis_magnitudes: [f32; FFT_SIZE],
@@ -267,6 +268,7 @@ mod rtic_app {
                 Shared {
                     in_buffer: [0.0; BUFFER_SIZE],
                     out_buffer: [0.0; BUFFER_SIZE],
+                    carrier_buffer: [0.0; BUFFER_SIZE],
                     last_input_phases: [0.0; FFT_SIZE],
                     last_output_phases: [0.0; FFT_SIZE],
                     synthesis_magnitudes: [0.0; FFT_SIZE],
@@ -313,6 +315,7 @@ mod rtic_app {
         #[task(binds = DMA1_STR1, local = [audio, buffer, button], shared = [
         in_buffer,
         out_buffer,
+        carrier_buffer,
         last_input_phases,
         last_output_phases,
         hop_counter,
@@ -350,6 +353,7 @@ mod rtic_app {
         #[task(shared = [
         in_buffer,
         out_buffer,
+        carrier_buffer,
         last_input_phases,
         last_output_phases,
         synthesis_magnitudes,
