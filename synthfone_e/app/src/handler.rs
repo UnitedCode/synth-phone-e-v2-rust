@@ -7,7 +7,7 @@ use autotune::process_frequencies::{
     bitcrush, cepstral_smoothing, find_fundamental_frequency, normalize_sample, sample_rate_reduce,
 };
 use libdaisy::audio;
-use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
+use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf, logf, powf, expf};
 use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
@@ -100,16 +100,16 @@ pub fn update_handler(
                 });
             });
 
-            // ************** BIT DEPTH REDUCE **************
-            let mut bit_depth = 32;
-            shared.app_state_machine.lock(|msm| {
-                bit_depth = msm.snapshot().bit_rate;
-            });
-            out_sample = bitcrush(out_sample, bit_depth as u8);
+            // // ************** BIT DEPTH REDUCE **************
+            // let mut bit_depth = 32;
+            // shared.app_state_machine.lock(|msm| {
+            //     bit_depth = msm.snapshot().bit_rate;
+            // });
+            // out_sample = bitcrush(out_sample, bit_depth as u8);
 
-            // Normalize final output
-            out_sample = normalize_sample(out_sample, 0.8);
-            // **********************************************
+            // // Normalize final output
+            // out_sample = normalize_sample(out_sample, 0.8);
+            // // **********************************************
 
             // Check and handle hop counter
             let mut local_hop_counter: u32 = 0;
@@ -348,33 +348,177 @@ pub fn dma1_stream0_software_task(
 pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
     let mut unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
     let mut full_spectrum: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+    let mut new_spectrum: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
+    let mut in_buffer_pointer = 0;
+    ctx.in_buffer_pointer_cached.lock(|in_buffer_pointer_cached| {
+        in_buffer_pointer = *in_buffer_pointer_cached;
+    });
+
+    //TODO: may should copy the buffer instead of locking in a 4loop?
+
     for i in 0..FFT_SIZE {
-        ctx.in_buffer_pointer_cached.lock(|in_buffer_pointer_cached| {
-            let circular_buffer_index = (*in_buffer_pointer_cached + i as u32 - FFT_SIZE as u32 + BUFFER_SIZE as u32) % BUFFER_SIZE as u32;
-            ctx.in_buffer.lock(|in_buffer|{
-                unwrapped_buffer[i] = in_buffer[circular_buffer_index as usize];
-            });
+        let circular_buffer_index = (in_buffer_pointer + i as u32 - FFT_SIZE as u32 + BUFFER_SIZE as u32) % BUFFER_SIZE as u32;
+        ctx.in_buffer.lock(|in_buffer|{
+            unwrapped_buffer[i] = in_buffer[circular_buffer_index as usize];
         });
+        unwrapped_buffer[i] *= analysis_window_buffer[i];
     }
 
     let fft = microfft::real::rfft_1024(&mut unwrapped_buffer);
+    
+    let mut formant = 0;
+    ctx.app_state_machine.lock(|asm|{
+        formant = asm.snapshot().formant;
+    });
 
-    // Copy the first half (including DC and Nyquist)
-    for i in 0..512 {  // 0 to 512 inclusive
-        full_spectrum[i] = fft[i];
+    //TODO Split these out into functions
+    if(formant == 0)
+    {
+        // Copy the first half (including DC and Nyquist)
+        for i in 0..512 {  // 0 to 512 inclusive
+            new_spectrum[i] = fft[i];
+        }
+
+        // Fill the second half with complex conjugates (excluding DC and Nyquist)
+        for i in 1..512 {  // 1 to 510
+            new_spectrum[FFT_SIZE - i] = microfft::Complex32 {
+                re: fft[i].re,
+                im: -fft[i].im,  // Complex conjugate
+            };
+        }
+    }else{
+            //take the log of the magnatude to get the cepstrum
+            for i in 0..(FFT_SIZE / 2) {
+                let re = fft[i].re;
+                let im = fft[i].im;
+                let mag_squared = re * re + im * im;
+                let mag = sqrtf(mag_squared);
+                let safe_mag = if mag < 1e-6 { 0.0 } else { mag };
+                let log_val = if safe_mag == 0.0 { -30.0 } else { logf(safe_mag) };
+        
+                full_spectrum[i] = microfft::Complex32 { re: log_val, im: 0.0 };
+                if i != 0 {
+                    full_spectrum[FFT_SIZE - i] = microfft::Complex32 { re: log_val, im: 0.0 };
+                }
+            }
+            //get the cepstrum
+            let cepstrum = microfft::inverse::ifft_1024(&mut full_spectrum);
+            
+            //lifter the cepstrum to just the formant characteristics
+            let mut liftered_cepstrum = [0.0f32; FFT_SIZE];
+            let lifter_cutoff = 128;
+            
+            // The cepstrum of a real signal (log magnitude) should be real-valued
+            // Copy only the low quefrency components
+            for i in 0..lifter_cutoff {
+                liftered_cepstrum[i] = cepstrum[i].re;
+            }
+            // Keep symmetric for real FFT
+            for i in (FFT_SIZE - lifter_cutoff)..FFT_SIZE {
+                liftered_cepstrum[i] = cepstrum[i].re;
+            }
+            
+            //get the spectral envalope from the liftered cepstrum
+            let envelope = microfft::real::rfft_1024(&mut liftered_cepstrum);
+            
+            let shift_factor = if formant == 1 { 0.5 } else { 2.0 };
+        
+            for i in 0..(FFT_SIZE / 2) {
+            // ------------------------------------------
+            // 1. phase and current |X|
+            // ------------------------------------------
+            let phase = atan2f(fft[i].im, fft[i].re);
+            let mag   = sqrtf(fft[i].re * fft[i].re + fft[i].im * fft[i].im);   // |X[k]|
+
+            // ------------------------------------------
+            // 2. envelope lookup (shifted target)
+            // ------------------------------------------
+            let src_pos  = (i as f32) / shift_factor;
+            let src_idx  = src_pos as usize;
+            let frac     = src_pos - src_idx as f32;
+
+            let envelope_value = if src_idx < (FFT_SIZE / 2) - 1 {
+                // linear interp on log-envelope → exp for |E′|
+                let env1 = expf(envelope[src_idx].re);
+                let env2 = expf(envelope[src_idx + 1].re);
+                env1 * (1.0 - frac) + env2 * frac
+            } else if src_idx < FFT_SIZE / 2 {
+                expf(envelope[src_idx].re)
+            } else {
+                0.0
+            };
+
+            // ------------------------------------------
+            // 3. residual magnitude |R| = |X| / |E|
+            //    (uses ORIGINAL envelope at THIS bin, not shifted)
+            // ------------------------------------------
+            let env_orig = expf(envelope[i].re);              // |E[k]|
+            let residual = if env_orig > 1e-12 {
+                mag / env_orig                                // |R[k]|
+            } else {
+                0.0
+            };
+
+            //------------------------------------------
+            // 3.5 phase-vocoder pitch shift                         
+            //------------------------------------------
+            // let expected = 2.0 * PI * (HOP_SIZE as f32) * (i as f32) / (FFT_SIZE as f32);
+
+            // // Δφ = (current − prev) − expected
+            // let mut phase_diff= 0.0;
+            // ctx.last_input_phases.lock(|last_in| {
+            //     phase_diff = phase - last_in[i] - expected;
+            //     // wrap to (-π, π]
+            //     if phase_diff >=  PI { phase_diff -= 2.0 * PI; }
+            //     if phase_diff <  -PI { phase_diff += 2.0 * PI; }
+            //     last_in[i] = phase;                         // save for next hop
+            // });
+
+            // // instantaneous angular frequency ω
+            // let true_freq = expected + phase_diff * FFT_SIZE as f32 / HOP_SIZE as f32;
+
+            // // get the octave factor from the state machine
+            // let mut octave_factor = 1.0;
+            // ctx.app_state_machine.lock(|msm| {
+            //     octave_factor = msm.snapshot().octave as f32 * 0.5;
+            //     if octave_factor <= 0.4 {
+            //         octave_factor = 1.0;
+            //     }
+            // });
+
+            // // accumulate output phase with β scaling
+            // let mut out_phase = 0.0;
+            // ctx.last_output_phases.lock(|last_out| {
+            //     out_phase = last_out[i] + true_freq * octave_factor * HOP_SIZE as f32;
+            //     // wrap again
+            //     if out_phase >=  PI { out_phase -= 2.0 * PI; }
+            //     if out_phase <  -PI { out_phase += 2.0 * PI; }
+            //     last_out[i] = out_phase;
+            // });
+
+            // ------------------------------------------
+            // 4. assemble final magnitude and fade
+            // ------------------------------------------
+            let fade      = 1.0 - powf(i as f32 / (FFT_SIZE / 2) as f32, 2.0);
+            let final_mag = residual * envelope_value * fade; // |R| · |E′|
+
+            new_spectrum[i] = microfft::Complex32 {
+                re: final_mag * cosf(phase),
+                im: final_mag * sinf(phase),
+            };
+
+            if i != 0 {
+                new_spectrum[FFT_SIZE - i] = microfft::Complex32 {
+                    re:  new_spectrum[i].re,
+                    im: -new_spectrum[i].im,
+                };
+            }
+        }
     }
-    
-    // Fill the second half with complex conjugates (excluding DC and Nyquist)
-    for i in 1..512 {  // 1 to 510
-        full_spectrum[FFT_SIZE - i] = microfft::Complex32 {
-            re: fft[i].re,
-            im: -fft[i].im,  // Complex conjugate
-        };
-    }
-    
-    let res = microfft::inverse::ifft_1024(&mut full_spectrum);
+
+    let res = microfft::inverse::ifft_1024(&mut new_spectrum);
 
     for i in 0..FFT_SIZE {
         ctx.out_buffer_write_pointer.lock(|out_buffer_write_pointer| {
