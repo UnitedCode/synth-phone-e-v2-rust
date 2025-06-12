@@ -348,177 +348,193 @@ pub fn dma1_stream0_software_task(
 //TODO: these have a lot of similar code and processes, deal with it
 #[inline(always)]
 pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources){
-    let mut unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let mut full_spectrum: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
-    let mut new_spectrum: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+    // Window and buffers
     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    let mut unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    let mut full_spectrum: [microfft::Complex32; FFT_SIZE] = 
+        [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
+    let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];
+    let mut analysis_frequencies = [0.0; FFT_SIZE / 2];
 
-    let mut in_buffer_pointer = 0;
-    ctx.in_buffer_pointer_cached.lock(|in_buffer_pointer_cached| {
-        in_buffer_pointer = *in_buffer_pointer_cached;
-    });
-
-    //TODO: may should copy the buffer instead of locking in a 4loop?
-
+    // Copy buffer into FFT input
     for i in 0..FFT_SIZE {
-        let circular_buffer_index = (in_buffer_pointer + i as u32 - FFT_SIZE as u32 + BUFFER_SIZE as u32) % BUFFER_SIZE as u32;
-        ctx.in_buffer.lock(|in_buffer|{
-            unwrapped_buffer[i] = in_buffer[circular_buffer_index as usize];
+        ctx.in_buffer_pointer_cached.lock(|in_buffer_pointer_cached| {
+            let circular_buffer_index = (*in_buffer_pointer_cached + i as u32 - FFT_SIZE as u32 + BUFFER_SIZE as u32) % BUFFER_SIZE as u32;
+            ctx.in_buffer.lock(|in_buffer|{
+                unwrapped_buffer[i] = in_buffer[circular_buffer_index as usize] * analysis_window_buffer[i];
+            });
         });
-        unwrapped_buffer[i] *= analysis_window_buffer[i];
     }
 
+    // Forward FFT
     let fft = microfft::real::rfft_1024(&mut unwrapped_buffer);
-    
+
+    // Get settings from state machine
     let mut formant = 0;
+    let mut pitch_shift_ratio = 1.0;
     ctx.app_state_machine.lock(|asm|{
         formant = asm.snapshot().formant;
+        // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
+        let octave_factor = asm.snapshot().octave as f32 * 0.5;
+        pitch_shift_ratio = if octave_factor <= 0.4 { 1.0 } else { octave_factor };
     });
 
-    //TODO Split these out into functions
-    if(formant == 0)
-    {
-        // Copy the first half (including DC and Nyquist)
-        for i in 0..512 {  // 0 to 512 inclusive
-            new_spectrum[i] = fft[i];
+    // If no effects, just pass through
+    if formant == 0 && (pitch_shift_ratio > 0.99 && pitch_shift_ratio < 1.01) {
+        // Direct pass-through - just copy spectrum
+        for i in 0..512 {
+            full_spectrum[i] = fft[i];
+        }
+        for i in 1..512 {
+            full_spectrum[FFT_SIZE - i] = fft[i].conj();
+        }
+    } else {
+        // ANALYSIS - Phase vocoder
+        for i in 0..fft.len() {
+            let amplitude = sqrtf(fft[i].re * fft[i].re + fft[i].im * fft[i].im);
+            let phase = atan2f(fft[i].im, fft[i].re);
+
+            // Phase difference for exact frequency
+            let mut phase_diff = 0.0;
+            ctx.last_input_phases.lock(|last_input_phases| {
+                phase_diff = phase - last_input_phases[i];
+            });
+
+            let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
+            phase_diff = wrap_phase(phase_diff - bin_centre_frequency * HOP_SIZE as f32);
+            let bin_deviation = phase_diff * FFT_SIZE as f32 / HOP_SIZE as f32 / (2.0 * PI);
+
+            analysis_frequencies[i] = i as f32 + bin_deviation;
+            analysis_magnitudes[i] = amplitude;
+
+            ctx.last_input_phases.lock(|last_input_phases| {
+                last_input_phases[i] = phase;
+            });
         }
 
-        // Fill the second half with complex conjugates (excluding DC and Nyquist)
-        for i in 1..512 {  // 1 to 510
-            new_spectrum[FFT_SIZE - i] = microfft::Complex32 {
-                re: fft[i].re,
-                im: -fft[i].im,  // Complex conjugate
-            };
-        }
-    }else{
-        //take the log of the magnatude to get the cepstrum
-        for i in 0..(FFT_SIZE / 2) {
-            let re = fft[i].re;
-            let im = fft[i].im;
-            let mag_squared = re * re + im * im;
-            let mag = sqrtf(mag_squared);
-            let safe_mag = if mag < 1e-6 { 0.0 } else { mag };
-            let log_val = if safe_mag == 0.0 { -30.0 } else { logf(safe_mag) };
-    
-            full_spectrum[i] = microfft::Complex32 { re: log_val, im: 0.0 };
-            if i != 0 {
-                full_spectrum[FFT_SIZE - i] = microfft::Complex32 { re: log_val, im: 0.0 };
+        // ENVELOPE EXTRACTION (only if formant shifting)
+        let mut envelope = [1.0f32; FFT_SIZE / 2];
+        
+        if formant != 0 {
+            const LIFTER_CUTOFF: usize = 64;
+            let mut cepstrum_buffer = [0.0f32; FFT_SIZE];
+            
+            // Log magnitude spectrum
+            for i in 0..(FFT_SIZE / 2) {
+                let mag = analysis_magnitudes[i].max(1e-6);
+                let log_mag = logf(mag);
+                full_spectrum[i] = microfft::Complex32 { re: log_mag, im: 0.0 };
+                if i != 0 {
+                    full_spectrum[FFT_SIZE - i] = microfft::Complex32 { re: log_mag, im: 0.0 };
+                }
+            }
+            
+            // Get cepstrum
+            let cepstrum = microfft::inverse::ifft_1024(&mut full_spectrum);
+            
+            // Lifter
+            for i in 0..LIFTER_CUTOFF {
+                cepstrum_buffer[i] = cepstrum[i].re;
+            }
+            for i in (FFT_SIZE - LIFTER_CUTOFF)..FFT_SIZE {
+                cepstrum_buffer[i] = cepstrum[i].re;
+            }
+            
+            // Get envelope
+            let envelope_fft = microfft::real::rfft_1024(&mut cepstrum_buffer);
+            for i in 0..(FFT_SIZE / 2) {
+                envelope[i] = expf(envelope_fft[i].re);
             }
         }
-        //get the cepstrum
-        let cepstrum = microfft::inverse::ifft_1024(&mut full_spectrum);
-        
-        //lifter the cepstrum to just the formant characteristics
-        let mut liftered_cepstrum = [0.0f32; FFT_SIZE];
-        let lifter_cutoff = 128;
-        
-        // The cepstrum of a real signal (log magnitude) should be real-valued
-        // Copy only the low quefrency components
-        for i in 0..lifter_cutoff {
-            liftered_cepstrum[i] = cepstrum[i].re;
-        }
-        // Keep symmetric for real FFT
-        for i in (FFT_SIZE - lifter_cutoff)..FFT_SIZE {
-            liftered_cepstrum[i] = cepstrum[i].re;
-        }
-        
-        //get the spectral envalope from the liftered cepstrum
-        let envelope = microfft::real::rfft_1024(&mut liftered_cepstrum);
-        
-        let shift_factor = if formant == 1 { 0.8 } else { 1.3 };
-        
-        // get the octave factor from the state machine
-        // let mut octave_factor = 1.0;
-        // ctx.app_state_machine.lock(|msm| {
-        //     octave_factor = msm.snapshot().octave as f32 * 0.5;
-        //     if octave_factor <= 0.4 {
-        //         octave_factor = 1.0;
-        //     }
-        // });
-    
-        for i in 0..(FFT_SIZE / 2) {
-            // ------------------------------------------
-            // 1. phase and current |X|
-            // ------------------------------------------
-            let phase = atan2f(fft[i].im, fft[i].re);
-            let mag   = sqrtf(fft[i].re * fft[i].re + fft[i].im * fft[i].im);   // |X[k]|
 
-            // ------------------------------------------
-            // 2. envelope lookup (shifted target)
-            // ------------------------------------------
-            let src_pos  = (i as f32) / shift_factor;
-            let src_idx  = src_pos as usize;
-            let frac     = src_pos - src_idx as f32;
+        // Zero synthesis arrays
+        ctx.synthesis_magnitudes.lock(|syn_mag| {
+            for bin in syn_mag.iter_mut() {
+                *bin = 0.0;
+            }
+        });
+        ctx.synthesis_frequencies.lock(|syn_freq| {
+            for bin in syn_freq.iter_mut() {
+                *bin = 0.0;
+            }
+        });
 
-            let envelope_value = if src_idx < (FFT_SIZE / 2) - 1 {
-                // linear interp on log-envelope → exp for |E′|
-                let env1 = expf(envelope[src_idx].re);
-                let env2 = expf(envelope[src_idx + 1].re);
-                env1 * (1.0 - frac) + env2 * frac
-            } else if src_idx < FFT_SIZE / 2 {
-                expf(envelope[src_idx].re)
+        // Formant shift ratio
+        let formant_ratio = match formant {
+            1 => 0.8,  // Lower formants
+            2 => 1.3,  // Raise formants
+            _ => 1.0,  // No formant shift
+        };
+
+        // PITCH AND FORMANT SHIFTING
+        for i in 0..FFT_SIZE / 2 {
+            // Get residual
+            let residual = if formant != 0 {
+                analysis_magnitudes[i] / envelope[i].max(1e-6)
             } else {
-                0.0
+                analysis_magnitudes[i]
             };
 
-            // ------------------------------------------
-            // 3. residual magnitude |R| = |X| / |E|
-            //    (uses ORIGINAL envelope at THIS bin, not shifted)
-            // ------------------------------------------
-            let env_orig = expf(envelope[i].re);              // |E[k]|
-            let residual = if env_orig > 1e-12 {
-                mag / env_orig                                // |R[k]|
-            } else {
-                0.0
-            };
-
-            //------------------------------------------
-            // 3.5 phase-vocoder pitch shift                         
-            //------------------------------------------
-            // let expected = NORMAL_PHASE_ADVANCE[i];
-
-            // // Δφ = (current − prev) − expected
-            // let mut phase_diff= 0.0;
-            // ctx.last_input_phases.lock(|last_in| {
-            //     phase_diff = phase - last_in[i] - expected;
-            //     phase_diff = wrap_phase(phase_diff);
-            //     last_in[i] = phase;
-            // });
-
-            // // instantaneous angular frequency ω
-            // let true_freq = expected + phase_diff * FFT_SIZE as f32 / HOP_SIZE as f32;
-
-            // // accumulate output phase with β scaling
-            // let mut out_phase = 0.0;
-            // ctx.last_output_phases.lock(|last_out| {
-            //     let out_phase = wrap_phase(
-            //         last_out[i] + true_freq * octave_factor * HOP_SIZE as f32
-            //     );
-            //     last_out[i] = out_phase;
-            //     out_phase
-            // });
-
-            // ------------------------------------------
-            // 4. assemble final magnitude and fade
-            // ------------------------------------------
-            let final_mag = residual * envelope_value * QUADRATIC_FADE[i];
-
-            new_spectrum[i] = microfft::Complex32 {
-                re: final_mag * cosf(phase),
-                im: final_mag * sinf(phase),
-            };
-
-            if i != 0 {
-                new_spectrum[FFT_SIZE - i] = microfft::Complex32 {
-                    re:  new_spectrum[i].re,
-                    im: -new_spectrum[i].im,
+            // New bin for pitch shift
+            let new_bin = (floorf(i as f32 * pitch_shift_ratio + 0.5)) as usize;
+            
+            if new_bin < FFT_SIZE / 2 {
+                // Get shifted envelope value
+                let shifted_envelope = if formant != 0 {
+                    let env_pos = (i as f32 / formant_ratio).clamp(0.0, (FFT_SIZE / 2 - 1) as f32);
+                    let env_idx = env_pos as usize;
+                    let frac = env_pos - env_idx as f32;
+                    
+                    if env_idx < (FFT_SIZE / 2) - 1 {
+                        envelope[env_idx] * (1.0 - frac) + envelope[env_idx + 1] * frac
+                    } else {
+                        envelope[env_idx]
+                    }
+                } else {
+                    1.0
                 };
+
+                let final_magnitude = residual * shifted_envelope;
+
+                ctx.synthesis_magnitudes.lock(|synthesis_magnitudes| {
+                    synthesis_magnitudes[new_bin] += final_magnitude; // Note: += for overlapping bins
+                });
+                ctx.synthesis_frequencies.lock(|synthesis_frequencies| {
+                    synthesis_frequencies[new_bin] = analysis_frequencies[i] * pitch_shift_ratio;
+                });
+            }
+        }
+
+        // SYNTHESIS - Phase vocoder
+        for i in 0..FFT_SIZE / 2 {
+            let amplitude = ctx.synthesis_magnitudes.lock(|synthesis_magnitudes| synthesis_magnitudes[i]);
+            let bin_deviation = ctx.synthesis_frequencies.lock(|synthesis_frequencies| synthesis_frequencies[i] - i as f32);
+            
+            let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
+            let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
+            phase_diff += bin_centre_frequency * HOP_SIZE as f32;
+
+            let mut out_phase = 0.0;
+            ctx.last_output_phases.lock(|last_output_phases| {
+                out_phase = wrap_phase(last_output_phases[i] + phase_diff);
+                last_output_phases[i] = out_phase;
+            });
+
+            full_spectrum[i] = microfft::Complex32 {
+                re: amplitude * cosf(out_phase),
+                im: amplitude * sinf(out_phase)
+            };
+            
+            if i > 0 && i < (FFT_SIZE / 2) {
+                full_spectrum[FFT_SIZE - i] = full_spectrum[i].conj();
             }
         }
     }
 
-    let res = microfft::inverse::ifft_1024(&mut new_spectrum);
+    // Inverse FFT
+    let res = microfft::inverse::ifft_1024(&mut full_spectrum);
 
+    // Overlap-add to output
     for i in 0..FFT_SIZE {
         ctx.out_buffer_write_pointer.lock(|out_buffer_write_pointer| {
             let circular_buffer_index = (*out_buffer_write_pointer + i as u32) % BUFFER_SIZE as u32;
