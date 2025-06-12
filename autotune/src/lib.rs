@@ -6,3 +6,5 @@ pub mod keys;
 pub mod process_frequencies;
 pub mod prototype;
 pub mod oscillator;
+pub mod normal_phase_advance;
+pub mod fade;
