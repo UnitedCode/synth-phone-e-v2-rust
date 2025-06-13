@@ -53,7 +53,7 @@ pub fn update_handler(
                 }
             });
 
-            if(current_process == ProcessingProfile::Vocode){
+            if(current_process == ProcessingProfile::Vocode || current_process == ProcessingProfile::Dry){
                 let (note, key, octave) = shared.app_state_machine.lock(|msm| {
                 let snap = msm.snapshot();
                     (snap.note, snap.key, snap.octave)
@@ -351,6 +351,7 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
     // Window and buffers
     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
     let mut unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    let mut unwrapped_synth_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
     let mut full_spectrum: [microfft::Complex32; FFT_SIZE] = 
         [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
     let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];
@@ -363,6 +364,9 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
             ctx.in_buffer.lock(|in_buffer|{
                 unwrapped_buffer[i] = in_buffer[circular_buffer_index as usize] * analysis_window_buffer[i];
             });
+            ctx.carrier_buffer.lock(|carrier_buffer| {
+                unwrapped_synth_buffer[i] = carrier_buffer[circular_buffer_index as usize] * analysis_window_buffer[i];
+            });
         });
     }
 
@@ -372,11 +376,15 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
     // Get settings from state machine
     let mut formant = 0;
     let mut pitch_shift_ratio = 1.0;
+    let mut note = 0;
+    let mut formant_ratio = 1.0;
     ctx.app_state_machine.lock(|asm|{
         formant = asm.snapshot().formant;
         // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
         let octave_factor = asm.snapshot().octave as f32 * 0.5;
         pitch_shift_ratio = if octave_factor <= 0.4 { 1.0 } else { octave_factor };
+        note = asm.snapshot().note;
+        formant_ratio = asm.snapshot().formant_factor;
     });
 
     // If no effects, just pass through
@@ -534,12 +542,21 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
     // Inverse FFT
     let res = microfft::inverse::ifft_1024(&mut full_spectrum);
 
+    let playing_note = note != 0;
+;
     // Overlap-add to output
     for i in 0..FFT_SIZE {
         ctx.out_buffer_write_pointer.lock(|out_buffer_write_pointer| {
             let circular_buffer_index = (*out_buffer_write_pointer + i as u32) % BUFFER_SIZE as u32;
+
+            let result = if(playing_note){
+                (res[i].re * 0.96) + (unwrapped_synth_buffer[i] * 0.04)
+            }else{
+                res[i].re
+            };
+
             ctx.out_buffer.lock(|out_buffer|{
-                out_buffer[circular_buffer_index as usize] += res[i].re * analysis_window_buffer[i];
+                out_buffer[circular_buffer_index as usize] += result * analysis_window_buffer[i];
             });
         });
     }
