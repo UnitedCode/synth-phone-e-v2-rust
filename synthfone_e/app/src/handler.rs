@@ -377,14 +377,12 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
     let mut formant = 0;
     let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
-    let mut formant_ratio = 1.0;
     ctx.app_state_machine.lock(|asm|{
         formant = asm.snapshot().formant;
         // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
         let octave_factor = asm.snapshot().octave as f32 * 0.5;
         pitch_shift_ratio = if octave_factor <= 0.4 { 1.0 } else { octave_factor };
         note = asm.snapshot().note;
-        formant_ratio = asm.snapshot().formant_factor;
     });
 
     // If no effects, just pass through
