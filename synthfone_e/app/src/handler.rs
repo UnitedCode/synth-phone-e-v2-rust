@@ -59,7 +59,7 @@ pub fn update_handler(
                     (snap.note, snap.key, snap.octave)
                 });
     
-                let carrier_hz = get_frequency(key, note, octave);
+                let carrier_hz = get_frequency(key, note, octave, true);
     
                 let mut sample = shared.carrier_osc.lock(|osc| {
                     osc.set_freq(carrier_hz);
@@ -633,9 +633,13 @@ pub fn process_autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_ta
     let fft = microfft::real::rfft_1024(&mut unwrapped_buffer);
 
     let mut formant = 0;
+    let mut note = 0;
     ctx.app_state_machine.lock(|asm|{
         formant = asm.snapshot().formant;
+        note = asm.snapshot().note
     });
+
+    let is_auto = note == 0;
 
     // ANALYSIS
     for i in 0..fft.len() {
@@ -752,15 +756,25 @@ pub fn process_autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_ta
         let mut scale_frequencies = &C_MAJOR_SCALE_FREQUENCIES;
 
         let mut octave_factor = 1.0;
+        let mut key = 0;
+        let mut octave = 2;
         ctx.app_state_machine.lock(|msm| {
-            octave_factor = msm.snapshot().octave as f32 * 0.5;
+            octave = msm.snapshot().octave;
+            octave_factor = octave as f32 * 0.5;
             if octave_factor <= 0.4 {
                 octave_factor = 1.0;
             }
-            scale_frequencies = get_scale_by_key(msm.snapshot().key);
+
+            key = msm.snapshot().key;
+            scale_frequencies = get_scale_by_key(key);
+
         });
 
-        let target_frequency = find_nearest_note_in_key(exact_frequency, scale_frequencies);
+        let target_frequency = if(is_auto){
+            find_nearest_note_in_key(exact_frequency, scale_frequencies)
+        }else{
+            get_frequency(key, note, octave, false)
+        };
         let current_pitch_shift_ratio = target_frequency / exact_frequency;
 
         let previous_pitch_shift_ratio = ctx.previous_pitch_shift_ratio.lock(|ppr| *ppr);
