@@ -21,6 +21,17 @@ pub fn update_handler(
     buffer: &mut audio::AudioBuffer,
     shared: &mut crate::rtic_app::app::update_handler::SharedResources,
 ) {
+
+    let mut sr_factor = 1;
+    shared.app_state_machine.lock(|msm| {
+        sr_factor = msm.snapshot().sample_reduction;
+    });
+
+    let mut bit_depth = 32;
+    shared.app_state_machine.lock(|msm| {
+        bit_depth = msm.snapshot().bit_rate;
+    });
+
     if audio.get_stereo(buffer) {
         for (_left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
             let mut out_sample = *_left;
@@ -89,12 +100,6 @@ pub fn update_handler(
             });
 
             // ************** SAMPLE-RATE REDUCE **************
-            let mut sr_factor = 1;
-
-            shared.app_state_machine.lock(|msm| {
-                sr_factor = msm.snapshot().sample_reduction;
-            });
-
             // Apply the effect
             shared.sr_hold_counter.lock(|hold_ctr| {
                 shared.sr_held_value.lock(|held_val| {
@@ -102,16 +107,12 @@ pub fn update_handler(
                 });
             });
 
-            // // ************** BIT DEPTH REDUCE **************
-            // let mut bit_depth = 32;
-            // shared.app_state_machine.lock(|msm| {
-            //     bit_depth = msm.snapshot().bit_rate;
-            // });
-            // out_sample = bitcrush(out_sample, bit_depth as u8);
+            // ************** BIT DEPTH REDUCE **************
+            out_sample = bitcrush(out_sample, bit_depth as u8);
 
-            // // Normalize final output
-            // out_sample = normalize_sample(out_sample, 0.8);
-            // // **********************************************
+            // Normalize final output
+            out_sample = normalize_sample(out_sample, 0.8);
+            // **********************************************
 
             // Check and handle hop counter
             let mut local_hop_counter: u32 = 0;
@@ -251,7 +252,7 @@ pub fn interface_handler(
     shared.app_state_machine.lock(|msm| {
         if update_state {
             let snapshot = msm.snapshot();
-            info!("state - {:?} -", snapshot.current_state);
+            //info!("state - {:?} -", snapshot.current_state);
 
             match snapshot.current_state {
                 // For splash screen
