@@ -8,5 +8,6 @@ version = "0.1.0"
 libm = "0.2.8"
 log = "0.4.21"
 microfft = "0.6"
+cortex-m = "0.7"
 
 [dev-dependencies]
