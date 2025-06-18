@@ -797,7 +797,6 @@ pub fn process_autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_ta
         let bin_deviation = ctx
             .synthesis_frequencies
             .lock(|synthesis_frequencies| synthesis_frequencies[i] - i as f32);
-
         let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
         let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
         phase_diff += bin_centre_frequency * HOP_SIZE as f32;
