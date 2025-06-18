@@ -30,14 +30,15 @@ mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
-    dispatchers = [DMA1_STR0]
+    dispatchers = [DMA1_STR0, DMA1_STR2] 
     )]
     mod app {
         use crate::{
             autotune::{circular_buffer::CircularBuffer, oscillator::{Oscillator, Waveform}}, constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
         };
+        use state_machines::{AppState, MenuState, ProcessingProfile};
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
-        use fugit::RateExtU32;
+        use fugit::{ExtU32, RateExtU32};
         use libdaisy::{
             audio,
             gpio::*,
@@ -101,6 +102,8 @@ mod rtic_app {
             sr_hold_counter: i32,
             sr_held_value: f32,
             carrier_osc: Oscillator,
+            display_needs_update: bool,
+            display_buffer: [u8; 512], // 128x32 / 8 = 512 bytes for the display buffer
         }
 
         #[local]
@@ -261,6 +264,7 @@ mod rtic_app {
                 &ccdr.clocks,
             );
             timer2.listen(stm32h7xx_hal::timer::Event::TimeOut);
+            display_update_task::spawn().ok();
 
             info!("Startup done!! yo!");
 
@@ -284,6 +288,8 @@ mod rtic_app {
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
                     carrier_osc: Oscillator::new(55.0, SAMPLE_RATE, Waveform::Saw),
+                    display_needs_update: false,
+                    display_buffer: [0; 512],
                 },
                 Local {
                     audio: system.audio,
@@ -332,10 +338,75 @@ mod rtic_app {
             crate::handler::update_handler(ctx.local.audio, ctx.local.buffer, &mut ctx.shared);
         }
 
+        #[task(
+            local = [display],  // Display is now local to this task
+            shared = [app_state_machine, display_needs_update],
+            priority = 1  // Low priority so it doesn't block audio
+        )]
+        fn display_update_task(mut ctx: display_update_task::Context) {
+            // Check if update is needed
+            let needs_update = ctx.shared.display_needs_update.lock(|flag| {
+                let update = *flag;
+                if update {
+                    *flag = false;  // Clear the flag
+                }
+                update
+            });
+
+            if needs_update {
+                // Get the current state snapshot
+                let snapshot = ctx.shared.app_state_machine.lock(|msm| msm.snapshot());
+                
+                // Draw based on current state
+                match snapshot.current_state {
+                    AppState::Splash => {
+                        crate::display::screens::draw_splash_screen(ctx.local.display);
+                    }
+                    AppState::Processing(process) => {
+                        crate::display::screens::draw_processing_screen(
+                            process,
+                            snapshot.key,
+                            snapshot.octave,
+                            snapshot.note,
+                            snapshot.volume,
+                            ctx.local.display,
+                        );
+                    }
+                    AppState::EffectsProfile(process) => {
+                        crate::display::screens::draw_effects_screen(
+                            process,
+                            snapshot.key,
+                            snapshot.octave,
+                            snapshot.formant,
+                            snapshot.crush,
+                            snapshot.key_down_pressed,
+                            snapshot.process_cycle_pressed,
+                            snapshot.key_up_pressed,
+                            ctx.local.display,
+                        );
+                    }
+                    AppState::Menu(nav_state, _) => {
+                        let menu_context = ctx.shared.app_state_machine.lock(|msm| msm.current());
+                        let is_editing = matches!(nav_state, MenuState::Editing(_));
+                        
+                        crate::display::screens::draw_menu_screen(
+                            menu_context.previous_item,
+                            menu_context.current_item,
+                            menu_context.next_item,
+                            is_editing,
+                            ctx.local.display,
+                        );
+                    }
+                }
+
+                // NOW we can do the blocking flush in low priority
+                ctx.local.display.flush().ok();
+            }
+        }
+
         #[task(binds = TIM2, local = [
             knob_1,
             timer2,
-            display,
             col_1_pin,
             col_2_pin,
             col_3_pin,
@@ -344,7 +415,7 @@ mod rtic_app {
             row_3_pin,
             row_4_pin,
             encoder_button,
-            ], shared = [app_state_machine, old_matrix_state])]
+            ], shared = [app_state_machine, old_matrix_state, display_needs_update])]
         fn interface_handler(mut ctx: interface_handler::Context) {
             crate::handler::interface_handler(ctx.local, &mut ctx.shared);
         }

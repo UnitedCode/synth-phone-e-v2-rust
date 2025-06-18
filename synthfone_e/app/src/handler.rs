@@ -248,74 +248,15 @@ pub fn interface_handler(
         Direction::None => {}
     }
 
-    // Update display if state changed
-    shared.app_state_machine.lock(|msm| {
-        if update_state {
-            let snapshot = msm.snapshot();
-            //info!("state - {:?} -", snapshot.current_state);
-
-            match snapshot.current_state {
-                // For splash screen
-                AppState::Splash => {
-                    draw_splash_screen(&mut local.display);
-                }
-
-                // For processing profiles
-                AppState::Processing(process) => {
-                    draw_processing_screen(
-                        process,
-                        snapshot.key,
-                        snapshot.octave,
-                        snapshot.note,
-                        snapshot.volume,
-                        &mut local.display,
-                    );
-                }
-
-                // For effects screen
-                AppState::EffectsProfile(process) => {
-                    draw_effects_screen(
-                        process,
-                        snapshot.key,
-                        snapshot.octave,
-                        snapshot.formant,
-                        snapshot.crush,
-                        snapshot.key_down_pressed,
-                        snapshot.process_cycle_pressed,
-                        snapshot.key_up_pressed,
-                        &mut local.display,
-                    );
-                }
-
-                // For menu screens
-                AppState::Menu(nav_state, _) => match nav_state {
-                    MenuState::Selecting(_idx) => {
-                        let menu_context = msm.current();
-                        draw_menu_screen(
-                            menu_context.previous_item,
-                            menu_context.current_item,
-                            menu_context.next_item,
-                            false,
-                            &mut local.display,
-                        );
-                    }
-                    MenuState::Editing(_idx) => {
-                        let menu_context = msm.current();
-                        draw_menu_screen(
-                            menu_context.previous_item,
-                            menu_context.current_item,
-                            menu_context.next_item,
-                            true,
-                            &mut local.display,
-                        );
-                    }
-                },
-            }
-
-            local.display.flush().expect("could not draw to screen");
-            update_state = false;
-        }
-    });
+    if update_state {
+        // Set the flag
+        shared.display_needs_update.lock(|flag| *flag = true);
+        
+        // Spawn the display task to run
+        crate::rtic_app::app::display_update_task::spawn().ok();
+        
+        update_state = false;
+    }
 }
 
 pub fn dma1_stream0_software_task(
