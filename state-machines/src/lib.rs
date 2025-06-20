@@ -140,6 +140,7 @@ pub enum AppEvent {
     EncoderPress,       // Single press of the encoder
     EncoderDoublePress, // Double press of the encoder
     EncoderRotate(i32), // Rotation of the encoder (positive or negative)
+    HangupPress,        // Hangup button press
 
     // Button presses in different profiles
     KeypadPress(usize),   // Press of a keypad button (1-12)
@@ -280,7 +281,7 @@ pub struct AppStateMachine {
     current_key: i32,
     current_octave: i32,
     current_bitcrush: i32,
-    current_formant: i32, 
+    current_formant: i32,
     sample_reduction: i32,
     bit_rate: i32,
     pub volume: i32,
@@ -401,17 +402,17 @@ impl AppStateMachine {
                         self.current_bitcrush = 1;
                         self.bit_rate = self.values.bit_rate_1;
                         self.sample_reduction = self.values.sample_reduction_1;
-                    },
+                    }
                     5 => {
                         self.current_bitcrush = 0;
                         self.bit_rate = 32;
                         self.sample_reduction = 1;
-                    },
+                    }
                     6 => {
                         self.current_bitcrush = 2;
                         self.bit_rate = self.values.bit_rate_2;
                         self.sample_reduction = self.values.sample_reduction_2;
-                    },
+                    }
 
                     // Row 3: Formant controls
                     7 => self.current_formant = 1, // Male
@@ -448,8 +449,11 @@ impl AppStateMachine {
             },
 
             (AppState::Processing(profile), AppEvent::KeypadRelease(key)) => {
-                if matches!(profile, ProcessingProfile::Autotune | ProcessingProfile::Dry) {
-                    self.play_note(0);           // stop tone for those modes
+                if matches!(
+                    profile,
+                    ProcessingProfile::Autotune | ProcessingProfile::Dry
+                ) {
+                    self.play_note(0); // stop tone for those modes
                 }
             }
 
