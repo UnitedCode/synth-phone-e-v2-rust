@@ -24,47 +24,32 @@ pub fn update_handler(
     buffer: &mut audio::AudioBuffer,
     shared: &mut crate::rtic_app::app::update_handler::SharedResources,
 ) {
-
-    let mut sr_factor = 1;
-    shared.app_state_machine.lock(|msm| {
-        sr_factor = msm.snapshot().sample_reduction;
-    });
-
-    let mut bit_depth = 32;
-    shared.app_state_machine.lock(|msm| {
-        bit_depth = msm.snapshot().bit_rate;
-    });
-
     if audio.get_stereo(buffer) {
-        for (_left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
-            let mut out_sample = *_left;
+        
+        let snap = shared.app_state_machine.lock(|msm| msm.snapshot());
+        let sr_factor      = snap.sample_reduction;
+        let bit_depth      = snap.bit_rate;
+        let note           = snap.note;
+        let key            = snap.key;
+        let octave         = snap.octave;
 
+        let current_process = match snap.current_state {
+            AppState::Processing(p)
+            | AppState::EffectsProfile(p)
+            | AppState::Menu(_, p) => p,
+            AppState::Splash       => ProcessingProfile::Autotune,
+        };
+
+        for (_left, _right) in &buffer.as_slice()[..BLOCK_SIZE] {
             // Lock to write to in_buffer
             shared.in_ring.lock(|in_ring| in_ring.push(*_left));
             
             
-            let mut current_process = ProcessingProfile::Autotune;
-            shared.app_state_machine.lock(|msm| {
-                let snapshot = msm.snapshot();
-                match snapshot.current_state {
-                    AppState::Processing(process)
-                    | AppState::EffectsProfile(process)
-                    | AppState::Menu(_, process) => {
-                        current_process = process;
-                    }
-                    AppState::Splash => {}
-                }
-            });
-            
             if(current_process == ProcessingProfile::Vocode || current_process == ProcessingProfile::Dry){
-                let (note, key, octave) = shared.app_state_machine.lock(|msm| {
-                    let snap = msm.snapshot();
-                    (snap.note, snap.key, snap.octave)
-                });
                 
                 let carrier_hz = get_frequency(key, note, octave, true);
                 
-                let mut sample = shared.carrier_osc.lock(|osc| {
+                let sample = shared.carrier_osc.lock(|osc| {
                     osc.set_freq(carrier_hz);
                     osc.next()
                 });
@@ -618,42 +603,36 @@ pub fn process_autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_ta
     let mut envelope = [1.0f32; FFT_SIZE / 2];
 
     if formant != 0 {
-        // Simplified cepstral envelope extraction
-        // Use smaller lifter for efficiency
-        const LIFTER_CUTOFF: usize = 64; // Reduced from 128
-        let mut cepstrum_buffer = [0.0f32; FFT_SIZE];
+        // SIMPLE METHOD: Moving average of magnitude spectrum
+        // Much faster than cepstral analysis
+        const WINDOW_SIZE: usize = 16; // Adjust for smoothness vs detail
         
-        // Log magnitude spectrum (reuse full_spectrum buffer)
         for i in 0..(FFT_SIZE / 2) {
-            let mag = analysis_magnitudes[i].max(1e-6);
-            let log_mag = logf(mag);
-            full_spectrum[i] = microfft::Complex32 { re: log_mag, im: 0.0 };
-            if i != 0 {
-                full_spectrum[FFT_SIZE - i] = microfft::Complex32 { re: log_mag, im: 0.0 };
+            let start = i.saturating_sub(WINDOW_SIZE / 2);
+            let end = ((i + WINDOW_SIZE / 2) + 1).min(FFT_SIZE / 2);
+            
+            let mut sum = 0.0;
+            let mut count = 0;
+            
+            for j in start..end {
+                sum += analysis_magnitudes[j];
+                count += 1;
             }
+            
+            envelope[i] = if count > 0 { sum / count as f32 } else { 1.0 };
         }
         
-        // Get cepstrum
-        let cepstrum = microfft::inverse::ifft_1024(&mut full_spectrum);
-        
-        // Lifter - only copy low quefrency
-        for i in 0..LIFTER_CUTOFF {
-            cepstrum_buffer[i] = cepstrum[i].re;
+        // Optional: Apply a second smoothing pass for better results
+        let mut smooth_envelope = envelope;
+        for i in 1..(FFT_SIZE / 2 - 1) {
+            smooth_envelope[i] = 0.25 * envelope[i-1] + 0.5 * envelope[i] + 0.25 * envelope[i+1];
         }
-        for i in (FFT_SIZE - LIFTER_CUTOFF)..FFT_SIZE {
-            cepstrum_buffer[i] = cepstrum[i].re;
-        }
-        
-        // Get envelope
-        let envelope_fft = microfft::real::rfft_1024(&mut cepstrum_buffer);
-        for i in 0..(FFT_SIZE / 2) {
-            envelope[i] = expf(envelope_fft[i].re);
-        }
+        envelope = smooth_envelope;
     }
 
     // Get the fundamental frequency (Loudest)
     let fundamental_index = find_fundamental_frequency(&analysis_magnitudes);
-    let _harmonics = collect_harmonics(fundamental_index);
+    //let _harmonics = collect_harmonics(fundamental_index);
 
     // Exact frequency is tied to the bin.
     let exact_frequency = analysis_frequencies[fundamental_index] * crate::constants::BIN_WIDTH;

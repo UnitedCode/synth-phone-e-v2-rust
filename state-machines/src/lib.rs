@@ -378,8 +378,8 @@ impl AppStateMachine {
                 match key {
                     1..=9 => {
                         // First 9 buttons are notes
-                        self.play_note(key);
                         self.note = key as i32;
+                        self.play_note(key);
                     }
                     10 => self.current_key = (self.current_key + 23) % 24,
                     11 => self.state = self.state.cycle_profile(),
@@ -449,6 +449,7 @@ impl AppStateMachine {
 
             (AppState::Processing(profile), AppEvent::KeypadRelease(key)) => {
                 if matches!(profile, ProcessingProfile::Autotune | ProcessingProfile::Dry) {
+                    self.note = 0;
                     self.play_note(0);           // stop tone for those modes
                 }
             }
