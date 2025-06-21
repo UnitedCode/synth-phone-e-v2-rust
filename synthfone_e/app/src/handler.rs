@@ -18,7 +18,7 @@ use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
 use state_machines::{AppState, MenuState, ProcessingProfile};
-use autotune::oscillator::{Oscillator, Waveform};
+// use autotune::oscillator::{Oscillator, Waveform};
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering; 
 
@@ -53,7 +53,7 @@ pub fn update_handler(
             let mut out_sample = sample;
 
             // Lock to write to in_buffer
-            shared.in_ring.lock(|in_ring| in_ring.push(*_left));
+            shared.in_ring.lock(|in_ring| in_ring.push(sample));
             
             
             let mut current_process = ProcessingProfile::Autotune;

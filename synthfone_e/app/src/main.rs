@@ -326,7 +326,7 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = DMA1_STR1, local = [audio, buffer, button], shared = [
+        #[task(binds = DMA1_STR1, local = [audio, buffer, button, hangup_button], shared = [
         in_ring,
         out_ring,
         carrier_ring,
