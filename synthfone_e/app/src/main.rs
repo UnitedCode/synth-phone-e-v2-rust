@@ -30,13 +30,12 @@ mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
-    dispatchers = [DMA1_STR0, DMA1_STR2] 
+    dispatchers = [DMA1_STR0, DMA1_STR2]
     )]
     mod app {
         use crate::{
             autotune::{circular_buffer::CircularBuffer, ring_buffer::RingBuffer, oscillator::{Oscillator, Waveform}}, constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
         };
-        use state_machines::{AppState, MenuState, ProcessingProfile};
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
         use fugit::{ExtU32, RateExtU32};
         use libdaisy::{
@@ -51,6 +50,7 @@ mod rtic_app {
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
         use state_machines::AppStateMachine;
+        use state_machines::{AppState, MenuState, ProcessingProfile};
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
             stm32,
@@ -120,6 +120,7 @@ mod rtic_app {
             row_3_pin: Daisy17<Input>,
             row_4_pin: Daisy18<Input>,
             encoder_button: hid::Switch<Daisy2<Input>>,
+            hangup_button: hid::Switch<Daisy1<Input>>,
         }
 
         #[init]
@@ -158,6 +159,13 @@ mod rtic_app {
 
             let encoder_1 = RotaryEncoder::new(encoder_dt, encoder_clk).into_standard_mode();
             let knob_1 = Knob::new(encoder_1);
+
+            let daisy1 = system
+                .gpio
+                .daisy1
+                .take()
+                .expect("Failed to get pin daisy1")
+                .into_pull_up_input();
 
             let daisy28_btn = system
                 .gpio
@@ -255,6 +263,10 @@ mod rtic_app {
             switch1.set_double_thresh(Some(500));
             switch1.set_held_thresh(Some(150));
 
+            let mut hangup_button = hid::Switch::new(daisy1, hid::SwitchType::PullUp);
+            hangup_button.set_double_thresh(Some(500));
+            hangup_button.set_held_thresh(Some(150));
+
             let mut timer2 = stm32h7xx_hal::timer::TimerExt::timer(
                 device.TIM2,
                 MilliSeconds::from_ticks(1).into_rate(),
@@ -301,6 +313,7 @@ mod rtic_app {
                     row_3_pin,
                     row_4_pin,
                     encoder_button,
+                    hangup_button,
                 },
                 init::Monotonics(),
             )
@@ -327,7 +340,12 @@ mod rtic_app {
         carrier_osc,
     ], priority = 8)]
         fn update_handler(mut ctx: update_handler::Context) {
-            crate::handler::update_handler(ctx.local.audio, ctx.local.buffer, &mut ctx.shared);
+            crate::handler::update_handler(
+                ctx.local.audio,
+                ctx.local.buffer,
+                ctx.local.hangup_button,
+                &mut ctx.shared,
+            );
         }
 
         #[task(
@@ -340,7 +358,7 @@ mod rtic_app {
             let needs_update = ctx.shared.display_needs_update.lock(|flag| {
                 let update = *flag;
                 if update {
-                    *flag = false;  // Clear the flag
+                    *flag = false; // Clear the flag
                 }
                 update
             });
@@ -348,7 +366,7 @@ mod rtic_app {
             if needs_update {
                 // Get the current state snapshot
                 let snapshot = ctx.shared.app_state_machine.lock(|msm| msm.snapshot());
-                
+
                 // Draw based on current state
                 match snapshot.current_state {
                     AppState::Splash => {
@@ -380,7 +398,7 @@ mod rtic_app {
                     AppState::Menu(nav_state, _) => {
                         let menu_context = ctx.shared.app_state_machine.lock(|msm| msm.current());
                         let is_editing = matches!(nav_state, MenuState::Editing(_));
-                        
+
                         crate::display::screens::draw_menu_screen(
                             menu_context.previous_item,
                             menu_context.current_item,
