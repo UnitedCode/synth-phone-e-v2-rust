@@ -140,6 +140,7 @@ pub enum AppEvent {
     EncoderPress,       // Single press of the encoder
     EncoderDoublePress, // Double press of the encoder
     EncoderRotate(i32), // Rotation of the encoder (positive or negative)
+    HangupPress,        // Hangup button press
 
     // Button presses in different profiles
     KeypadPress(usize),   // Press of a keypad button (1-12)
@@ -280,7 +281,7 @@ pub struct AppStateMachine {
     current_key: i32,
     current_octave: i32,
     current_bitcrush: i32,
-    current_formant: i32, 
+    current_formant: i32,
     sample_reduction: i32,
     bit_rate: i32,
     pub volume: i32,
