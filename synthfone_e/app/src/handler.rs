@@ -22,7 +22,6 @@ use core::sync::atomic::Ordering;
 pub fn update_handler(
     audio: &mut audio::Audio,
     buffer: &mut audio::AudioBuffer,
-    hangup_button: &mut hid::Switch<Daisy1<Input>>,
     shared: &mut crate::rtic_app::app::update_handler::SharedResources,
 ) {
     if audio.get_stereo(buffer) {
@@ -96,6 +95,7 @@ pub fn update_handler(
                 if crate::rtic_app::app::dma1_stream0_software_task::spawn().is_err() {
                     warn!("Could not unwrap software task - underrun error");
                 }
+
             }
 
             shared.hop_counter.lock(|count| {
@@ -217,70 +217,7 @@ pub fn interface_handler(
     }
 }
 
-#[inline(always)]
-pub fn process_vocode(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources) {
-    let mut input_unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
-    let mut carrier_unwrapped_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
-    let mut full_spectrum: [microfft::Complex32; FFT_SIZE] =
-        [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
-    let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
-
-    let write_idx = ctx.in_pointer_cached.lock(|in_pointer|{ in_pointer.load(Ordering::Relaxed)});
-
-    ctx.in_ring.lock(|rb|  rb.block_from::<FFT_SIZE>(write_idx,   &mut input_unwrapped_buffer));
-    ctx.carrier_ring.lock(|rb| rb.block_from::<FFT_SIZE>(write_idx,   &mut carrier_unwrapped_buffer));    
-
-    // Copy buffer into FFT input
-    for i in 0..FFT_SIZE {
-        input_unwrapped_buffer[i] *= analysis_window_buffer[i];
-        carrier_unwrapped_buffer[i] *= analysis_window_buffer[i];
-    }
-
-    let modulator_fft = microfft::real::rfft_1024(&mut input_unwrapped_buffer);
-    let carrier_fft = microfft::real::rfft_1024(&mut carrier_unwrapped_buffer);
-
-    // Copy the first half (including DC and Nyquist)
-    for i in 0..(FFT_SIZE / 2) {
-        // Get modulator magnitude
-        let mod_mag = libm::sqrtf(
-            modulator_fft[i].re * modulator_fft[i].re + modulator_fft[i].im * modulator_fft[i].im,
-        );
-
-        // Get carrier magnitude
-        let car_mag = libm::sqrtf(
-            carrier_fft[i].re * carrier_fft[i].re + carrier_fft[i].im * carrier_fft[i].im,
-        );
-
-        // Scale carrier by modulator envelope
-        let scale_factor = if car_mag > 0.0001 {
-            mod_mag / car_mag
-        } else {
-            0.0
-        };
-
-        // Apply scaling
-        full_spectrum[i].re = carrier_fft[i].re * scale_factor;
-        full_spectrum[i].im = carrier_fft[i].im * scale_factor;
-
-        // Conjugate symmetry
-        if i > 0 && i < (FFT_SIZE / 2) {
-            full_spectrum[FFT_SIZE - i].re = full_spectrum[i].re;
-            full_spectrum[FFT_SIZE - i].im = -full_spectrum[i].im;
-        }
-    }
-
-    let res = microfft::inverse::ifft_1024(&mut full_spectrum);
-
-    ctx.out_ring.lock(|rb| {
-        for i in 0..FFT_SIZE {
-            let windowed_sample = res[i].re * analysis_window_buffer[i];
-            rb.add_at_offset(i as u32, windowed_sample);
-        }
-    });
-}
-
-#[inline(always)]
-pub fn process_autotune(
+pub fn dma1_stream0_software_task(
     ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources,
 ) {
     let mut current_process = ProcessingProfile::Autotune;
@@ -751,6 +688,7 @@ pub fn process_autotune(ctx: &mut crate::rtic_app::app::dma1_stream0_software_ta
 
         // shift all bins by the ratio
         for i in 0..FFT_SIZE / 2 {
+
             // Get residual (source magnitude divided by source envelope)
             let residual = if formant != 0 {
                 analysis_magnitudes[i] / envelope[i].max(1e-6)
