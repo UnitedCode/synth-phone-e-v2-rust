@@ -209,3 +209,30 @@ pub fn get_scale_by_key(key: i32) -> &'static KeyScaleFrequencies {
         &KEYS[0].0 .1
     }
 }
+
+
+pub fn get_frequency(key: i32, note: i32, octave: i32, is_vocoder: bool) -> f32 {
+
+    //TODO: maybe i should have the octave store index insted of values so i don't have to convert here?
+    let offset = if (is_vocoder){
+        0
+    }else{
+        2
+    };
+    
+    let octave_idx = match octave {
+        1 => 1 + offset,   // first row
+        2 => 2 + offset,   // second row
+        4 => 3 + offset,   // third row
+        _ => return 0.0, // invalid flag
+    };
+
+    let note_index = octave_idx * 7 + note as usize - 1 ;
+
+    // out-of-bounds check
+    if (key as usize) >= KEYS.len() {
+        return 0.0;
+    }
+
+    KEYS[key as usize].0 .1[note_index]
+}

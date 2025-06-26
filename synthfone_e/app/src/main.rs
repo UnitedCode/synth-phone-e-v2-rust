@@ -30,15 +30,14 @@ mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
-    dispatchers = [DMA1_STR0]
+    dispatchers = [DMA1_STR0, DMA1_STR2]
     )]
     mod app {
         use crate::{
-            autotune::circular_buffer::CircularBuffer, constants::BLOCK_SIZE,
-            constants::BUFFER_SIZE, constants::FFT_SIZE, constants::HOP_SIZE,
+            autotune::{circular_buffer::CircularBuffer, ring_buffer::RingBuffer, oscillator::{Oscillator, Waveform}}, constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
         };
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
-        use fugit::RateExtU32;
+        use fugit::{ExtU32, RateExtU32};
         use libdaisy::{
             audio,
             gpio::*,
@@ -51,6 +50,7 @@ mod rtic_app {
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
         use state_machines::AppStateMachine;
+        use state_machines::{AppState, MenuState, ProcessingProfile};
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
             stm32,
@@ -58,6 +58,7 @@ mod rtic_app {
             timer::Timer,
         };
         use tinybmp::Bmp;
+        use core::sync::atomic::AtomicU32;
 
         type LcdDisplay = Ssd1306<
             ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>,
@@ -83,19 +84,24 @@ mod rtic_app {
 
         #[shared]
         struct Shared {
-            in_buffer: CircularBuffer<f32, BUFFER_SIZE>,
-            out_buffer: CircularBuffer<f32, BUFFER_SIZE>,
+            in_ring:  RingBuffer<BUFFER_SIZE>,
+            out_ring: RingBuffer<BUFFER_SIZE>,
+            carrier_ring: RingBuffer<BUFFER_SIZE>,
             last_input_phases: [f32; FFT_SIZE],
             last_output_phases: [f32; FFT_SIZE],
             synthesis_magnitudes: [f32; FFT_SIZE],
             synthesis_frequencies: [f32; FFT_SIZE],
             previous_pitch_shift_ratio: f32,
             hop_counter: u32,
+            in_pointer_cached: AtomicU32,
             app_state_machine: AppStateMachine,
             old_matrix_state: [[bool; 3]; 4],
             // For sample-rate reduction
             sr_hold_counter: i32,
             sr_held_value: f32,
+            carrier_osc: Oscillator,
+            display_needs_update: bool,
+            display_buffer: [u8; 512], // 128x32 / 8 = 512 bytes for the display buffer
         }
 
         #[local]
@@ -114,6 +120,7 @@ mod rtic_app {
             row_3_pin: Daisy17<Input>,
             row_4_pin: Daisy18<Input>,
             encoder_button: hid::Switch<Daisy2<Input>>,
+            hangup_button: hid::Switch<Daisy1<Input>>,
         }
 
         #[init]
@@ -152,6 +159,13 @@ mod rtic_app {
 
             let encoder_1 = RotaryEncoder::new(encoder_dt, encoder_clk).into_standard_mode();
             let knob_1 = Knob::new(encoder_1);
+
+            let daisy1 = system
+                .gpio
+                .daisy1
+                .take()
+                .expect("Failed to get pin daisy1")
+                .into_pull_up_input();
 
             let daisy28_btn = system
                 .gpio
@@ -249,6 +263,10 @@ mod rtic_app {
             switch1.set_double_thresh(Some(500));
             switch1.set_held_thresh(Some(150));
 
+            let mut hangup_button = hid::Switch::new(daisy1, hid::SwitchType::PullUp);
+            hangup_button.set_double_thresh(Some(500));
+            hangup_button.set_held_thresh(Some(150));
+
             let mut timer2 = stm32h7xx_hal::timer::TimerExt::timer(
                 device.TIM2,
                 MilliSeconds::from_ticks(1).into_rate(),
@@ -256,23 +274,29 @@ mod rtic_app {
                 &ccdr.clocks,
             );
             timer2.listen(stm32h7xx_hal::timer::Event::TimeOut);
+            display_update_task::spawn().ok();
 
             info!("Startup done!! yo!");
 
             (
                 Shared {
-                    in_buffer: CircularBuffer::new(0.0, None),
-                    out_buffer: CircularBuffer::new(0.0, Some(HOP_SIZE)),
+                    in_ring:  RingBuffer::new(),
+                    out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
+                    carrier_ring: RingBuffer::new(),
                     last_input_phases: [0.0; FFT_SIZE],
                     last_output_phases: [0.0; FFT_SIZE],
                     synthesis_magnitudes: [0.0; FFT_SIZE],
                     synthesis_frequencies: [0.0; FFT_SIZE],
                     previous_pitch_shift_ratio: 1.0,
                     hop_counter: 0,
+                    in_pointer_cached: AtomicU32::new(0),
                     app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
+                    carrier_osc: Oscillator::new(55.0, SAMPLE_RATE, Waveform::Saw),
+                    display_needs_update: false,
+                    display_buffer: [0; 512],
                 },
                 Local {
                     audio: system.audio,
@@ -289,6 +313,7 @@ mod rtic_app {
                     row_3_pin,
                     row_4_pin,
                     encoder_button,
+                    hangup_button,
                 },
                 init::Monotonics(),
             )
@@ -301,24 +326,97 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = DMA1_STR1, local = [audio, buffer, button], shared = [
-        in_buffer,
-        out_buffer,
+        #[task(binds = DMA1_STR1, local = [audio, buffer, button, hangup_button], shared = [
+        in_ring,
+        out_ring,
+        carrier_ring,
         last_input_phases,
         last_output_phases,
         hop_counter,
+        in_pointer_cached,
         app_state_machine,
         sr_hold_counter,
         sr_held_value,
+        carrier_osc,
     ], priority = 8)]
         fn update_handler(mut ctx: update_handler::Context) {
-            crate::handler::update_handler(ctx.local.audio, ctx.local.buffer, &mut ctx.shared);
+            crate::handler::update_handler(
+                ctx.local.audio,
+                ctx.local.buffer,
+                ctx.local.hangup_button,
+                &mut ctx.shared,
+            );
+        }
+
+        #[task(
+            local = [display],  // Display is now local to this task
+            shared = [app_state_machine, display_needs_update],
+            priority = 1  // Low priority so it doesn't block audio
+        )]
+        fn display_update_task(mut ctx: display_update_task::Context) {
+            // Check if update is needed
+            let needs_update = ctx.shared.display_needs_update.lock(|flag| {
+                let update = *flag;
+                if update {
+                    *flag = false; // Clear the flag
+                }
+                update
+            });
+
+            if needs_update {
+                // Get the current state snapshot
+                let snapshot = ctx.shared.app_state_machine.lock(|msm| msm.snapshot());
+
+                // Draw based on current state
+                match snapshot.current_state {
+                    AppState::Splash => {
+                        crate::display::screens::draw_splash_screen(ctx.local.display);
+                    }
+                    AppState::Processing(process) => {
+                        crate::display::screens::draw_processing_screen(
+                            process,
+                            snapshot.key,
+                            snapshot.octave,
+                            snapshot.note,
+                            snapshot.volume,
+                            ctx.local.display,
+                        );
+                    }
+                    AppState::EffectsProfile(process) => {
+                        crate::display::screens::draw_effects_screen(
+                            process,
+                            snapshot.key,
+                            snapshot.octave,
+                            snapshot.formant,
+                            snapshot.crush,
+                            snapshot.key_down_pressed,
+                            snapshot.process_cycle_pressed,
+                            snapshot.key_up_pressed,
+                            ctx.local.display,
+                        );
+                    }
+                    AppState::Menu(nav_state, _) => {
+                        let menu_context = ctx.shared.app_state_machine.lock(|msm| msm.current());
+                        let is_editing = matches!(nav_state, MenuState::Editing(_));
+
+                        crate::display::screens::draw_menu_screen(
+                            menu_context.previous_item,
+                            menu_context.current_item,
+                            menu_context.next_item,
+                            is_editing,
+                            ctx.local.display,
+                        );
+                    }
+                }
+
+                // NOW we can do the blocking flush in low priority
+                ctx.local.display.flush().ok();
+            }
         }
 
         #[task(binds = TIM2, local = [
             knob_1,
             timer2,
-            display,
             col_1_pin,
             col_2_pin,
             col_3_pin,
@@ -327,21 +425,24 @@ mod rtic_app {
             row_3_pin,
             row_4_pin,
             encoder_button,
-            ], shared = [app_state_machine, old_matrix_state])]
+            ], shared = [app_state_machine, old_matrix_state, display_needs_update])]
         fn interface_handler(mut ctx: interface_handler::Context) {
             crate::handler::interface_handler(ctx.local, &mut ctx.shared);
         }
 
         /// FFT TASK
         #[task(shared = [
-        in_buffer,
-        out_buffer,
+        in_ring,
+        out_ring,
+        carrier_ring,
         last_input_phases,
         last_output_phases,
         synthesis_magnitudes,
         synthesis_frequencies,
         previous_pitch_shift_ratio,
-        app_state_machine
+        app_state_machine,
+        in_pointer_cached,
+        carrier_osc,
     ], local = [], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // Call audio processing from handler module

@@ -32,8 +32,9 @@ impl Knob {
 }
 
 pub struct Shared {
-    pub in_buffer: CircularBuffer<f32, BUFFER_SIZE>,
-    pub out_buffer: CircularBuffer<f32, BUFFER_SIZE>,
+    pub in_buffer: [f32; BUFFER_SIZE],
+    pub out_buffer: [f32; BUFFER_SIZE],
+    pub carrier_buffer: [f32; BUFFER_SIZE],
     pub last_input_phases: [f32; FFT_SIZE],
     pub last_output_phases: [f32; FFT_SIZE],
     pub synthesis_magnitudes: [f32; FFT_SIZE],
