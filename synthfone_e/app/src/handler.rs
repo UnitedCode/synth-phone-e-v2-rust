@@ -1,28 +1,22 @@
-use crate::{constants::*, display::screens::*, input::buttons::*};
-use autotune::circular_buffer;
-use autotune::fade::QUADRATIC_FADE;
+use crate::{constants::*, input::buttons::*};
 use autotune::frequencies::{find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES};
 use autotune::hann_window::{self, PI};
 use autotune::keys::{get_frequency, get_scale_by_key};
-use autotune::normal_phase_advance::NORMAL_PHASE_ADVANCE;
-use autotune::oscillator::{Oscillator, Waveform};
 use autotune::process_frequencies::{
-    bitcrush, cepstral_smoothing, find_fundamental_frequency, normalize_sample, sample_rate_reduce,
+    bitcrush, find_fundamental_frequency, normalize_sample, sample_rate_reduce,
 };
-use autotune::ring_buffer::RingBuffer;
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
-use libm::{atan2f, cosf, expf, floorf, fmodf, logf, powf, sinf, sqrtf};
+use libm::{atan2f, cosf, expf, floorf, fmodf, logf, sinf, sqrtf};
 use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
-use state_machines::{AppState, MenuState, ProcessingProfile};
+use state_machines::{AppState, ProcessingProfile};
 // use autotune::oscillator::{Oscillator, Waveform};
-use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
 
-pub fn update_handler(
+pub(crate) fn update_handler(
     audio: &mut audio::Audio,
     buffer: &mut audio::AudioBuffer,
     hangup_button: &mut hid::Switch<Daisy1<Input>>,
@@ -62,13 +56,11 @@ pub fn update_handler(
                 true => *left,
             };
 
-            let mut out_sample = sample;
-
             // Lock to write to in_buffer
             shared.in_ring.lock(|in_ring| in_ring.push(sample));
 
-            if (current_process == ProcessingProfile::Vocode
-                || current_process == ProcessingProfile::Dry)
+            if current_process == ProcessingProfile::Vocode
+                || current_process == ProcessingProfile::Dry
             {
                 let carrier_hz = get_frequency(key, note, octave, true);
 

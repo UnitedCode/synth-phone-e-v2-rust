@@ -5,7 +5,7 @@ use libdaisy::{
 use log::info;
 use state_machines::AppState;
 
-pub fn scan_button_matrix(
+pub(crate) fn scan_button_matrix(
     col_1: &mut Daisy21<Output<PushPull>>,
     col_2: &mut Daisy20<Output<PushPull>>,
     col_3: &mut Daisy19<Output<PushPull>>,
@@ -59,7 +59,7 @@ pub fn scan_button_matrix(
     state
 }
 
-pub fn handle_button_press(
+pub(crate) fn handle_button_press(
     row: usize,
     col: usize,
     current_state: AppState,
@@ -93,7 +93,7 @@ pub fn handle_button_press(
     }
 }
 
-pub fn handle_button_release(
+pub(crate) fn handle_button_release(
     row: usize,
     col: usize,
     current_state: AppState,

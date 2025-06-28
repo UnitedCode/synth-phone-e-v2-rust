@@ -34,10 +34,16 @@ mod rtic_app {
     )]
     mod app {
         use crate::{
-            autotune::{circular_buffer::CircularBuffer, ring_buffer::RingBuffer, oscillator::{Oscillator, Waveform}}, constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
+            autotune::{
+                oscillator::{Oscillator, Waveform},
+                ring_buffer::RingBuffer,
+            },
+            constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
+            types::Knob,
         };
+        use core::sync::atomic::AtomicU32;
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
-        use fugit::{ExtU32, RateExtU32};
+        use fugit::RateExtU32;
         use libdaisy::{
             audio,
             gpio::*,
@@ -46,11 +52,11 @@ mod rtic_app {
             system,
         };
         use log::info;
-        use rotary_encoder_embedded::standard::StandardMode;
+
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
         use state_machines::AppStateMachine;
-        use state_machines::{AppState, MenuState, ProcessingProfile};
+        use state_machines::{AppState, MenuState};
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
             stm32,
@@ -58,7 +64,6 @@ mod rtic_app {
             timer::Timer,
         };
         use tinybmp::Bmp;
-        use core::sync::atomic::AtomicU32;
 
         type LcdDisplay = Ssd1306<
             ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>,
@@ -66,25 +71,9 @@ mod rtic_app {
             BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>,
         >;
 
-        pub struct Knob {
-            pub rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
-            value: u8,
-        }
-
-        impl Knob {
-            pub fn new(
-                rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
-            ) -> Knob {
-                Knob {
-                    rotary_encoder: rotary_encoder,
-                    value: 0_u8,
-                }
-            }
-        }
-
         #[shared]
         struct Shared {
-            in_ring:  RingBuffer<BUFFER_SIZE>,
+            in_ring: RingBuffer<BUFFER_SIZE>,
             out_ring: RingBuffer<BUFFER_SIZE>,
             carrier_ring: RingBuffer<BUFFER_SIZE>,
             last_input_phases: [f32; FFT_SIZE],
@@ -280,7 +269,7 @@ mod rtic_app {
 
             (
                 Shared {
-                    in_ring:  RingBuffer::new(),
+                    in_ring: RingBuffer::new(),
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
                     carrier_ring: RingBuffer::new(),
                     last_input_phases: [0.0; FFT_SIZE],

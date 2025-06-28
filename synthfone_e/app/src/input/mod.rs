@@ -1,3 +1,3 @@
-pub mod buttons;
+pub(crate) mod buttons;
 
-pub use buttons::*;
+pub(crate) use buttons::*;

@@ -1,4 +1,3 @@
-use crate::types::LcdDisplay;
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,

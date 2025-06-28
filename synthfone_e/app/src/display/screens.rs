@@ -1,9 +1,6 @@
-use crate::display::text::{draw_text, draw_centered_text};
+use crate::display::text::{draw_centered_text, draw_text};
 use crate::types::LcdDisplay;
-use autotune::{
-    keys::{get_key, get_key_name, get_mode_name, get_note_name},
-};
-use state_machines::ProcessingProfile;
+use autotune::keys::{get_key, get_key_name, get_mode_name, get_note_name};
 use core::fmt::Write;
 use embedded_graphics::{
     image::{Image, ImageRawBE},
@@ -17,15 +14,15 @@ use embedded_graphics::{
     text::{Alignment, Baseline, Text},
 };
 use heapless::String;
+use state_machines::ProcessingProfile;
 use tinybmp::Bmp;
 
 pub fn draw_splash_screen(display: &mut LcdDisplay) {
     display.clear();
 
     // Display the splash image
-    let bmp: Bmp<BinaryColor> =
-        Bmp::from_slice(include_bytes!("../../assets/synthophoneV2.bmp"))
-            .expect("Could not load splash BMP");
+    let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!("../../assets/synthophoneV2.bmp"))
+        .expect("Could not load splash BMP");
 
     let image = Image::new(&bmp, Point::new(0, 0));
     image.draw(display).expect("Failed to display splash image");
@@ -78,12 +75,10 @@ pub fn draw_processing_screen(
 
     // Create text buffers
     let mut key_buffer: String<2> = String::new();
-    write!(&mut key_buffer, "{}", get_key_name(key))
-        .expect("Failed converting key to string");
+    write!(&mut key_buffer, "{}", get_key_name(key)).expect("Failed converting key to string");
 
     let mut mode_buffer: String<5> = String::new();
-    write!(&mut mode_buffer, "{}", get_mode_name(key))
-        .expect("failed converting mode to string");
+    write!(&mut mode_buffer, "{}", get_mode_name(key)).expect("failed converting mode to string");
 
     let mut note_buffer: String<2> = String::new();
     write!(&mut note_buffer, "{}", get_note_name(note, get_key(key)))
@@ -130,19 +125,14 @@ pub fn draw_effects_screen(
     );
 
     // Extract sub-images from the sprite atlas
-    let low_oct_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 0), Size::new(13, 8)));
-    let med_oct_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 0), Size::new(13, 8)));
-    let high_oct_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 0), Size::new(13, 8)));
+    let low_oct_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 0), Size::new(13, 8)));
+    let med_oct_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 0), Size::new(13, 8)));
+    let high_oct_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 0), Size::new(13, 8)));
 
-    let crush_one_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 8), Size::new(13, 8)));
+    let crush_one_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 8), Size::new(13, 8)));
     let crush_none_on =
         sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 8), Size::new(13, 8)));
-    let crush_two_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 8), Size::new(13, 8)));
+    let crush_two_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 8), Size::new(13, 8)));
 
     let formant_male_on =
         sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 16), Size::new(13, 8)));
@@ -151,26 +141,18 @@ pub fn draw_effects_screen(
     let formant_female_on =
         sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 16), Size::new(13, 8)));
 
-    let key_down_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 24), Size::new(13, 8)));
-    let key_up_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 24), Size::new(13, 8)));
+    let key_down_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 24), Size::new(13, 8)));
+    let key_up_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 24), Size::new(13, 8)));
 
-    let voice_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 0), Size::new(13, 8)));
-    let voice_off =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 0), Size::new(13, 8)));
-    let vocode_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 24), Size::new(13, 8)));
-    let vocode_off =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 16), Size::new(13, 8)));
-    let autotune_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 24), Size::new(13, 8)));
-    let autotune_off =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 8), Size::new(13, 8)));
+    let voice_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 0), Size::new(13, 8)));
+    let voice_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 0), Size::new(13, 8)));
+    let vocode_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 24), Size::new(13, 8)));
+    let vocode_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 16), Size::new(13, 8)));
+    let autotune_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 24), Size::new(13, 8)));
+    let autotune_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 8), Size::new(13, 8)));
 
     // Convert BMPs into Image objects
-    let bg = Image::new(&bmp, Point::new(0, 0));
+    let _bg = Image::new(&bmp, Point::new(0, 0));
 
     let low_oct_on_img = Image::new(&low_oct_on, Point::new(0, 0));
     let med_oct_on_img = Image::new(&med_oct_on, Point::new(13, 0));
