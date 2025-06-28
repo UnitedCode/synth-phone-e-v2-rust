@@ -88,6 +88,11 @@ impl ProcessingParams {
     }
 }
 
+// Convert volume (0-10) to gain multiplier (0.0-1.0)
+fn volume_to_gain(volume: i32) -> f32 {
+    (volume as f32 / 10.0).clamp(0.0, 1.0)
+}
+
 // Common data loading and windowing function
 fn load_and_window_data(
     ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources,
@@ -572,9 +577,14 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
         synth_frame[i] = mixed * hann_window::HANN_WINDOW[i];
     }
 
+    // Apply volume control
+    let volume_gain = ctx
+        .app_state_machine
+        .lock(|asm| volume_to_gain(asm.snapshot().volume));
+
     ctx.out_ring.lock(|rb| {
         for (i, &sample) in synth_frame.iter().enumerate() {
-            rb.add_at_offset(i as u32, sample);
+            rb.add_at_offset(i as u32, sample * volume_gain);
         }
     });
 }
@@ -634,9 +644,14 @@ pub fn process_vocode(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task
 
     let res = microfft::inverse::ifft_1024(&mut full_spectrum);
 
+    // Apply volume control
+    let volume_gain = ctx
+        .app_state_machine
+        .lock(|asm| volume_to_gain(asm.snapshot().volume));
+
     ctx.out_ring.lock(|rb| {
         for i in 0..FFT_SIZE {
-            let windowed_sample = res[i].re * hann_window::HANN_WINDOW[i];
+            let windowed_sample = res[i].re * hann_window::HANN_WINDOW[i] * volume_gain;
             rb.add_at_offset(i as u32, windowed_sample);
         }
     });
@@ -803,9 +818,14 @@ pub fn process_autotune(
     // Run the inverse FFT
     let res = microfft::inverse::ifft_1024(&mut buffers.full_spectrum);
 
+    // Apply volume control
+    let volume_gain = ctx
+        .app_state_machine
+        .lock(|asm| volume_to_gain(asm.snapshot().volume));
+
     ctx.out_ring.lock(|rb| {
         for i in 0..FFT_SIZE {
-            let windowed_sample = res[i].re * hann_window::HANN_WINDOW[i];
+            let windowed_sample = res[i].re * hann_window::HANN_WINDOW[i] * volume_gain;
             rb.add_at_offset(i as u32, windowed_sample);
         }
     });

@@ -330,7 +330,7 @@ impl AppStateMachine {
             current_formant: 0,
             sample_reduction: 1,
             bit_rate: 32,
-            volume: 0,
+            volume: 5,
             note: 0,
             key_down_pressed: false,
             process_cycle_pressed: false,
