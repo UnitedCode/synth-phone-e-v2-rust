@@ -7,9 +7,9 @@ use core::{
 /// **SPSC** lock-free ring buffer.  
 /// `N` **must** be a power of two.
 pub struct RingBuffer<const N: usize> {
-    buf:   UnsafeCell<[f32; N]>,
+    buf: UnsafeCell<[f32; N]>,
     write: AtomicU32,
-    read:  AtomicU32,
+    read: AtomicU32,
 }
 
 // Safety – single producer / single consumer.
@@ -18,17 +18,17 @@ unsafe impl<const N: usize> Sync for RingBuffer<N> {}
 impl<const N: usize> RingBuffer<N> {
     pub fn with_offset(offset: u32) -> Self {
         Self {
-            buf:   UnsafeCell::new([0.0; N]),
+            buf: UnsafeCell::new([0.0; N]),
             write: AtomicU32::new(offset),
-            read:  AtomicU32::new(0),
+            read: AtomicU32::new(0),
         }
     }
 
     pub const fn new() -> Self {
         Self {
-            buf:   UnsafeCell::new([0.0; N]),
+            buf: UnsafeCell::new([0.0; N]),
             write: AtomicU32::new(0),
-            read:  AtomicU32::new(0),
+            read: AtomicU32::new(0),
         }
     }
 
@@ -42,10 +42,10 @@ impl<const N: usize> RingBuffer<N> {
     #[inline(always)]
     pub fn pop(&self) -> f32 {
         let r = self.read.load(Ordering::Relaxed);
-        let v = unsafe { 
+        let v = unsafe {
             let cell = &mut (*self.buf.get())[r as usize & (N - 1)];
             let old_val = *cell;
-            *cell = 0.0;  // Clear after reading
+            *cell = 0.0; // Clear after reading
             old_val
         };
         self.read.store(r.wrapping_add(1), Ordering::Release);

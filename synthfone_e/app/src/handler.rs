@@ -1,6 +1,5 @@
 use crate::{constants::*, display::screens::*, input::buttons::*};
 use autotune::circular_buffer;
-use autotune::ring_buffer::RingBuffer;
 use autotune::fade::QUADRATIC_FADE;
 use autotune::frequencies::{find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES};
 use autotune::hann_window::{self, PI};
@@ -10,6 +9,7 @@ use autotune::oscillator::{Oscillator, Waveform};
 use autotune::process_frequencies::{
     bitcrush, cepstral_smoothing, find_fundamental_frequency, normalize_sample, sample_rate_reduce,
 };
+use autotune::ring_buffer::RingBuffer;
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -20,7 +20,7 @@ use rtic::Mutex;
 use state_machines::{AppState, MenuState, ProcessingProfile};
 // use autotune::oscillator::{Oscillator, Waveform};
 use core::sync::atomic::AtomicU32;
-use core::sync::atomic::Ordering; 
+use core::sync::atomic::Ordering;
 
 pub fn update_handler(
     audio: &mut audio::Audio,
@@ -42,6 +42,18 @@ pub fn update_handler(
     });
 
     if audio.get_stereo(buffer) {
+        let snap = shared.app_state_machine.lock(|msm| msm.snapshot());
+        let sr_factor = snap.sample_reduction;
+        let bit_depth = snap.bit_rate;
+        let note = snap.note;
+        let key = snap.key;
+        let octave = snap.octave;
+
+        let current_process = match snap.current_state {
+            AppState::Processing(p) | AppState::EffectsProfile(p) | AppState::Menu(_, p) => p,
+            AppState::Splash => ProcessingProfile::Autotune,
+        };
+
         for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
             let sample = match is_hangup_button_pressed {
                 // true => *right,
@@ -54,37 +66,22 @@ pub fn update_handler(
 
             // Lock to write to in_buffer
             shared.in_ring.lock(|in_ring| in_ring.push(sample));
-            
-            
-            let mut current_process = ProcessingProfile::Autotune;
-            shared.app_state_machine.lock(|msm| {
-                let snapshot = msm.snapshot();
-                match snapshot.current_state {
-                    AppState::Processing(process)
-                    | AppState::EffectsProfile(process)
-                    | AppState::Menu(_, process) => {
-                        current_process = process;
-                    }
-                    AppState::Splash => {}
-                }
-            });
-            
-            if(current_process == ProcessingProfile::Vocode || current_process == ProcessingProfile::Dry){
-                let (note, key, octave) = shared.app_state_machine.lock(|msm| {
-                    let snap = msm.snapshot();
-                    (snap.note, snap.key, snap.octave)
-                });
-                
+
+            if (current_process == ProcessingProfile::Vocode
+                || current_process == ProcessingProfile::Dry)
+            {
                 let carrier_hz = get_frequency(key, note, octave, true);
-                
-                let mut sample = shared.carrier_osc.lock(|osc| {
+
+                let sample = shared.carrier_osc.lock(|osc| {
                     osc.set_freq(carrier_hz);
                     osc.next()
                 });
-                
-                shared.carrier_ring.lock(|carrier_ring| carrier_ring.push(sample));
+
+                shared
+                    .carrier_ring
+                    .lock(|carrier_ring| carrier_ring.push(sample));
             }
-            
+
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
             // ************** SAMPLE-RATE REDUCE **************
@@ -113,8 +110,8 @@ pub fn update_handler(
                     *count = 0;
                 });
 
-                let pointer = shared.in_ring.lock(|in_ring|{in_ring.write_index()});
-                
+                let pointer = shared.in_ring.lock(|in_ring| in_ring.write_index());
+
                 shared.in_pointer_cached.lock(|cache| {
                     cache.store(pointer, Ordering::Relaxed);
                 });
@@ -281,10 +278,14 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
     let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];
     let mut analysis_frequencies = [0.0; FFT_SIZE / 2];
 
-    let write_idx = ctx.in_pointer_cached.lock(|in_pointer|{ in_pointer.load(Ordering::Relaxed)});
+    let write_idx = ctx
+        .in_pointer_cached
+        .lock(|in_pointer| in_pointer.load(Ordering::Relaxed));
 
-    ctx.in_ring.lock(|rb|  rb.block_from::<FFT_SIZE>(write_idx,   &mut unwrapped_buffer));
-    ctx.carrier_ring.lock(|rb| rb.block_from::<FFT_SIZE>(write_idx,   &mut unwrapped_synth_buffer));    
+    ctx.in_ring
+        .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut unwrapped_buffer));
+    ctx.carrier_ring
+        .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut unwrapped_synth_buffer));
 
     // Copy buffer into FFT input
     for i in 0..FFT_SIZE {
@@ -483,7 +484,11 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
     for i in 0..FFT_SIZE {
         let vocals = res[i].re;
         let synth = unwrapped_synth_buffer[i];
-        let mixed = if playing_note { vocals * 0.96 + synth * 0.04 } else { vocals };
+        let mixed = if playing_note {
+            vocals * 0.96 + synth * 0.04
+        } else {
+            vocals
+        };
         synth_frame[i] = mixed * analysis_window_buffer[i];
     }
 
@@ -502,10 +507,14 @@ pub fn process_vocode(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task
         [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
-    let write_idx = ctx.in_pointer_cached.lock(|in_pointer|{ in_pointer.load(Ordering::Relaxed)});
+    let write_idx = ctx
+        .in_pointer_cached
+        .lock(|in_pointer| in_pointer.load(Ordering::Relaxed));
 
-    ctx.in_ring.lock(|rb|  rb.block_from::<FFT_SIZE>(write_idx,   &mut input_unwrapped_buffer));
-    ctx.carrier_ring.lock(|rb| rb.block_from::<FFT_SIZE>(write_idx,   &mut carrier_unwrapped_buffer));    
+    ctx.in_ring
+        .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut input_unwrapped_buffer));
+    ctx.carrier_ring
+        .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut carrier_unwrapped_buffer));
 
     // Copy buffer into FFT input
     for i in 0..FFT_SIZE {
@@ -570,8 +579,11 @@ pub fn process_autotune(
     let mut analysis_frequencies = [0.0; FFT_SIZE / 2];
     let mut _synthesis_count = [0; FFT_SIZE / 2];
 
-    let write_idx = ctx.in_pointer_cached.lock(|in_pointer|{ in_pointer.load(Ordering::Relaxed)});
-    ctx.in_ring.lock(|rb|  rb.block_from::<FFT_SIZE>(write_idx,   &mut unwrapped_buffer));
+    let write_idx = ctx
+        .in_pointer_cached
+        .lock(|in_pointer| in_pointer.load(Ordering::Relaxed));
+    ctx.in_ring
+        .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut unwrapped_buffer));
 
     // Copy buffer into FFT input
     for i in 0..FFT_SIZE {
