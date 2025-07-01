@@ -1,5 +1,5 @@
 use crate::{constants::*, input::buttons::*};
-use autotune::frequencies::{find_nearest_note_in_key, C_MAJOR_SCALE_FREQUENCIES};
+use autotune::frequencies::find_nearest_note_in_key;
 use autotune::hann_window::{self, PI};
 use autotune::keys::{get_frequency, get_scale_by_key};
 use autotune::process_frequencies::{
@@ -188,14 +188,10 @@ fn clear_synthesis_arrays(
     ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources,
 ) {
     ctx.synthesis_magnitudes.lock(|syn_mag| {
-        for bin in syn_mag.iter_mut() {
-            *bin = 0.0;
-        }
+        syn_mag.fill(0.0);
     });
     ctx.synthesis_frequencies.lock(|syn_freq| {
-        for bin in syn_freq.iter_mut() {
-            *bin = 0.0;
-        }
+        syn_freq.fill(0.0);
     });
 }
 
@@ -207,16 +203,6 @@ pub(crate) fn update_handler(
 ) {
     hangup_button.update();
     let is_hangup_button_pressed = hangup_button.is_high();
-
-    let mut sr_factor = 1;
-    shared.app_state_machine.lock(|msm| {
-        sr_factor = msm.snapshot().sample_reduction;
-    });
-
-    let mut bit_depth = 32;
-    shared.app_state_machine.lock(|msm| {
-        bit_depth = msm.snapshot().bit_rate;
-    });
 
     if audio.get_stereo(buffer) {
         let snap = shared.app_state_machine.lock(|msm| msm.snapshot());
@@ -258,10 +244,29 @@ pub(crate) fn update_handler(
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
             // ************** SAMPLE-RATE REDUCE **************
+            // Extract values from locks first to avoid nested locks
+            let (mut hold_counter_val, mut held_value_val) = (0i32, 0.0f32);
             shared.sr_hold_counter.lock(|hold_ctr| {
-                shared.sr_held_value.lock(|held_val| {
-                    out_sample = sample_rate_reduce(out_sample, sr_factor, hold_ctr, held_val);
-                });
+                hold_counter_val = *hold_ctr;
+            });
+            shared.sr_held_value.lock(|held_val| {
+                held_value_val = *held_val;
+            });
+
+            // Process sample rate reduction
+            out_sample = sample_rate_reduce(
+                out_sample,
+                sr_factor,
+                &mut hold_counter_val,
+                &mut held_value_val,
+            );
+
+            // Write back the modified values
+            shared.sr_hold_counter.lock(|hold_ctr| {
+                *hold_ctr = hold_counter_val;
+            });
+            shared.sr_held_value.lock(|held_val| {
+                *held_val = held_value_val;
             });
 
             // ************** BIT DEPTH REDUCE **************
@@ -270,19 +275,21 @@ pub(crate) fn update_handler(
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8);
 
-            // Check and handle hop counter
-            let mut local_hop_counter: u32 = 0;
-            shared.hop_counter.lock(|count| {
-                local_hop_counter = *count;
+            // Check and handle hop counter - consolidate lock operations
+            let should_spawn_task = shared.hop_counter.lock(|count| {
+                let current_count = *count;
+                *count += 1;
+
+                if current_count >= HOP_SIZE as u32 {
+                    *count = 0;
+                    true
+                } else {
+                    false
+                }
             });
 
-            if local_hop_counter >= HOP_SIZE as u32 {
-                shared.hop_counter.lock(|count| {
-                    *count = 0;
-                });
-
+            if should_spawn_task {
                 let pointer = shared.in_ring.lock(|in_ring| in_ring.write_index());
-
                 shared.in_pointer_cached.lock(|cache| {
                     cache.store(pointer, Ordering::Relaxed);
                 });
@@ -292,10 +299,6 @@ pub(crate) fn update_handler(
                     warn!("Could not unwrap software task - underrun error");
                 }
             }
-
-            shared.hop_counter.lock(|count| {
-                *count += 1;
-            });
 
             // Output the processed audio
             if audio.push_stereo((out_sample, out_sample)).is_err() {
@@ -337,25 +340,22 @@ pub fn interface_handler(
                     oms[row][col] = is_pressed;
                 });
 
+                // Get current app state for event handling
+                let current_app_state = shared
+                    .app_state_machine
+                    .lock(|msm| msm.snapshot().current_state);
+
                 if is_pressed {
                     update_state = true;
                     // Button has just been pressed
                     shared.app_state_machine.lock(|msm| {
-                        msm.handle_event(handle_button_press(
-                            row,
-                            col,
-                            msm.snapshot().current_state,
-                        ));
+                        msm.handle_event(handle_button_press(row, col, current_app_state));
                     });
                 } else {
                     update_state = true;
                     // Button has just been released
                     shared.app_state_machine.lock(|msm| {
-                        msm.handle_event(handle_button_release(
-                            row,
-                            col,
-                            msm.snapshot().current_state,
-                        ));
+                        msm.handle_event(handle_button_release(row, col, current_app_state));
                     });
                 }
             }
@@ -582,9 +582,16 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
         .app_state_machine
         .lock(|asm| volume_to_gain(asm.snapshot().volume));
 
+    // Apply volume gain to all samples first
+    let mut volume_adjusted_frame = [0.0f32; FFT_SIZE];
+    for (i, &sample) in synth_frame.iter().enumerate() {
+        volume_adjusted_frame[i] = sample * volume_gain;
+    }
+
+    // Then write to output ring in single lock
     ctx.out_ring.lock(|rb| {
-        for (i, &sample) in synth_frame.iter().enumerate() {
-            rb.add_at_offset(i as u32, sample * volume_gain);
+        for (i, &sample) in volume_adjusted_frame.iter().enumerate() {
+            rb.add_at_offset(i as u32, sample);
         }
     });
 }
@@ -649,10 +656,16 @@ pub fn process_vocode(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task
         .app_state_machine
         .lock(|asm| volume_to_gain(asm.snapshot().volume));
 
+    // Prepare windowed samples with volume adjustment
+    let mut windowed_samples = [0.0f32; FFT_SIZE];
+    for i in 0..FFT_SIZE {
+        windowed_samples[i] = res[i].re * hann_window::HANN_WINDOW[i] * volume_gain;
+    }
+
+    // Write to output ring in single lock
     ctx.out_ring.lock(|rb| {
-        for i in 0..FFT_SIZE {
-            let windowed_sample = res[i].re * hann_window::HANN_WINDOW[i] * volume_gain;
-            rb.add_at_offset(i as u32, windowed_sample);
+        for (i, &sample) in windowed_samples.iter().enumerate() {
+            rb.add_at_offset(i as u32, sample);
         }
     });
 }
@@ -733,20 +746,21 @@ pub fn process_autotune(
 
     // We cannot divide by 0
     if exact_frequency > 0.001 {
-        let mut scale_frequencies = &C_MAJOR_SCALE_FREQUENCIES;
-
-        let mut octave_factor = 1.0;
-        ctx.app_state_machine.lock(|msm| {
+        // Extract state values from lock first, then process
+        let (octave_value, key_value) = ctx.app_state_machine.lock(|msm| {
             let snapshot = msm.snapshot();
-            params.octave = snapshot.octave;
-            octave_factor = params.octave as f32 * 0.5;
-            if octave_factor <= 0.4 {
-                octave_factor = 1.0;
-            }
-
-            params.key = snapshot.key;
-            scale_frequencies = get_scale_by_key(params.key);
+            (snapshot.octave, snapshot.key)
         });
+
+        params.octave = octave_value;
+        params.key = key_value;
+
+        let mut octave_factor = params.octave as f32 * 0.5;
+        if octave_factor <= 0.4 {
+            octave_factor = 1.0;
+        }
+
+        let scale_frequencies = get_scale_by_key(params.key);
 
         let target_frequency = if is_auto {
             find_nearest_note_in_key(exact_frequency, scale_frequencies)
@@ -823,10 +837,16 @@ pub fn process_autotune(
         .app_state_machine
         .lock(|asm| volume_to_gain(asm.snapshot().volume));
 
+    // Prepare windowed samples with volume adjustment
+    let mut windowed_samples = [0.0f32; FFT_SIZE];
+    for i in 0..FFT_SIZE {
+        windowed_samples[i] = res[i].re * hann_window::HANN_WINDOW[i] * volume_gain;
+    }
+
+    // Write to output ring in single lock
     ctx.out_ring.lock(|rb| {
-        for i in 0..FFT_SIZE {
-            let windowed_sample = res[i].re * hann_window::HANN_WINDOW[i] * volume_gain;
-            rb.add_at_offset(i as u32, windowed_sample);
+        for (i, &sample) in windowed_samples.iter().enumerate() {
+            rb.add_at_offset(i as u32, sample);
         }
     });
 }
