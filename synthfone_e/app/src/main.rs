@@ -24,6 +24,7 @@ mod constants;
 mod display;
 mod handler;
 mod input;
+mod midi;
 mod types;
 
 mod rtic_app {
@@ -39,6 +40,7 @@ mod rtic_app {
                 ring_buffer::RingBuffer,
             },
             constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
+            midi::MidiParser,
             types::Knob,
         };
         use core::sync::atomic::AtomicU32;
@@ -53,12 +55,16 @@ mod rtic_app {
         };
         use log::info;
 
+        use cortex_m::prelude::_embedded_hal_serial_Read;
+        use fugit::HertzU32;
+        use nb;
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
         use state_machines::AppStateMachine;
         use state_machines::{AppState, MenuState};
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
+            serial::{Serial, SerialExt},
             stm32,
             time::MilliSeconds,
             timer::Timer,
@@ -70,6 +76,8 @@ mod rtic_app {
             ssd1306::prelude::DisplaySize128x32,
             BufferedGraphicsMode<ssd1306::prelude::DisplaySize128x32>,
         >;
+
+        type UartMidi = Serial<stm32h7xx_hal::stm32::USART1>;
 
         #[shared]
         struct Shared {
@@ -91,6 +99,7 @@ mod rtic_app {
             carrier_osc: Oscillator,
             display_needs_update: bool,
             display_buffer: [u8; 512], // 128x32 / 8 = 512 bytes for the display buffer
+            midi_parser: MidiParser,
         }
 
         #[local]
@@ -110,6 +119,7 @@ mod rtic_app {
             row_4_pin: Daisy18<Input>,
             encoder_button: hid::Switch<Daisy2<Input>>,
             hangup_button: hid::Switch<Daisy1<Input>>,
+            uart_midi: UartMidi,
         }
 
         #[init]
@@ -163,7 +173,7 @@ mod rtic_app {
                 .expect("Failed to get pin daisy28!")
                 .into_pull_up_input();
 
-            let daisy14_sda = system
+            let daisy12_sda = system
                 .gpio
                 .daisy12
                 .take()
@@ -181,7 +191,7 @@ mod rtic_app {
                 .set_open_drain();
 
             let i2c = device.I2C1.i2c(
-                (daisy13_scl, daisy14_sda),
+                (daisy13_scl, daisy12_sda),
                 100_u32.kHz(),
                 ccdr.peripheral.I2C1,
                 &ccdr.clocks,
@@ -230,6 +240,35 @@ mod rtic_app {
                 .take()
                 .expect("Failed to get D18")
                 .into_pull_up_input();
+
+            // Configure UART1 for MIDI - Use pins A9 (TX) and A10 (RX) for UART1
+            // For MIDI input, we only need RX (A10), but HAL requires both TX and RX
+            let uart_tx = system
+                .gpio
+                .daisy14
+                .take()
+                .expect("Failed to get daisy14 for UART TX")
+                .into_alternate::<7>(); // UART1 TX alternate function 7
+
+            let uart_rx = system
+                .gpio
+                .daisy13
+                .take()
+                .expect("Failed to get daisy15 for UART RX")
+                .into_alternate::<7>(); // UART1 RX alternate function 7
+
+            let mut uart_midi = device
+                .USART1
+                .serial(
+                    (uart_rx, uart_tx),   // TX and RX pins
+                    HertzU32::Hz(31_250), // MIDI baud rate
+                    ccdr.peripheral.USART1,
+                    &ccdr.clocks,
+                )
+                .unwrap();
+
+            // Enable UART1 receive interrupt
+            uart_midi.listen(stm32h7xx_hal::serial::Event::Rxne);
 
             let i2c_interface = I2CDisplayInterface::new_custom_address(i2c, 0x3C);
 
@@ -286,6 +325,7 @@ mod rtic_app {
                     carrier_osc: Oscillator::new(55.0, SAMPLE_RATE, Waveform::Saw),
                     display_needs_update: false,
                     display_buffer: [0; 512],
+                    midi_parser: MidiParser::new(),
                 },
                 Local {
                     audio: system.audio,
@@ -303,6 +343,7 @@ mod rtic_app {
                     row_4_pin,
                     encoder_button,
                     hangup_button,
+                    uart_midi,
                 },
                 init::Monotonics(),
             )
@@ -436,6 +477,30 @@ mod rtic_app {
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // Call audio processing from handler module
             crate::handler::dma1_stream0_software_task(&mut ctx.shared);
+        }
+
+        /// UART1 MIDI receive interrupt handler
+        #[task(binds = USART1, local = [uart_midi], shared = [midi_parser], priority = 6)]
+        fn uart1_midi_handler(mut ctx: uart1_midi_handler::Context) {
+            let uart = ctx.local.uart_midi;
+
+            // Check if we have received data
+            match uart.read() {
+                Ok(byte) => {
+                    // Process the MIDI byte
+                    ctx.shared.midi_parser.lock(|parser| {
+                        if let Some(message) = parser.process_byte(byte) {
+                            crate::midi::log_midi_message(message);
+                        }
+                    });
+                }
+                Err(nb::Error::WouldBlock) => {
+                    // No data available, this is normal
+                }
+                Err(_) => {
+                    // Handle other errors if needed
+                }
+            }
         }
     }
 }

@@ -21,6 +21,7 @@ dependencies = [
  "log",
  "microfft",
  "micromath 2.1.0",
+ "nb 1.1.0",
  "panic-halt",
  "panic-itm",
  "panic-rtt-target",
