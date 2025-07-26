@@ -8,6 +8,7 @@ pub enum ProcessingProfile {
     Autotune,
     Vocode,
     Dry,
+    Harmony
 }
 
 /// The top-level states
@@ -218,6 +219,9 @@ impl AppState {
                 AppState::EffectsProfile(ProcessingProfile::Dry)
             }
             AppState::EffectsProfile(ProcessingProfile::Dry) => {
+                AppState::EffectsProfile(ProcessingProfile::Harmony)
+            }
+            AppState::EffectsProfile(ProcessingProfile::Harmony) => {
                 AppState::EffectsProfile(ProcessingProfile::Autotune)
             }
             AppState::Processing(ProcessingProfile::Autotune) => {
@@ -227,6 +231,9 @@ impl AppState {
                 AppState::Processing(ProcessingProfile::Dry)
             }
             AppState::Processing(ProcessingProfile::Dry) => {
+                AppState::Processing(ProcessingProfile::Harmony)
+            }
+            AppState::Processing(ProcessingProfile::Harmony) => {
                 AppState::Processing(ProcessingProfile::Autotune)
             }
             // For any other state, don't change
@@ -376,17 +383,17 @@ impl AppStateMachine {
 
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
-                match key {
-                    1..=9 => {
+                // match key {
+                //     1..=9 => {
                         // First 9 buttons are notes
                         self.note = key as i32;
                         self.play_note(key);
-                    }
-                    10 => self.current_key = (self.current_key + 23) % 24,
-                    11 => self.state = self.state.cycle_profile(),
-                    12 => self.current_key = (self.current_key + 1) % 24,
-                    _ => {}
-                }
+                //     }
+                //     10 => self.current_key = (self.current_key + 23) % 24,
+                //     11 => self.state = self.state.cycle_profile(),
+                //     12 => self.current_key = (self.current_key + 1) % 24,
+                //     _ => {}
+                // }
             }
 
             // Handle keypad presses in Effects profile
@@ -449,13 +456,7 @@ impl AppStateMachine {
             },
 
             (AppState::Processing(profile), AppEvent::KeypadRelease(key)) => {
-                if matches!(
-                    profile,
-                    ProcessingProfile::Autotune | ProcessingProfile::Dry
-                ) {
-                    self.note = 0;
-                    self.play_note(0); // stop tone for those modes
-                }
+                self.note = 0;
             }
 
             // Handle encoder rotation in Menu profile

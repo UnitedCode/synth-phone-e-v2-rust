@@ -156,6 +156,9 @@ pub fn get_note_name(note: i32, scale: KeyScale) -> &'static str {
         7 => scale.0[6],
         8 => scale.0[0], // wrap around
         9 => scale.0[1], // wrap around
+        10 => scale.0[2],
+        11 => scale.0[3],
+        12 => scale.0[4],
         _ => "",         // out of range
     }
 }
@@ -212,7 +215,7 @@ pub fn get_scale_by_key(key: i32) -> &'static KeyScaleFrequencies {
 
 pub fn get_frequency(key: i32, note: i32, octave: i32, is_vocoder: bool) -> f32 {
     //TODO: maybe i should have the octave store index insted of values so i don't have to convert here?
-    let offset = if (is_vocoder) { 0 } else { 2 };
+    let offset = if (is_vocoder) { 3 } else { 2 };
 
     let octave_idx = match octave {
         1 => 1 + offset, // first row

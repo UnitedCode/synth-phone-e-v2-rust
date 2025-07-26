@@ -71,6 +71,7 @@ pub fn draw_processing_screen(
         ProcessingProfile::Autotune => "Autotune",
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Dry Vox",
+        ProcessingProfile::Harmony => "Harmony"
     };
 
     // Create text buffers
@@ -243,6 +244,14 @@ pub fn draw_effects_screen(
                 voice_off_img.draw(display).expect("Draw voice off");
             }
             "Dry Vox"
+        }
+        ProcessingProfile::Harmony => {
+            if process_cycle_pressed {
+                voice_on_img.draw(display).expect("Draw voice on");
+            } else {
+                voice_off_img.draw(display).expect("Draw voice off");
+            }
+            "Harmony"
         }
     };
 

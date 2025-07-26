@@ -229,7 +229,9 @@ pub(crate) fn update_handler(
             if current_process == ProcessingProfile::Vocode
                 || current_process == ProcessingProfile::Dry
             {
+                //TODO: this is too slow causing a 0 note to play for a split second
                 let carrier_hz = get_frequency(key, note, octave, true);
+
 
                 let sample = shared.carrier_osc.lock(|osc| {
                     osc.set_freq(carrier_hz);
@@ -430,6 +432,7 @@ pub fn dma1_stream0_software_task(
         ProcessingProfile::Autotune => process_autotune(ctx),
         ProcessingProfile::Vocode => process_vocode(ctx),
         ProcessingProfile::Dry => process_dry(ctx),
+        ProcessingProfile::Harmony => process_harmony(ctx)
     }
 
     ctx.out_ring.lock(|rb| rb.advance_write(HOP_SIZE as u32));
@@ -767,6 +770,8 @@ pub fn process_autotune(
         } else {
             get_frequency(params.key, params.note, params.octave, false)
         };
+        
+        //info!("target freq {}", target_frequency);
         let current_pitch_shift_ratio = target_frequency / exact_frequency;
 
         let previous_pitch_shift_ratio = ctx.previous_pitch_shift_ratio.lock(|ppr| *ppr);
@@ -850,6 +855,109 @@ pub fn process_autotune(
         }
     });
 }
+
+pub fn process_harmony(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources) {
+    let mut buffers = ProcessingBuffers::new(false);
+    let mut full_spectrum = [ZERO_COMPLEX; FFT_SIZE];
+    load_and_window_data(ctx, &mut buffers);
+
+    let input_fft = microfft::real::rfft_1024(&mut buffers.unwrapped_buffer);
+    let mut params = ProcessingParams::from_state_machine(ctx);
+
+    // Phase vocoder analysis (gets input frequency)
+    perform_phase_vocoder_analysis(
+        input_fft,
+        ctx,
+        &mut buffers.analysis_magnitudes,
+        &mut buffers.analysis_frequencies,
+    );
+
+    let fundamental_bin = find_fundamental_frequency(&buffers.analysis_magnitudes);
+    let input_freq = buffers.analysis_frequencies[fundamental_bin] * crate::constants::BIN_WIDTH;
+
+    if input_freq < 1.0 {
+        return; // avoid division by zero or silence
+    }
+
+    // 🎹 Mocked MIDI notes to harmonize with
+    let harmony_notes = [1, 3, 5, 12, -12];
+    //let harmony_notes = [params.note];
+
+    // Root key/octave, used to compute frequencies
+    let key = 0;
+    let octave = 4;
+
+    // Harmonized signal buffer
+    let mut output_mix = [0.0f32; FFT_SIZE];
+
+    // ▶️ Include original voice (no pitch shift)
+    for i in 0..FFT_SIZE / 2 {
+        full_spectrum[i] = input_fft[i];
+
+        if i > 0 {
+            // Rebuild the conjugate symmetry
+            full_spectrum[FFT_SIZE - i].re = input_fft[i].re;
+            full_spectrum[FFT_SIZE - i].im = -input_fft[i].im;
+        }
+    }
+
+    let res_original = microfft::inverse::ifft_1024(&mut full_spectrum);
+
+    for i in 0..FFT_SIZE {
+        output_mix[i] += res_original[i].re;
+    }
+
+    // ➕ Add pitch-shifted harmonies
+    for &note in harmony_notes.iter() {
+        let target_freq = get_frequency(key, note, octave, false);
+        if target_freq < 1.0 {
+            continue;
+        }
+
+        let shift_ratio = target_freq / input_freq;
+        let mut spectrum: [microfft::Complex32; FFT_SIZE] = [ZERO_COMPLEX; FFT_SIZE];
+        let nyquist = FFT_SIZE / 2;
+
+        for i in 0..nyquist {
+            let shifted_index = floorf(i as f32 * shift_ratio + 0.5) as usize;
+
+            if shifted_index < nyquist {
+                spectrum[shifted_index] = input_fft[i];
+                if shifted_index > 0 && shifted_index < nyquist {
+                    spectrum[FFT_SIZE - shifted_index].re = input_fft[i].re;
+                    spectrum[FFT_SIZE - shifted_index].im = -input_fft[i].im;
+                }
+            }
+        }
+
+        let res = microfft::inverse::ifft_1024(&mut spectrum);
+
+        for i in 0..FFT_SIZE {
+            output_mix[i] += res[i].re;
+        }
+    }
+
+    // Normalize by total number of voices (original + harmonies)
+    let total_voices = (harmony_notes.len() + 1) as f32;
+
+    // Final windowing and gain
+    let volume_gain = ctx
+        .app_state_machine
+        .lock(|asm| volume_to_gain(asm.snapshot().volume));
+
+    let mut windowed_samples = [0.0f32; FFT_SIZE];
+    for i in 0..FFT_SIZE {
+        let sample = output_mix[i] / total_voices;
+        windowed_samples[i] = sample * hann_window::HANN_WINDOW[i] * volume_gain;
+    }
+
+    ctx.out_ring.lock(|rb| {
+        for (i, &sample) in windowed_samples.iter().enumerate() {
+            rb.add_at_offset(i as u32, sample);
+        }
+    });
+}
+
 
 pub fn wrap_phase(phase_in: f32) -> f32 {
     if phase_in >= 0.0 {

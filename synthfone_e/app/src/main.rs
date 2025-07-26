@@ -322,7 +322,7 @@ mod rtic_app {
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
-                    carrier_osc: Oscillator::new(55.0, SAMPLE_RATE, Waveform::Saw),
+                    carrier_osc: Oscillator::new(55.0, SAMPLE_RATE, Waveform::Square),
                     display_needs_update: false,
                     display_buffer: [0; 512],
                     midi_parser: MidiParser::new(),
