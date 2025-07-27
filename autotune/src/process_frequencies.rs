@@ -5,6 +5,7 @@ use crate::frequencies::find_nearest_note_frequency;
 
 //TODO this should be passed in
 const FFT_SIZE: usize = 1024;
+const SAMPLE_RATE: u32 = 44100;
 
 #[inline(always)]
 pub fn calculate_updates(
@@ -34,16 +35,41 @@ pub fn calculate_updates(
 
 #[inline(always)]
 pub fn find_fundamental_frequency(analysis_magnitudes: &[f32]) -> usize {
-    let mut max_magnitude = 0.0;
-    let mut fundamental_bin = 0;
-    for (i, &magnitude) in analysis_magnitudes.iter().enumerate() {
-        if magnitude > max_magnitude {
-            max_magnitude = magnitude;
-            fundamental_bin = i;
+    const MAX_HZ: usize = 1000;
+    const MAX_BIN: usize = MAX_HZ * FFT_SIZE / SAMPLE_RATE as usize;
+    const DOWNSAMPLE_FACTORS: [usize; 3] = [2, 3, 4];
+    
+
+    // Temporary array for HPS result
+    let mut harmonic_product_spectrum = [0.0f32; MAX_BIN];
+
+    // Step 1: Copy base spectrum up to MAX_BIN
+    for i in 0..MAX_BIN {
+        harmonic_product_spectrum[i] = analysis_magnitudes[i];
+    }
+
+    // Step 2: Multiply with downsampled versions
+    for &factor in DOWNSAMPLE_FACTORS.iter() {
+        for i in 0..(MAX_BIN / factor) {
+            harmonic_product_spectrum[i] *= analysis_magnitudes[i * factor];
         }
     }
-    fundamental_bin
+
+    // Step 3: Find the bin with the maximum HPS value
+    let mut max_val = 0.0;
+    let mut max_bin = 0;
+    for i in 1..MAX_BIN {
+        if harmonic_product_spectrum[i] > max_val {
+            max_val = harmonic_product_spectrum[i];
+            max_bin = i;
+        }
+    }
+
+    // Step 4: Convert bin index to frequency
+    //let bin_width = SAMPLE_RATE as usize / FFT_SIZE as usize;
+    max_bin
 }
+
 
 #[inline(always)]
 pub fn collect_harmonics(fundamental_index: usize) -> [usize; 8] {

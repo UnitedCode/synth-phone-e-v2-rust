@@ -879,8 +879,8 @@ pub fn process_harmony(ctx: &mut crate::rtic_app::app::dma1_stream0_software_tas
         return; // avoid division by zero or silence
     }
 
-    // 🎹 Mocked MIDI notes to harmonize with
-    let harmony_notes = [1, 3, 5, 12, -12];
+    // Mocked MIDI notes to harmonize with
+    let harmony_notes = [params.note];
     //let harmony_notes = [params.note];
 
     // Root key/octave, used to compute frequencies
@@ -907,7 +907,7 @@ pub fn process_harmony(ctx: &mut crate::rtic_app::app::dma1_stream0_software_tas
         output_mix[i] += res_original[i].re;
     }
 
-    // ➕ Add pitch-shifted harmonies
+    // Add pitch-shifted harmonies
     for &note in harmony_notes.iter() {
         let target_freq = get_frequency(key, note, octave, false);
         if target_freq < 1.0 {
