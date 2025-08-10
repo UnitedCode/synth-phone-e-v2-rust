@@ -171,7 +171,10 @@ impl AppState {
         match (self, event) {
             // From Splash screen
             (AppState::Splash, AppEvent::SplashComplete) => {
-                AppState::Processing(ProcessingProfile::Autotune)
+                AppState::EffectsProfile(ProcessingProfile::Autotune)
+            }
+            (AppState::Splash, AppEvent::EncoderPress) => {
+                AppState::EffectsProfile(ProcessingProfile::Autotune)
             }
 
             // Encoder press to toggle between Processing and Effects
