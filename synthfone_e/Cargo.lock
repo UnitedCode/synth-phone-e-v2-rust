@@ -30,6 +30,7 @@ dependencies = [
  "state-machines",
  "stm32-fmc",
  "stm32h7xx-hal",
+ "synthphone_vocals",
  "tinybmp",
 ]
 
@@ -762,6 +763,14 @@ dependencies = [
  "embedded-hal",
  "usb-device",
  "vcell",
+]
+
+[[package]]
+name = "synthphone_vocals"
+version = "0.1.1"
+dependencies = [
+ "libm",
+ "microfft",
 ]
 
 [[package]]
