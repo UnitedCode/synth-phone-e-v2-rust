@@ -1,4 +1,5 @@
 use crate::display::text::{draw_centered_text, draw_text};
+use crate::state_machine::ProcessingProfile;
 use crate::types::LcdDisplay;
 use core::fmt::Write;
 use embedded_graphics::{
@@ -13,7 +14,6 @@ use embedded_graphics::{
     text::{Alignment, Baseline, Text},
 };
 use heapless::String;
-use state_machines::ProcessingProfile;
 use synthphone_vocals::keys::{get_mode_name, get_note_name};
 use synthphone_vocals::{get_key, get_key_name};
 use tinybmp::Bmp;
@@ -153,7 +153,7 @@ pub fn draw_effects_screen(
     let autotune_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 8), Size::new(13, 8)));
 
     // Convert BMPs into Image objects
-    let bg = Image::new(&bmp, Point::new(0, 0));
+    let _bg = Image::new(&bmp, Point::new(0, 0));
 
     let low_oct_on_img = Image::new(&low_oct_on, Point::new(0, 0));
     let med_oct_on_img = Image::new(&med_oct_on, Point::new(13, 0));

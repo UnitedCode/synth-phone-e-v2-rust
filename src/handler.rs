@@ -1,3 +1,4 @@
+use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
@@ -5,7 +6,6 @@ use libdaisy::{audio, hid};
 use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
-use state_machines::{AppState, ProcessingProfile};
 use synthphone_vocals::embedded::{normalize_sample, write_synthesis_output};
 use synthphone_vocals::process_frequencies::{bitcrush, sample_rate_reduce};
 use synthphone_vocals::{
@@ -186,7 +186,7 @@ pub fn interface_handler(
         update_state = true;
 
         shared.app_state_machine.lock(|msm| {
-            msm.handle_event(state_machines::AppEvent::EncoderDoublePress);
+            msm.handle_event(AppEvent::EncoderDoublePress);
         });
     }
     //Check for single press if not a double press
@@ -195,7 +195,7 @@ pub fn interface_handler(
         update_state = true;
 
         shared.app_state_machine.lock(|msm| {
-            msm.handle_event(state_machines::AppEvent::EncoderPress);
+            msm.handle_event(AppEvent::EncoderPress);
         });
     }
 
@@ -204,13 +204,13 @@ pub fn interface_handler(
         Direction::Clockwise => {
             update_state = true;
             shared.app_state_machine.lock(|msm| {
-                msm.handle_event(state_machines::AppEvent::EncoderRotate(1));
+                msm.handle_event(AppEvent::EncoderRotate(1));
             });
         }
         Direction::Anticlockwise => {
             update_state = true;
             shared.app_state_machine.lock(|msm| {
-                msm.handle_event(state_machines::AppEvent::EncoderRotate(-1));
+                msm.handle_event(AppEvent::EncoderRotate(-1));
             });
         }
         Direction::None => {}

@@ -21,6 +21,7 @@ mod constants;
 mod display;
 mod handler;
 mod input;
+mod state_machine;
 mod types;
 
 mod rtic_app {
@@ -30,10 +31,12 @@ mod rtic_app {
     dispatchers = [DMA1_STR0, DMA1_STR2]
     )]
     mod app {
-        use crate::constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE};
-        use core::sync::atomic::AtomicU32;
+        use crate::{
+            constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
+            state_machine::{AppState, AppStateMachine, MenuState},
+        };
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
-        use fugit::{ExtU32, RateExtU32};
+        use fugit::RateExtU32;
         use libdaisy::{
             audio,
             gpio::*,
@@ -45,8 +48,6 @@ mod rtic_app {
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
-        use state_machines::AppStateMachine;
-        use state_machines::{AppState, MenuState, ProcessingProfile};
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
             stm32,
@@ -86,10 +87,8 @@ mod rtic_app {
             in_ring: RingBuffer<BUFFER_SIZE>,
             out_ring: RingBuffer<BUFFER_SIZE>,
             in_pointer_cached: u32,
-
             carrier_ring: RingBuffer<BUFFER_SIZE>,
             previous_pitch_shift_ratio: f32,
-            hop_counter: u32,
             app_state_machine: AppStateMachine,
             old_matrix_state: [[bool; 3]; 4],
             // For sample-rate reduction
@@ -284,7 +283,6 @@ mod rtic_app {
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
                     carrier_ring: RingBuffer::new(),
                     previous_pitch_shift_ratio: 1.0,
-                    hop_counter: 0,
                     in_pointer_cached: 0,
                     app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
