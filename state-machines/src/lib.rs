@@ -83,7 +83,7 @@ impl Default for MenuValues {
     }
 }
 
-use log::{info, warn};
+use log::info;
 
 impl MenuValues {
     /// Get a value for a specific menu item
@@ -448,7 +448,7 @@ impl AppStateMachine {
                 _ => {}
             },
 
-            (AppState::Processing(profile), AppEvent::KeypadRelease(key)) => {
+            (AppState::Processing(profile), AppEvent::KeypadRelease(_key)) => {
                 if matches!(
                     profile,
                     ProcessingProfile::Autotune | ProcessingProfile::Dry
@@ -559,6 +559,8 @@ impl AppStateMachine {
 fn clamp_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
     (current + delta).clamp(min, max)
 }
+
+#[allow(dead_code)]
 fn wrap_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
     let range = max - min + 1;
     ((current + delta - min) % range + range) % range + min

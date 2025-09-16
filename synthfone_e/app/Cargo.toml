@@ -32,7 +32,6 @@ libdaisy = {git = "https://github.com/nathansbradshaw/libdaisy-rust.git", featur
 synthphone_vocals = { path = "../../../synthphone_vocals/"}
 libm = "0.2.8"
 heapless = "0.8.0"
-autotune = {path = "../../autotune"}
 state-machines = {path = "../../state-machines"}
 ssd1306 = "0.7.1"
 fugit = "0.3.7"

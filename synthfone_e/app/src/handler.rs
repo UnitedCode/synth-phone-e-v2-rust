@@ -1,6 +1,4 @@
 use crate::{constants::*, input::buttons::*};
-use autotune::keys::get_frequency;
-use autotune::process_frequencies::{bitcrush, normalize_sample, sample_rate_reduce};
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -8,8 +6,11 @@ use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
 use state_machines::{AppState, ProcessingProfile};
-use synthphone_vocals::embedded::write_synthesis_output;
-use synthphone_vocals::{process_vocal_effects_config, MusicalSettings, VocalEffectsConfig};
+use synthphone_vocals::embedded::{normalize_sample, write_synthesis_output};
+use synthphone_vocals::process_frequencies::{bitcrush, sample_rate_reduce};
+use synthphone_vocals::{
+    get_frequency, process_vocal_effects_config, MusicalSettings, VocalEffectsConfig,
+};
 
 pub fn audio_handler(
     audio: &mut audio::Audio,
@@ -70,7 +71,7 @@ pub fn audio_handler(
 
                 let mut sample = shared.carrier_osc.lock(|osc| {
                     osc.set_freq(carrier_hz);
-                    osc.next()
+                    osc.next_value()
                 });
 
                 shared
@@ -288,6 +289,5 @@ pub fn handle_vocal_effects(
 
     ctx.out_ring.lock(|output_ring| {
         write_synthesis_output::<FFT_SIZE, BUFFER_SIZE>(&synthesis_output, output_ring);
-        info!("Writing to output");
     });
 }

@@ -14,7 +14,6 @@
 //  [          YY                         PP                                                               ] }
 //   \-----------------------------------------------------------------------------------------------------\ }
 //    \______________________________________________________________________________________________________\
-use autotune;
 
 // Module declarations
 mod audio;
@@ -31,10 +30,7 @@ mod rtic_app {
     dispatchers = [DMA1_STR0, DMA1_STR2]
     )]
     mod app {
-        use crate::{
-            autotune::oscillator::{Oscillator, Waveform},
-            constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
-        };
+        use crate::constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE};
         use core::sync::atomic::AtomicU32;
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
         use fugit::{ExtU32, RateExtU32};
@@ -57,7 +53,10 @@ mod rtic_app {
             time::MilliSeconds,
             timer::Timer,
         };
-        use synthphone_vocals::ring_buffer::RingBuffer;
+        use synthphone_vocals::{
+            oscillator::{Oscillator, Waveform},
+            ring_buffer::RingBuffer,
+        };
         use tinybmp::Bmp;
 
         type LcdDisplay = Ssd1306<

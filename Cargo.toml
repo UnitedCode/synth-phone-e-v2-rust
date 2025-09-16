@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "host-tests",
     "xtask",
-    "autotune",
     "state-machines",
 ]
