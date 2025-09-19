@@ -3,12 +3,7 @@
   "cortex-debug.liveWatchRefreshRate": 225,
   "rust-analyzer.linkedProjects": [
     // order is important (rust-analyzer/rust-analyzer#7764)
-    "Cargo.toml",
-    "synthfone_e/Cargo.toml",
-    "autotune/Cargo.toml",
-    "state-machines/Cargo.toml",
-    "host-tests/Cargo.toml",
-    "xtask/Cargo.toml"
+    "Cargo.toml"
   ],
   "cSpell.words": [
     "autotune",

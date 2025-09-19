@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), no_std)]
-
 /// The top-level states:
 
 // New state machine structure only
@@ -330,7 +328,7 @@ impl AppStateMachine {
             current_formant: 0,
             sample_reduction: 1,
             bit_rate: 32,
-            volume: 0,
+            volume: 10,
             note: 0,
             key_down_pressed: false,
             process_cycle_pressed: false,

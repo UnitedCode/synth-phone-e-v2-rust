@@ -7,9 +7,12 @@ use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
 use synthphone_vocals::embedded::{normalize_sample, write_synthesis_output};
+use synthphone_vocals::oscillator::Oscillator;
 use synthphone_vocals::process_frequencies::{bitcrush, sample_rate_reduce};
+use synthphone_vocals::ring_buffer::RingBuffer;
 use synthphone_vocals::{
-    get_frequency, process_vocal_effects_config, MusicalSettings, VocalEffectsConfig,
+    get_frequency, process_vocal_effects_config, MusicalSettings, ProcessingMode,
+    VocalEffectsConfig,
 };
 
 pub fn audio_handler(
@@ -35,49 +38,11 @@ pub fn audio_handler(
     if audio.get_stereo(buffer) {
         for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
             let sample = match is_hangup_button_pressed {
-                // true => *right,
-                // false => *left,
                 false => *right,
                 true => *left,
             };
 
-            let mut out_sample = sample;
-
-            // Lock to write to in_buffer
             shared.in_ring.lock(|in_ring| in_ring.push(sample));
-
-            let mut current_process = ProcessingProfile::Autotune;
-            shared.app_state_machine.lock(|msm| {
-                let snapshot = msm.snapshot();
-                match snapshot.current_state {
-                    AppState::Processing(process)
-                    | AppState::EffectsProfile(process)
-                    | AppState::Menu(_, process) => {
-                        current_process = process;
-                    }
-                    AppState::Splash => {}
-                }
-            });
-
-            if current_process == ProcessingProfile::Vocode
-                || current_process == ProcessingProfile::Dry
-            {
-                let (note, key, octave) = shared.app_state_machine.lock(|msm| {
-                    let snap = msm.snapshot();
-                    (snap.note, snap.key, snap.octave)
-                });
-
-                let carrier_hz = get_frequency(key, note, octave, true);
-
-                let mut sample = shared.carrier_osc.lock(|osc| {
-                    osc.set_freq(carrier_hz);
-                    osc.next_value()
-                });
-
-                shared
-                    .carrier_ring
-                    .lock(|carrier_ring| carrier_ring.push(sample));
-            }
 
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
@@ -110,9 +75,9 @@ pub fn audio_handler(
                     warn!("Could not unwrap software task - underrun error");
                 }
             };
+
             *hop_counter += 1;
 
-            // Output the processed audio
             if audio.push_stereo((out_sample, out_sample)).is_err() {
                 warn!("Failed to write audio data");
             }
@@ -140,13 +105,11 @@ pub fn interface_handler(
         &local.row_4_pin,
     );
 
-    // Process button matrix changes
     for row in 0..4 {
         for col in 0..3 {
             let was_pressed = shared.old_matrix_state.lock(|oms| oms[row][col]);
             let is_pressed = new_matrix_state[row][col];
 
-            // If there is a change, decide how to handle it
             if is_pressed != was_pressed {
                 shared.old_matrix_state.lock(|oms| {
                     oms[row][col] = is_pressed;
@@ -232,6 +195,8 @@ pub fn handle_vocal_effects(
     last_input_phases: &mut [f32; FFT_SIZE],
     last_output_phases: &mut [f32; FFT_SIZE],
     previous_pitch_shift_ratio: &mut f32,
+    carrier_buffer: &mut RingBuffer<FFT_SIZE>,
+    osc: &mut Oscillator,
 ) {
     let mut current_process = ProcessingProfile::Autotune;
     ctx.app_state_machine.lock(|msm| {
@@ -264,22 +229,38 @@ pub fn handle_vocal_effects(
         //formant_ratio = asm.snapshot().formant_factor;
     });
 
+    let mode = match current_process {
+        ProcessingProfile::Autotune => ProcessingMode::Autotune,
+        ProcessingProfile::Vocode => ProcessingMode::Vocode,
+        ProcessingProfile::Dry => ProcessingMode::Dry,
+    };
+
+    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
+        let carrier_hz = get_frequency(key, note, octave, true);
+
+        osc.set_freq(carrier_hz);
+        let sample = osc.next_value();
+
+        carrier_buffer.push(sample);
+    }
+
     let musical_settings = MusicalSettings {
         formant: formant,
         note: note,
         key: key,
         octave: octave,
+        mode: mode,
     };
     let config = VocalEffectsConfig::default();
     let mut input_buffer = [0.0; FFT_SIZE];
 
-    let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);
-
-    ctx.in_ring
-        .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut input_buffer));
+    let mut carrier_unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
+    let write_idx = 0;
+    carrier_buffer.block_from(write_idx, &mut carrier_unwrapped_buffer);
 
     let synthesis_output = process_vocal_effects(
         &mut input_buffer,
+        Some(&mut carrier_unwrapped_buffer),
         last_input_phases,
         last_output_phases,
         *previous_pitch_shift_ratio,

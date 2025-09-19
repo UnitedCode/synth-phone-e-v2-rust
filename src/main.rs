@@ -87,14 +87,12 @@ mod rtic_app {
             in_ring: RingBuffer<BUFFER_SIZE>,
             out_ring: RingBuffer<BUFFER_SIZE>,
             in_pointer_cached: u32,
-            carrier_ring: RingBuffer<BUFFER_SIZE>,
             previous_pitch_shift_ratio: f32,
             app_state_machine: AppStateMachine,
             old_matrix_state: [[bool; 3]; 4],
             // For sample-rate reduction
             sr_hold_counter: i32,
             sr_held_value: f32,
-            carrier_osc: Oscillator,
             display_needs_update: bool,
             display_buffer: [u8; 512], // 128x32 / 8 = 512 bytes for the display buffer
         }
@@ -119,6 +117,8 @@ mod rtic_app {
             hop_counter: u32,
             last_input_phases: [f32; FFT_SIZE],
             last_output_phases: [f32; FFT_SIZE],
+            carrier_ring: RingBuffer<FFT_SIZE>,
+            osc: Oscillator,
             previous_pitch_shift_ratio: f32,
         }
 
@@ -281,14 +281,12 @@ mod rtic_app {
                 Shared {
                     in_ring: RingBuffer::new(),
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
-                    carrier_ring: RingBuffer::new(),
                     previous_pitch_shift_ratio: 1.0,
                     in_pointer_cached: 0,
                     app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
-                    carrier_osc: Oscillator::new(55.0, SAMPLE_RATE, Waveform::Saw),
                     display_needs_update: false,
                     display_buffer: [0; 512],
                 },
@@ -312,6 +310,8 @@ mod rtic_app {
                     previous_pitch_shift_ratio: 1.0,
                     last_input_phases: [0.0; FFT_SIZE],
                     last_output_phases: [0.0; FFT_SIZE],
+                    carrier_ring: RingBuffer::new(),
+                    osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
                 },
                 init::Monotonics(),
             )
@@ -327,12 +327,10 @@ mod rtic_app {
         #[task(binds = DMA1_STR1, local = [audio, buffer, button, hangup_button, hop_counter], shared = [
         in_ring,
         out_ring,
-        carrier_ring,
         in_pointer_cached,
         app_state_machine,
         sr_hold_counter,
         sr_held_value,
-        carrier_osc,
     ], priority = 8)]
         fn update_handler(mut ctx: update_handler::Context) {
             crate::handler::audio_handler(
@@ -430,15 +428,15 @@ mod rtic_app {
         #[task(shared = [
         in_ring,
         out_ring,
-        carrier_ring,
         previous_pitch_shift_ratio,
         app_state_machine,
         in_pointer_cached,
-        carrier_osc,
     ], local = [last_input_phases,
     last_output_phases,
-    previous_pitch_shift_ratio]
-    , priority = 7)]
+    previous_pitch_shift_ratio,
+    carrier_ring,
+    osc,
+    ], priority = 7)]
         fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
             // Call audio processing from handler module
             crate::handler::handle_vocal_effects(
@@ -446,6 +444,8 @@ mod rtic_app {
                 ctx.local.last_input_phases,
                 ctx.local.last_output_phases,
                 ctx.local.previous_pitch_shift_ratio,
+                ctx.local.carrier_ring,
+                ctx.local.osc,
             );
         }
     }

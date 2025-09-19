@@ -2,23 +2,9 @@
   "lsp": {
     // Specify the LSP name as a key here.
     "rust-analyzer": {
-      "linkedProjects": [
-        "Cargo.toml",
-        "synthfone_e/Cargo.toml",
-        "autotune/Cargo.toml",
-        "state-machines/Cargo.toml",
-        "host-tests/Cargo.toml",
-        "xtask/Cargo.toml"
-      ],
+      "linkedProjects": ["Cargo.toml"],
       "initialization_options": {
-        "linkedProjects": [
-          "Cargo.toml",
-          "synthfone_e/Cargo.toml",
-          "autotune/Cargo.toml",
-          "state-machines/Cargo.toml",
-          "host-tests/Cargo.toml",
-          "xtask/Cargo.toml"
-        ]
+        "linkedProjects": ["Cargo.toml"]
       }
     }
   }
