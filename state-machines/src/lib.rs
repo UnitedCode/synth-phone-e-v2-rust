@@ -75,8 +75,8 @@ impl Default for MenuValues {
             bit_rate_2: 10,
             sample_reduction_1: 5,
             sample_reduction_2: 16,
-            formant_male: 5,
-            formant_female: 5,
+            formant_male: -10,
+            formant_female: 10,
             autotune_speed: 5,
             magnitude: 5,
             pad_matrix: 0,
@@ -109,8 +109,8 @@ impl MenuValues {
             MenuItem::BitRate2 => self.bit_rate_2 = value.clamp(4, 32),
             MenuItem::SampleRate1 => self.sample_reduction_1 = value.clamp(1, 32),
             MenuItem::SampleRate2 => self.sample_reduction_2 = value.clamp(1, 32),
-            MenuItem::FormantMale => self.formant_male = value.clamp(1, 10),
-            MenuItem::FormantFemale => self.formant_female = value.clamp(1, 10),
+            MenuItem::FormantMale => self.formant_male = value.clamp(-10, 10),
+            MenuItem::FormantFemale => self.formant_female = value.clamp(-10, 10),
             MenuItem::AutotuneSpeed => self.autotune_speed = value.clamp(1, 10),
             MenuItem::Magnitude => self.magnitude = value.clamp(1, 10),
             MenuItem::PadMatrix => self.pad_matrix = value.clamp(0, 1),
@@ -292,6 +292,8 @@ pub struct AppStateMachine {
     current_octave: i32,
     current_bitcrush: i32,
     current_formant: i32,
+    formant_male: i32,
+    formant_female: i32,
     sample_reduction: i32,
     bit_rate: i32,
     pub volume: i32,
@@ -313,6 +315,8 @@ pub struct AppStateMachineSnapshot {
     pub sample_reduction: i32,
     pub bit_rate: i32,
     pub formant: i32,
+    pub formant_male: i32,
+    pub formant_female: i32,
     pub autotune_speed: i32,
     pub magnitude: i32,
     pub pad_matrix: i32,
@@ -338,6 +342,8 @@ impl AppStateMachine {
             current_octave: 2,
             current_bitcrush: 0,
             current_formant: 0,
+            formant_male: -10,
+            formant_female: 10,
             sample_reduction: 1,
             bit_rate: 32,
             volume: 5,
@@ -365,6 +371,8 @@ impl AppStateMachine {
             sample_reduction: self.sample_reduction,
             bit_rate: self.bit_rate,
             formant: self.current_formant,
+            formant_male: self.formant_male,
+            formant_female: self.formant_female,
             autotune_speed: self.values.autotune_speed,
             magnitude: self.values.magnitude,
             pad_matrix: self.values.pad_matrix,
@@ -425,9 +433,15 @@ impl AppStateMachine {
                     }
 
                     // Row 3: Formant controls
-                    7 => self.current_formant = 1, // Male
+                    7 => {
+                        self.current_formant = 1; // Male
+                        self.formant_male = self.values.formant_male;
+                    }
                     8 => self.current_formant = 0, // None
-                    9 => self.current_formant = 2, // Female
+                    9 => {
+                        self.current_formant = 2; // Female
+                        self.formant_female = self.values.formant_female;
+                    }
 
                     // Row 4: Key and profile controls (keys 10-12)
                     10 => {

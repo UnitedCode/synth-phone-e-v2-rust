@@ -47,6 +47,8 @@ impl ProcessingBuffers {
 // Processing parameters structure
 struct ProcessingParams {
     formant: i32,
+    formant_male: i32,
+    formant_female: i32,
     pitch_shift_ratio: f32,
     note: i32,
     key: i32,
@@ -58,6 +60,8 @@ impl ProcessingParams {
         ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources,
     ) -> Self {
         let mut formant = 0;
+        let mut formant_male = -10;
+        let mut formant_female = 10;
         let mut pitch_shift_ratio = 1.0;
         let mut note = 0;
         let mut key = 0;
@@ -80,6 +84,8 @@ impl ProcessingParams {
 
         Self {
             formant,
+            formant_male,
+            formant_female,
             pitch_shift_ratio,
             note,
             key,
@@ -514,8 +520,8 @@ pub fn process_dry(ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::S
 
         // Formant shift ratio
         let formant_ratio = match params.formant {
-            1 => 0.8, // Lower formants
-            2 => 1.3, // Raise formants
+            1 => expf(params.formant_male as f32 / 10.0 * 2.0), // Lower formants
+            2 => expf(params.formant_female as f32 / 10.0 * 2.0), // Raise formants
             _ => 1.0, // No formant shift
         };
 
@@ -779,11 +785,13 @@ pub fn process_autotune(
         let pitch_shift_ratio =
             current_pitch_shift_ratio * 0.999 + previous_pitch_shift_ratio * 0.001;
 
-        let formant_ratio = match params.formant {
-            1 => 0.5, // Lower formants
-            2 => 2.0, // Raise formants
+         let formant_ratio = match params.formant {
+            1 => expf(params.formant_male as f32 / 10.0 * 2.0), // Lower formants
+            2 => expf(params.formant_female as f32 / 10.0 * 2.0), // Raise formants
             _ => 1.0, // No formant shift
         };
+        //info!("formant ration {}", formant_ratio);
+        //info!("formant ration {}, fromant female {}, formant male {}", formant_ratio, params.formant_female, params.formant_male);
 
         // shift all bins by the ratio
         for i in 0..FFT_SIZE / 2 {
@@ -880,7 +888,7 @@ pub fn process_harmony(ctx: &mut crate::rtic_app::app::dma1_stream0_software_tas
     }
 
     // Mocked MIDI notes to harmonize with
-    let harmony_notes = [params.note];
+    let harmony_notes = [params.note, params.note + 3, params.note + 7];
     //let harmony_notes = [params.note];
 
     // Root key/octave, used to compute frequencies
@@ -903,9 +911,9 @@ pub fn process_harmony(ctx: &mut crate::rtic_app::app::dma1_stream0_software_tas
 
     let res_original = microfft::inverse::ifft_1024(&mut full_spectrum);
 
-    for i in 0..FFT_SIZE {
-        output_mix[i] += res_original[i].re;
-    }
+    // for i in 0..FFT_SIZE {
+    //     output_mix[i] += res_original[i].re;
+    // }
 
     // Add pitch-shifted harmonies
     for &note in harmony_notes.iter() {
