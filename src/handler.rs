@@ -273,7 +273,6 @@ pub fn handle_vocal_effects(
     );
 
     ctx.out_ring.lock(|output_ring| {
-        info!("Synthesis output generated");
         write_synthesis_output::<FFT_SIZE, BUFFER_SIZE>(&synthesis_output, output_ring);
     });
 }
