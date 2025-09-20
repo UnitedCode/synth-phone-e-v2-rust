@@ -97,9 +97,10 @@ pub fn draw_processing_screen(
     draw_centered_text(display, &note_buffer, Point::new(62, 15), h1_style);
     draw_text(display, &oct_buffer, Point::new(14, 28), &text_style);
     draw_text(display, &vol_buffer, Point::new(112, 28), &text_style);
-    draw_centered_text(display, &process_profile, Point::new(62, 28), text_style2);
+    draw_centered_text(display, process_profile, Point::new(62, 28), text_style2);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_effects_screen(
     process: ProcessingProfile,
     key: i32,

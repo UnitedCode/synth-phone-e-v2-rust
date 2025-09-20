@@ -2,7 +2,7 @@
 #![no_main]
 #![deny(unsafe_code)]
 
-/// Synthphone-E v2 by Enoch and Nathan Bradshaw
+// Synthphone-E v2 by Enoch and Nathan Bradshaw
 //- if you are going to make spaghetti, at least leave a recipe
 //   ______________________________________________________________________________________________________
 //  [                                                                                                      ]\
@@ -68,7 +68,7 @@ mod rtic_app {
 
         pub struct Knob {
             pub rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
-            value: u8,
+            pub value: u8,
         }
 
         impl Knob {
@@ -76,7 +76,7 @@ mod rtic_app {
                 rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
             ) -> Knob {
                 Knob {
-                    rotary_encoder: rotary_encoder,
+                    rotary_encoder,
                     value: 0_u8,
                 }
             }

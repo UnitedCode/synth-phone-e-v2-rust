@@ -157,6 +157,12 @@ pub enum AppEvent {
     NoOp,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     /// Create a new state machine starting at the splash screen
     pub fn new() -> Self {
@@ -314,6 +320,12 @@ pub struct MenuContext {
     pub previous_item: (&'static str, i32),
     pub current_item: (&'static str, i32),
     pub next_item: (&'static str, i32),
+}
+
+impl Default for AppStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppStateMachine {

@@ -16,7 +16,7 @@ pub fn draw_text<D>(
 ) where
     D: DrawTarget<Color = BinaryColor>,
 {
-    Text::with_baseline(text, position, *style, Baseline::Middle).draw(display);
+    let _ = Text::with_baseline(text, position, *style, Baseline::Middle).draw(display);
 }
 
 pub fn draw_centered_text<D>(
@@ -40,5 +40,6 @@ pub fn draw_centered_text<D>(
     let draw_y = center.y - text_height / 2;
 
     // 4) Draw the text at the adjusted position
-    Text::with_baseline(text, Point::new(draw_x, draw_y), style, Baseline::Top).draw(display);
+    let _ =
+        Text::with_baseline(text, Point::new(draw_x, draw_y), style, Baseline::Top).draw(display);
 }

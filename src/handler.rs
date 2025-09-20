@@ -87,7 +87,7 @@ pub fn audio_handler(
 }
 
 pub fn interface_handler(
-    mut local: crate::rtic_app::app::interface_handler::LocalResources,
+    local: crate::rtic_app::app::interface_handler::LocalResources,
     shared: &mut crate::rtic_app::app::interface_handler::SharedResources,
 ) {
     local.timer2.clear_irq();
@@ -95,13 +95,13 @@ pub fn interface_handler(
     let mut update_state: bool = false;
 
     let new_matrix_state = scan_button_matrix(
-        &mut local.col_1_pin,
-        &mut local.col_2_pin,
-        &mut local.col_3_pin,
-        &local.row_1_pin,
-        &local.row_2_pin,
-        &local.row_3_pin,
-        &local.row_4_pin,
+        local.col_1_pin,
+        local.col_2_pin,
+        local.col_3_pin,
+        local.row_1_pin,
+        local.row_2_pin,
+        local.row_3_pin,
+        local.row_4_pin,
     );
 
     for row in 0..4 {
@@ -185,7 +185,7 @@ pub fn interface_handler(
         // Spawn the display task to run
         crate::rtic_app::app::display_update_task::spawn().ok();
 
-        update_state = false;
+        // update_state = false;
     }
 }
 
@@ -213,8 +213,8 @@ pub fn handle_vocal_effects(
     let mut formant = 0;
     let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
-    let mut key = 0;
-    let mut octave = 2;
+    let key = 0;
+    let octave = 2;
     ctx.app_state_machine.lock(|asm| {
         formant = asm.snapshot().formant;
         // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
@@ -244,11 +244,11 @@ pub fn handle_vocal_effects(
     }
 
     let musical_settings = MusicalSettings {
-        formant: formant,
-        note: note,
-        key: key,
-        octave: octave,
-        mode: mode,
+        formant,
+        note,
+        key,
+        octave,
+        mode,
     };
     let config = VocalEffectsConfig::default();
     let mut input_buffer = [0.0; FFT_SIZE];
