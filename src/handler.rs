@@ -237,9 +237,10 @@ pub fn handle_vocal_effects(
         let carrier_hz = get_frequency(key, note, octave, true);
 
         osc.set_freq(carrier_hz);
-        let sample = osc.next_value();
-
-        carrier_buffer.push(sample);
+        for _ in 0..FFT_SIZE {
+            let sample = osc.next_value();
+            carrier_buffer.push(sample);
+        }
     }
 
     let musical_settings = MusicalSettings {
