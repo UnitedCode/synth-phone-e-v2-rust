@@ -14,8 +14,8 @@ use embedded_graphics::{
     text::{Alignment, Baseline, Text},
 };
 use heapless::String;
-use synthphone_vocals::keys::{get_mode_name, get_note_name};
-use synthphone_vocals::{get_key, get_key_name};
+
+use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
 use tinybmp::Bmp;
 
 pub fn draw_splash_screen(display: &mut LcdDisplay) {

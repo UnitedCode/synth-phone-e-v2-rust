@@ -54,8 +54,8 @@ mod rtic_app {
             time::MilliSeconds,
             timer::Timer,
         };
-        use synthphone_vocals::{
-            oscillator::{Oscillator, Waveform},
+        use synthphone_e_vocal_dsp::{
+            audio::{Oscillator, Waveform},
             ring_buffer::RingBuffer,
         };
         use tinybmp::Bmp;

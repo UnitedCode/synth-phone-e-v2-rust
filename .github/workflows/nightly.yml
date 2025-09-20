@@ -19,5 +19,5 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           use-cross: true
-          command: run
-          args: -p xtask -- build
+          command: build
+          args: --release --target thumbv7em-none-eabihf

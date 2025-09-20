@@ -6,12 +6,11 @@ use libdaisy::{audio, hid};
 use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
-use synthphone_vocals::embedded::{normalize_sample, write_synthesis_output};
-use synthphone_vocals::oscillator::Oscillator;
-use synthphone_vocals::process_frequencies::{bitcrush, sample_rate_reduce};
-use synthphone_vocals::ring_buffer::RingBuffer;
-use synthphone_vocals::{
-    get_frequency, process_vocal_effects_1024, MusicalSettings, ProcessingMode, VocalEffectsConfig,
+use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator};
+use synthphone_e_vocal_dsp::dsp::{bitcrush, normalize_sample, sample_rate_reduce};
+use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
+use synthphone_e_vocal_dsp::{
+    process_vocal_effects_1024, MusicalSettings, ProcessingMode, VocalEffectsConfig,
 };
 
 pub fn audio_handler(
@@ -268,11 +267,9 @@ pub fn handle_vocal_effects(
         *previous_pitch_shift_ratio,
         &config,
         &musical_settings,
-        48_014.312,
-        0.25,
     );
 
     ctx.out_ring.lock(|output_ring| {
-        write_synthesis_output::<FFT_SIZE, BUFFER_SIZE>(&synthesis_output, output_ring);
+        output_ring.write_overlapped_samples(&synthesis_output);
     });
 }

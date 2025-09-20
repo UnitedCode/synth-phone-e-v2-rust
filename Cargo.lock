@@ -28,7 +28,7 @@ dependencies = [
  "ssd1306",
  "stm32-fmc",
  "stm32h7xx-hal",
- "synthphone_vocals",
+ "synthphone-e-vocal-dsp",
  "tinybmp",
 ]
 
@@ -758,7 +758,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "synthphone_vocals"
+name = "synthphone-e-vocal-dsp"
 version = "0.1.1"
 dependencies = [
  "libm",
