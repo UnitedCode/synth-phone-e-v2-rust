@@ -434,7 +434,8 @@ mod rtic_app {
                 app_state_machine,
                 old_matrix_state,
                 display_needs_update,
-            ]
+            ],
+            priority = 3
         )]
         fn interface_handler(mut ctx: interface_handler::Context) {
             crate::handler::interface_handler(ctx.local, &mut ctx.shared);
