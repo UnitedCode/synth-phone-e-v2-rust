@@ -94,7 +94,6 @@ mod rtic_app {
             sr_hold_counter: i32,
             sr_held_value: f32,
             display_needs_update: bool,
-            display_buffer: [u8; 512], // 128x32 / 8 = 512 bytes for the display buffer
         }
 
         #[local]
@@ -288,7 +287,6 @@ mod rtic_app {
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
                     display_needs_update: false,
-                    display_buffer: [0; 512],
                 },
                 Local {
                     audio: system.audio,
@@ -324,14 +322,24 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = DMA1_STR1, local = [audio, buffer, button, hangup_button, hop_counter], shared = [
-        in_ring,
-        out_ring,
-        in_pointer_cached,
-        app_state_machine,
-        sr_hold_counter,
-        sr_held_value,
-    ], priority = 8)]
+        #[task(binds = DMA1_STR1,
+            local = [
+                audio,
+                buffer,
+                button,
+                hangup_button,
+                hop_counter,
+            ],
+            shared = [
+                in_ring,
+                out_ring,
+                in_pointer_cached,
+                app_state_machine,
+                sr_hold_counter,
+                sr_held_value,
+            ],
+            priority = 8)
+        ]
         fn update_handler(mut ctx: update_handler::Context) {
             crate::handler::audio_handler(
                 ctx.local.audio,
@@ -343,9 +351,9 @@ mod rtic_app {
         }
 
         #[task(
-            local = [display],  // Display is now local to this task
+            local = [display],
             shared = [app_state_machine, display_needs_update],
-            priority = 1  // Low priority so it doesn't block audio
+            priority = 1
         )]
         fn display_update_task(mut ctx: display_update_task::Context) {
             // Check if update is needed
@@ -408,37 +416,49 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = TIM2, local = [
-            knob_1,
-            timer2,
-            col_1_pin,
-            col_2_pin,
-            col_3_pin,
-            row_1_pin,
-            row_2_pin,
-            row_3_pin,
-            row_4_pin,
-            encoder_button,
-            ], shared = [app_state_machine, old_matrix_state, display_needs_update])]
+        #[task(
+            binds = TIM2,
+            local = [
+                knob_1,
+                timer2,
+                col_1_pin,
+                col_2_pin,
+                col_3_pin,
+                row_1_pin,
+                row_2_pin,
+                row_3_pin,
+                row_4_pin,
+                encoder_button,
+            ],
+            shared = [
+                app_state_machine,
+                old_matrix_state,
+                display_needs_update,
+            ]
+        )]
         fn interface_handler(mut ctx: interface_handler::Context) {
             crate::handler::interface_handler(ctx.local, &mut ctx.shared);
         }
 
         /// FFT TASK
-        #[task(shared = [
-        in_ring,
-        out_ring,
-        previous_pitch_shift_ratio,
-        app_state_machine,
-        in_pointer_cached,
-    ], local = [last_input_phases,
-    last_output_phases,
-    previous_pitch_shift_ratio,
-    carrier_ring,
-    osc,
-    ], priority = 7)]
-        fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
-            // Call audio processing from handler module
+        #[task(
+            shared = [
+                in_ring,
+                out_ring,
+                previous_pitch_shift_ratio,
+                app_state_machine,
+                in_pointer_cached,
+            ],
+            local = [
+                last_input_phases,
+                last_output_phases,
+                previous_pitch_shift_ratio,
+                carrier_ring,
+                osc,
+            ],
+            priority = 7,
+        )]
+        fn dma1_stream0_fft_task(mut ctx: dma1_stream0_fft_task::Context) {
             crate::handler::handle_vocal_effects(
                 &mut ctx.shared,
                 ctx.local.last_input_phases,

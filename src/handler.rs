@@ -11,8 +11,7 @@ use synthphone_vocals::oscillator::Oscillator;
 use synthphone_vocals::process_frequencies::{bitcrush, sample_rate_reduce};
 use synthphone_vocals::ring_buffer::RingBuffer;
 use synthphone_vocals::{
-    get_frequency, process_vocal_effects_config, MusicalSettings, ProcessingMode,
-    VocalEffectsConfig,
+    get_frequency, process_vocal_effects_1024, MusicalSettings, ProcessingMode, VocalEffectsConfig,
 };
 
 pub fn audio_handler(
@@ -71,7 +70,7 @@ pub fn audio_handler(
                     *cache = pointer;
                 });
 
-                if crate::rtic_app::app::dma1_stream0_software_task::spawn().is_err() {
+                if crate::rtic_app::app::dma1_stream0_fft_task::spawn().is_err() {
                     warn!("Could not unwrap software task - underrun error");
                 }
             };
@@ -191,7 +190,7 @@ pub fn interface_handler(
 }
 
 pub fn handle_vocal_effects(
-    ctx: &mut crate::rtic_app::app::dma1_stream0_software_task::SharedResources,
+    ctx: &mut crate::rtic_app::app::dma1_stream0_fft_task::SharedResources,
     last_input_phases: &mut [f32; FFT_SIZE],
     last_output_phases: &mut [f32; FFT_SIZE],
     previous_pitch_shift_ratio: &mut f32,
@@ -210,7 +209,7 @@ pub fn handle_vocal_effects(
             AppState::Splash => {}
         }
     });
-    process_vocal_effects_config!(process_vocal_effects, 1024, 48_014.312, hop_ratio = 0.25);
+    // process_vocal_effects_config!(process_vocal_effects, 1024, 48_014.312);
     let mut formant = 0;
     let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
@@ -258,7 +257,7 @@ pub fn handle_vocal_effects(
     let write_idx = 0;
     carrier_buffer.block_from(write_idx, &mut carrier_unwrapped_buffer);
 
-    let synthesis_output = process_vocal_effects(
+    let synthesis_output = process_vocal_effects_1024(
         &mut input_buffer,
         Some(&mut carrier_unwrapped_buffer),
         last_input_phases,
@@ -266,9 +265,12 @@ pub fn handle_vocal_effects(
         *previous_pitch_shift_ratio,
         &config,
         &musical_settings,
+        48_014.312,
+        0.25,
     );
 
     ctx.out_ring.lock(|output_ring| {
-        write_synthesis_output::<FFT_SIZE, BUFFER_SIZE>(&synthesis_output, output_ring);
+        info!("Synthesis output generated");
+        write_synthesis_output::<FFT_SIZE, BUFFER_SIZE>(&carrier_unwrapped_buffer, output_ring);
     });
 }
