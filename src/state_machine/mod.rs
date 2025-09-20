@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), no_std)]
-
 /// The top-level states:
 
 // New state machine structure only
@@ -83,7 +81,7 @@ impl Default for MenuValues {
     }
 }
 
-use log::{info, warn};
+use log::info;
 
 impl MenuValues {
     /// Get a value for a specific menu item
@@ -157,6 +155,12 @@ pub enum AppEvent {
     KeyChange(i32),   // Change musical key up or down
 
     NoOp,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {
@@ -318,6 +322,12 @@ pub struct MenuContext {
     pub next_item: (&'static str, i32),
 }
 
+impl Default for AppStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppStateMachine {
     /// Create a new instance of the state machine
     pub fn new() -> Self {
@@ -330,7 +340,7 @@ impl AppStateMachine {
             current_formant: 0,
             sample_reduction: 1,
             bit_rate: 32,
-            volume: 0,
+            volume: 10,
             note: 0,
             key_down_pressed: false,
             process_cycle_pressed: false,
@@ -448,7 +458,7 @@ impl AppStateMachine {
                 _ => {}
             },
 
-            (AppState::Processing(profile), AppEvent::KeypadRelease(key)) => {
+            (AppState::Processing(profile), AppEvent::KeypadRelease(_key)) => {
                 if matches!(
                     profile,
                     ProcessingProfile::Autotune | ProcessingProfile::Dry
@@ -559,6 +569,8 @@ impl AppStateMachine {
 fn clamp_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
     (current + delta).clamp(min, max)
 }
+
+#[allow(dead_code)]
 fn wrap_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
     let range = max - min + 1;
     ((current + delta - min) % range + range) % range + min

@@ -1,2 +1,10 @@
-[alias]
-xtask = 'run -p xtask --'
+[target.thumbv7em-none-eabihf]
+runner = "probe-rs run --chip stm32h750v"
+rustflags = [
+    # LLD (shipped with the Rust toolchain) is used as the default linker
+    "-C",
+    "link-arg=-Tlink.x",
+]
+
+[build]
+target = "thumbv7em-none-eabihf"

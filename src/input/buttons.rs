@@ -3,7 +3,8 @@ use libdaisy::{
     prelude::{Input, Output, PushPull},
 };
 use log::info;
-use state_machines::AppState;
+
+use crate::state_machine::{AppEvent, AppState};
 
 pub fn scan_button_matrix(
     col_1: &mut Daisy21<Output<PushPull>>,
@@ -59,11 +60,7 @@ pub fn scan_button_matrix(
     state
 }
 
-pub fn handle_button_press(
-    row: usize,
-    col: usize,
-    current_state: AppState,
-) -> state_machines::AppEvent {
+pub fn handle_button_press(row: usize, col: usize, current_state: AppState) -> AppEvent {
     // Temporarily use direct mapping to see what's actually happening
     let actual_col = 2 - col; // This reverses: 0→2, 1→1, 2→0
     let key_num = row * 3 + actual_col + 1;
@@ -75,37 +72,31 @@ pub fn handle_button_press(
 
     match current_state {
         // In Processing state - buttons are notes or key changes
-        AppState::Processing(_) => state_machines::AppEvent::KeypadPress(key_num),
+        AppState::Processing(_) => AppEvent::KeypadPress(key_num),
 
         // In Effects state - buttons control effects
         AppState::EffectsProfile(_) => {
             info!("In Processing state, sending KeypadPress({})", key_num);
-            state_machines::AppEvent::KeypadPress(key_num)
+            AppEvent::KeypadPress(key_num)
         }
 
         // In Menu state - buttons go back to processing
         AppState::Menu(_, _) => {
-            state_machines::AppEvent::EncoderDoublePress // Exit menu on any button press
+            AppEvent::EncoderDoublePress // Exit menu on any button press
         }
 
         // In Splash state - any button exits splash
-        AppState::Splash => state_machines::AppEvent::SplashComplete,
+        AppState::Splash => AppEvent::SplashComplete,
     }
 }
 
-pub fn handle_button_release(
-    row: usize,
-    col: usize,
-    current_state: AppState,
-) -> state_machines::AppEvent {
+pub fn handle_button_release(row: usize, col: usize, current_state: AppState) -> AppEvent {
     // Use the same mapping as press
     let actual_col = 2 - col;
     let key_num = row * 3 + actual_col + 1;
 
     match current_state {
-        AppState::Processing(_) | AppState::EffectsProfile(_) => {
-            state_machines::AppEvent::KeypadRelease(key_num)
-        }
-        _ => state_machines::AppEvent::NoOp,
+        AppState::Processing(_) | AppState::EffectsProfile(_) => AppEvent::KeypadRelease(key_num),
+        _ => AppEvent::NoOp,
     }
 }

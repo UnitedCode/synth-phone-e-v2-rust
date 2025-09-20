@@ -1,10 +1,8 @@
 #![no_std]
 #![no_main]
 #![deny(unsafe_code)]
-// #![deny(warnings)]
-// #![deny(missing_docs)]
 
-/// Synthphone-E v2 by Enoch and Nathan Bradshaw
+// Synthphone-E v2 by Enoch and Nathan Bradshaw
 //- if you are going to make spaghetti, at least leave a recipe
 //   ______________________________________________________________________________________________________
 //  [                                                                                                      ]\
@@ -16,7 +14,6 @@
 //  [          YY                         PP                                                               ] }
 //   \-----------------------------------------------------------------------------------------------------\ }
 //    \______________________________________________________________________________________________________\
-use autotune;
 
 // Module declarations
 mod audio;
@@ -24,6 +21,7 @@ mod constants;
 mod display;
 mod handler;
 mod input;
+mod state_machine;
 mod types;
 
 mod rtic_app {
@@ -34,10 +32,11 @@ mod rtic_app {
     )]
     mod app {
         use crate::{
-            autotune::{circular_buffer::CircularBuffer, ring_buffer::RingBuffer, oscillator::{Oscillator, Waveform}}, constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
+            constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
+            state_machine::{AppState, AppStateMachine, MenuState},
         };
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
-        use fugit::{ExtU32, RateExtU32};
+        use fugit::RateExtU32;
         use libdaisy::{
             audio,
             gpio::*,
@@ -49,16 +48,17 @@ mod rtic_app {
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
-        use state_machines::AppStateMachine;
-        use state_machines::{AppState, MenuState, ProcessingProfile};
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
             stm32,
             time::MilliSeconds,
             timer::Timer,
         };
+        use synthphone_e_vocal_dsp::{
+            audio::{Oscillator, Waveform},
+            ring_buffer::RingBuffer,
+        };
         use tinybmp::Bmp;
-        use core::sync::atomic::AtomicU32;
 
         type LcdDisplay = Ssd1306<
             ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>,
@@ -68,7 +68,7 @@ mod rtic_app {
 
         pub struct Knob {
             pub rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
-            value: u8,
+            pub value: u8,
         }
 
         impl Knob {
@@ -76,7 +76,7 @@ mod rtic_app {
                 rotary_encoder: RotaryEncoder<StandardMode, Daisy3<Input>, Daisy4<Input>>,
             ) -> Knob {
                 Knob {
-                    rotary_encoder: rotary_encoder,
+                    rotary_encoder,
                     value: 0_u8,
                 }
             }
@@ -84,24 +84,16 @@ mod rtic_app {
 
         #[shared]
         struct Shared {
-            in_ring:  RingBuffer<BUFFER_SIZE>,
+            in_ring: RingBuffer<BUFFER_SIZE>,
             out_ring: RingBuffer<BUFFER_SIZE>,
-            carrier_ring: RingBuffer<BUFFER_SIZE>,
-            last_input_phases: [f32; FFT_SIZE],
-            last_output_phases: [f32; FFT_SIZE],
-            synthesis_magnitudes: [f32; FFT_SIZE],
-            synthesis_frequencies: [f32; FFT_SIZE],
+            in_pointer_cached: u32,
             previous_pitch_shift_ratio: f32,
-            hop_counter: u32,
-            in_pointer_cached: AtomicU32,
             app_state_machine: AppStateMachine,
             old_matrix_state: [[bool; 3]; 4],
             // For sample-rate reduction
             sr_hold_counter: i32,
             sr_held_value: f32,
-            carrier_osc: Oscillator,
             display_needs_update: bool,
-            display_buffer: [u8; 512], // 128x32 / 8 = 512 bytes for the display buffer
         }
 
         #[local]
@@ -121,6 +113,12 @@ mod rtic_app {
             row_4_pin: Daisy18<Input>,
             encoder_button: hid::Switch<Daisy2<Input>>,
             hangup_button: hid::Switch<Daisy1<Input>>,
+            hop_counter: u32,
+            last_input_phases: [f32; FFT_SIZE],
+            last_output_phases: [f32; FFT_SIZE],
+            carrier_ring: RingBuffer<FFT_SIZE>,
+            osc: Oscillator,
+            previous_pitch_shift_ratio: f32,
         }
 
         #[init]
@@ -280,23 +278,15 @@ mod rtic_app {
 
             (
                 Shared {
-                    in_ring:  RingBuffer::new(),
+                    in_ring: RingBuffer::new(),
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
-                    carrier_ring: RingBuffer::new(),
-                    last_input_phases: [0.0; FFT_SIZE],
-                    last_output_phases: [0.0; FFT_SIZE],
-                    synthesis_magnitudes: [0.0; FFT_SIZE],
-                    synthesis_frequencies: [0.0; FFT_SIZE],
                     previous_pitch_shift_ratio: 1.0,
-                    hop_counter: 0,
-                    in_pointer_cached: AtomicU32::new(0),
+                    in_pointer_cached: 0,
                     app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
-                    carrier_osc: Oscillator::new(55.0, SAMPLE_RATE, Waveform::Saw),
                     display_needs_update: false,
-                    display_buffer: [0; 512],
                 },
                 Local {
                     audio: system.audio,
@@ -314,6 +304,12 @@ mod rtic_app {
                     row_4_pin,
                     encoder_button,
                     hangup_button,
+                    hop_counter: 0,
+                    previous_pitch_shift_ratio: 1.0,
+                    last_input_phases: [0.0; FFT_SIZE],
+                    last_output_phases: [0.0; FFT_SIZE],
+                    carrier_ring: RingBuffer::new(),
+                    osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
                 },
                 init::Monotonics(),
             )
@@ -326,32 +322,38 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = DMA1_STR1, local = [audio, buffer, button, hangup_button], shared = [
-        in_ring,
-        out_ring,
-        carrier_ring,
-        last_input_phases,
-        last_output_phases,
-        hop_counter,
-        in_pointer_cached,
-        app_state_machine,
-        sr_hold_counter,
-        sr_held_value,
-        carrier_osc,
-    ], priority = 8)]
+        #[task(binds = DMA1_STR1,
+            local = [
+                audio,
+                buffer,
+                button,
+                hangup_button,
+                hop_counter,
+            ],
+            shared = [
+                in_ring,
+                out_ring,
+                in_pointer_cached,
+                app_state_machine,
+                sr_hold_counter,
+                sr_held_value,
+            ],
+            priority = 8)
+        ]
         fn update_handler(mut ctx: update_handler::Context) {
-            crate::handler::update_handler(
+            crate::handler::audio_handler(
                 ctx.local.audio,
                 ctx.local.buffer,
                 ctx.local.hangup_button,
+                ctx.local.hop_counter,
                 &mut ctx.shared,
             );
         }
 
         #[task(
-            local = [display],  // Display is now local to this task
+            local = [display],
             shared = [app_state_machine, display_needs_update],
-            priority = 1  // Low priority so it doesn't block audio
+            priority = 1
         )]
         fn display_update_task(mut ctx: display_update_task::Context) {
             // Check if update is needed
@@ -414,39 +416,58 @@ mod rtic_app {
             }
         }
 
-        #[task(binds = TIM2, local = [
-            knob_1,
-            timer2,
-            col_1_pin,
-            col_2_pin,
-            col_3_pin,
-            row_1_pin,
-            row_2_pin,
-            row_3_pin,
-            row_4_pin,
-            encoder_button,
-            ], shared = [app_state_machine, old_matrix_state, display_needs_update])]
+        #[task(
+            binds = TIM2,
+            local = [
+                knob_1,
+                timer2,
+                col_1_pin,
+                col_2_pin,
+                col_3_pin,
+                row_1_pin,
+                row_2_pin,
+                row_3_pin,
+                row_4_pin,
+                encoder_button,
+            ],
+            shared = [
+                app_state_machine,
+                old_matrix_state,
+                display_needs_update,
+            ],
+            priority = 3
+        )]
         fn interface_handler(mut ctx: interface_handler::Context) {
             crate::handler::interface_handler(ctx.local, &mut ctx.shared);
         }
 
         /// FFT TASK
-        #[task(shared = [
-        in_ring,
-        out_ring,
-        carrier_ring,
-        last_input_phases,
-        last_output_phases,
-        synthesis_magnitudes,
-        synthesis_frequencies,
-        previous_pitch_shift_ratio,
-        app_state_machine,
-        in_pointer_cached,
-        carrier_osc,
-    ], local = [], priority = 7)]
-        fn dma1_stream0_software_task(mut ctx: dma1_stream0_software_task::Context) {
-            // Call audio processing from handler module
-            crate::handler::dma1_stream0_software_task(&mut ctx.shared);
+        #[task(
+            shared = [
+                in_ring,
+                out_ring,
+                previous_pitch_shift_ratio,
+                app_state_machine,
+                in_pointer_cached,
+            ],
+            local = [
+                last_input_phases,
+                last_output_phases,
+                previous_pitch_shift_ratio,
+                carrier_ring,
+                osc,
+            ],
+            priority = 7,
+        )]
+        fn dma1_stream0_fft_task(mut ctx: dma1_stream0_fft_task::Context) {
+            crate::handler::handle_vocal_effects(
+                &mut ctx.shared,
+                ctx.local.last_input_phases,
+                ctx.local.last_output_phases,
+                ctx.local.previous_pitch_shift_ratio,
+                ctx.local.carrier_ring,
+                ctx.local.osc,
+            );
         }
     }
 }
