@@ -252,6 +252,9 @@ pub fn handle_vocal_effects(
     };
     let config = VocalEffectsConfig::default();
     let mut input_buffer = [0.0; FFT_SIZE];
+    let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);
+    ctx.in_ring
+        .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut input_buffer));
 
     let mut carrier_unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
     let write_idx = 0;
@@ -271,6 +274,6 @@ pub fn handle_vocal_effects(
 
     ctx.out_ring.lock(|output_ring| {
         info!("Synthesis output generated");
-        write_synthesis_output::<FFT_SIZE, BUFFER_SIZE>(&carrier_unwrapped_buffer, output_ring);
+        write_synthesis_output::<FFT_SIZE, BUFFER_SIZE>(&synthesis_output, output_ring);
     });
 }
