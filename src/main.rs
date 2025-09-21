@@ -21,6 +21,7 @@ mod constants;
 mod display;
 mod handler;
 mod input;
+mod midi;
 mod state_machine;
 mod types;
 
@@ -28,15 +29,17 @@ mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
-    dispatchers = [DMA1_STR0, DMA1_STR2]
+    dispatchers = [DMA1_STR0, DMA1_STR2, USART1]
     )]
     mod app {
         use crate::{
             constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
+            midi::{MidiEvent, MidiReceiver},
             state_machine::{AppState, AppStateMachine, MenuState},
         };
         use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
         use fugit::RateExtU32;
+        use heapless;
         use libdaisy::{
             audio,
             gpio::*,
@@ -50,8 +53,10 @@ mod rtic_app {
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
+            serial::{config::Config as SerialConfig, SerialExt},
             stm32,
             time::MilliSeconds,
+            time::U32Ext,
             timer::Timer,
         };
         use synthphone_e_vocal_dsp::{
@@ -94,6 +99,8 @@ mod rtic_app {
             sr_hold_counter: i32,
             sr_held_value: f32,
             display_needs_update: bool,
+            midi_events: heapless::spsc::Queue<MidiEvent, 32>,
+            midi_osc: Oscillator,
         }
 
         #[local]
@@ -119,6 +126,7 @@ mod rtic_app {
             carrier_ring: RingBuffer<FFT_SIZE>,
             osc: Oscillator,
             previous_pitch_shift_ratio: f32,
+            midi_receiver: MidiReceiver,
         }
 
         #[init]
@@ -274,6 +282,40 @@ mod rtic_app {
             timer2.listen(stm32h7xx_hal::timer::Event::TimeOut);
             display_update_task::spawn().ok();
 
+            // Initialize MIDI USART1 on pin 14 (RX only)
+            let midi_rx_pin = system
+                .gpio
+                .daisy14
+                .take()
+                .expect("Failed to get daisy14 for MIDI RX")
+                .into_alternate::<7>(); // USART1_RX alternate function
+
+            let midi_tx_pin = system
+                .gpio
+                .daisy13
+                .take()
+                .expect("Failed to get daisy13 for MIDI TX")
+                .into_alternate::<7>(); // USART1_TX alternate function (not used but needed for Serial)
+
+            let mut midi_config = SerialConfig::default();
+            midi_config.baudrate = 31_250_u32.bps(); // MIDI baud rate
+
+            let midi_serial = device
+                .USART1
+                .serial(
+                    (midi_tx_pin, midi_rx_pin),
+                    midi_config,
+                    ccdr.peripheral.USART1,
+                    &ccdr.clocks,
+                )
+                .unwrap();
+
+            let (_midi_tx, midi_rx) = midi_serial.split();
+            let midi_receiver = MidiReceiver::new(midi_rx);
+
+            // Spawn MIDI task
+            midi_handler::spawn().ok();
+
             info!("Startup done!! yo!");
 
             (
@@ -287,6 +329,8 @@ mod rtic_app {
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
                     display_needs_update: false,
+                    midi_events: heapless::spsc::Queue::new(),
+                    midi_osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
                 },
                 Local {
                     audio: system.audio,
@@ -310,6 +354,7 @@ mod rtic_app {
                     last_output_phases: [0.0; FFT_SIZE],
                     carrier_ring: RingBuffer::new(),
                     osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
+                    midi_receiver,
                 },
                 init::Monotonics(),
             )
@@ -326,21 +371,31 @@ mod rtic_app {
             local = [
                 audio,
                 buffer,
-                button,
                 hangup_button,
                 hop_counter,
+
             ],
             shared = [
                 in_ring,
                 out_ring,
                 in_pointer_cached,
+                previous_pitch_shift_ratio,
                 app_state_machine,
                 sr_hold_counter,
                 sr_held_value,
+                midi_events,
+                midi_osc
             ],
             priority = 8)
         ]
         fn update_handler(mut ctx: update_handler::Context) {
+            // Process MIDI events first
+            ctx.shared.midi_events.lock(|events| {
+                ctx.shared.midi_osc.lock(|osc| {
+                    process_midi_events(events, osc);
+                });
+            });
+
             crate::handler::audio_handler(
                 ctx.local.audio,
                 ctx.local.buffer,
@@ -468,6 +523,131 @@ mod rtic_app {
                 ctx.local.carrier_ring,
                 ctx.local.osc,
             );
+        }
+
+        #[task(local = [midi_receiver], shared = [midi_events], priority = 2)]
+        fn midi_handler(ctx: midi_handler::Context) {
+            let midi_handler::LocalResources { midi_receiver, .. } = ctx.local;
+            let mut midi_events = ctx.shared.midi_events;
+
+            // Try to read MIDI data
+            match midi_receiver.try_read() {
+                Ok(Some(event)) => {
+                    // Handle MIDI event
+                    match event {
+                        MidiEvent::NoteOn {
+                            channel,
+                            key,
+                            velocity,
+                        } => {
+                            info!(
+                                "MIDI Note On: ch={}, key={}, vel={}",
+                                channel, key, velocity
+                            );
+                            // Add to event queue for processing by other tasks
+                            midi_events.lock(|queue| {
+                                queue.enqueue(event).ok();
+                            });
+                        }
+                        MidiEvent::NoteOff {
+                            channel,
+                            key,
+                            velocity,
+                        } => {
+                            info!(
+                                "MIDI Note Off: ch={}, key={}, vel={}",
+                                channel, key, velocity
+                            );
+                            midi_events.lock(|queue| {
+                                queue.enqueue(event).ok();
+                            });
+                        }
+                        MidiEvent::ControlChange {
+                            channel,
+                            controller,
+                            value,
+                        } => {
+                            info!("MIDI CC: ch={}, cc={}, val={}", channel, controller, value);
+                            midi_events.lock(|queue| {
+                                queue.enqueue(event).ok();
+                            });
+                        }
+                        MidiEvent::PitchBend { channel, value } => {
+                            info!("MIDI Pitch Bend: ch={}, val={}", channel, value);
+                            midi_events.lock(|queue| {
+                                queue.enqueue(event).ok();
+                            });
+                        }
+                        MidiEvent::Other => {
+                            // Ignore other MIDI events
+                        }
+                    }
+
+                    // Schedule next read
+                    midi_handler::spawn().ok();
+                }
+                Ok(None) => {
+                    // No data available, schedule next read with delay
+                    midi_handler::spawn().ok();
+                }
+                Err(_e) => {
+                    // Error reading, schedule retry
+                    midi_handler::spawn().ok();
+                }
+            }
+        }
+
+        // Helper function to process MIDI events from the queue
+        fn process_midi_events(
+            midi_events: &mut heapless::spsc::Queue<MidiEvent, 32>,
+            osc: &mut Oscillator,
+        ) {
+            while let Some(event) = midi_events.dequeue() {
+                match event {
+                    MidiEvent::NoteOn { key, .. } => {
+                        // Convert MIDI note to frequency and update oscillator
+                        let frequency = MidiEvent::note_to_frequency(key);
+                        osc.set_freq(frequency);
+                        info!(
+                            "Setting oscillator frequency to {} Hz (note {})",
+                            frequency, key
+                        );
+                    }
+                    MidiEvent::NoteOff { key, .. } => {
+                        // For now, just log the note off
+                        info!("Note off: {}", key);
+                        // You might want to implement envelope or voice management here
+                    }
+                    MidiEvent::ControlChange {
+                        controller, value, ..
+                    } => {
+                        // Example: Use CC 1 (mod wheel) to control some parameter
+                        match controller {
+                            1 => {
+                                // Modulation wheel - could control vibrato, filter, etc.
+                                info!("Modulation wheel: {}", value);
+                            }
+                            7 => {
+                                // Volume - could control amplitude
+                                info!("Volume: {}", value);
+                            }
+                            _ => {
+                                info!("Unhandled CC: {} = {}", controller, value);
+                            }
+                        }
+                    }
+                    MidiEvent::PitchBend { value, .. } => {
+                        // Apply pitch bend to oscillator
+                        let bend_ratio = (value as f32 - 8192.0) / 8192.0; // Normalize to -1.0 to 1.0
+                        let bent_freq = osc.freq * (1.0 + bend_ratio * 0.1); // +/- 10% bend range
+                        osc.set_freq(bent_freq);
+                        info!("Pitch bend: {} (ratio: {})", value, bend_ratio);
+                    }
+                    MidiEvent::Other => {
+                        // Ignore other events
+                    }
+                }
+            }
         }
     }
 }
