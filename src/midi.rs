@@ -1,16 +1,30 @@
-use midly::{live::LiveEvent, stream::MidiStream, MidiMessage};
+use log::info;
 use stm32h7xx_hal::{nb, prelude::*, serial::Rx, stm32};
 
 pub struct MidiReceiver {
-    midi_stream: MidiStream,
     rx: Rx<stm32::USART1>,
+    state: MidiParserState,
+    status_byte: u8,
+    data_bytes: [u8; 2],
+    data_count: usize,
+    expected_data_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MidiParserState {
+    WaitingForStatus,
+    CollectingData,
 }
 
 impl MidiReceiver {
     pub fn new(rx: Rx<stm32::USART1>) -> Self {
         Self {
-            midi_stream: MidiStream::new(),
             rx,
+            state: MidiParserState::WaitingForStatus,
+            status_byte: 0,
+            data_bytes: [0, 0],
+            data_count: 0,
+            expected_data_bytes: 0,
         }
     }
 
@@ -19,17 +33,121 @@ impl MidiReceiver {
     ) -> Result<Option<MidiEvent>, nb::Error<stm32h7xx_hal::serial::Error>> {
         match self.rx.read() {
             Ok(byte) => {
-                let mut midi_event = None;
+                info!("MIDI Byte: 0x{:02X} ({})", byte, byte);
 
-                // Feed the byte to the MIDI stream
-                self.midi_stream.feed(&[byte], |event| {
-                    midi_event = Some(MidiEvent::from_live_event(event));
-                });
+                match self.state {
+                    MidiParserState::WaitingForStatus => {
+                        if byte & 0x80 != 0 {
+                            // This is a status byte
+                            self.status_byte = byte;
+                            self.data_count = 0;
 
-                Ok(midi_event)
+                            // Determine how many data bytes we expect
+                            self.expected_data_bytes = match byte & 0xF0 {
+                                0x80 | 0x90 | 0xA0 | 0xB0 | 0xE0 => 2, // Note Off, Note On, Aftertouch, CC, Pitch Bend
+                                0xC0 | 0xD0 => 1, // Program Change, Channel Pressure
+                                _ => {
+                                    info!("Unknown or unsupported MIDI status: 0x{:02X}", byte);
+                                    return Ok(Some(MidiEvent::Other));
+                                }
+                            };
+
+                            if self.expected_data_bytes > 0 {
+                                self.state = MidiParserState::CollectingData;
+                            } else {
+                                // No data bytes expected, process immediately
+                                return Ok(Some(self.create_midi_event()));
+                            }
+                        }
+                        // If not a status byte, ignore (could be running status, but we'll keep it simple)
+                    }
+
+                    MidiParserState::CollectingData => {
+                        if byte & 0x80 != 0 {
+                            // New status byte received while collecting data - reset
+                            info!("New status byte received while collecting data, resetting");
+                            self.status_byte = byte;
+                            self.data_count = 0;
+                            self.expected_data_bytes = match byte & 0xF0 {
+                                0x80 | 0x90 | 0xA0 | 0xB0 | 0xE0 => 2,
+                                0xC0 | 0xD0 => 1,
+                                _ => return Ok(Some(MidiEvent::Other)),
+                            };
+                        } else {
+                            // This is a data byte
+                            if self.data_count < self.expected_data_bytes && self.data_count < 2 {
+                                self.data_bytes[self.data_count] = byte;
+                                self.data_count += 1;
+
+                                // Check if we have all the data we need
+                                if self.data_count >= self.expected_data_bytes {
+                                    let event = self.create_midi_event();
+                                    self.state = MidiParserState::WaitingForStatus;
+                                    return Ok(Some(event));
+                                }
+                            } else {
+                                info!("Too many data bytes, resetting parser");
+                                self.state = MidiParserState::WaitingForStatus;
+                            }
+                        }
+                    }
+                }
+
+                Ok(None)
             }
             Err(nb::Error::WouldBlock) => Ok(None),
             Err(e) => Err(e),
+        }
+    }
+
+    fn create_midi_event(&self) -> MidiEvent {
+        let channel = self.status_byte & 0x0F;
+        let message_type = self.status_byte & 0xF0;
+
+        match message_type {
+            0x90 => {
+                // Note On
+                let key = self.data_bytes[0];
+                let velocity = self.data_bytes[1];
+                if velocity == 0 {
+                    // Velocity 0 is actually a Note Off
+                    MidiEvent::NoteOff {
+                        channel,
+                        key,
+                        velocity,
+                    }
+                } else {
+                    MidiEvent::NoteOn {
+                        channel,
+                        key,
+                        velocity,
+                    }
+                }
+            }
+            0x80 => {
+                // Note Off
+                MidiEvent::NoteOff {
+                    channel,
+                    key: self.data_bytes[0],
+                    velocity: self.data_bytes[1],
+                }
+            }
+            0xB0 => {
+                // Control Change
+                MidiEvent::ControlChange {
+                    channel,
+                    controller: self.data_bytes[0],
+                    value: self.data_bytes[1],
+                }
+            }
+            0xE0 => {
+                // Pitch Bend
+                let lsb = self.data_bytes[0] as u16;
+                let msb = self.data_bytes[1] as u16;
+                let value = (msb << 7) | lsb;
+                MidiEvent::PitchBend { channel, value }
+            }
+            _ => MidiEvent::Other,
         }
     }
 }
@@ -56,36 +174,6 @@ pub enum MidiEvent {
         value: u16,
     },
     Other,
-}
-
-impl MidiEvent {
-    fn from_live_event(event: LiveEvent) -> Self {
-        match event {
-            LiveEvent::Midi { channel, message } => match message {
-                MidiMessage::NoteOn { key, vel } => MidiEvent::NoteOn {
-                    channel: channel.as_int(),
-                    key: key.as_int(),
-                    velocity: vel.as_int(),
-                },
-                MidiMessage::NoteOff { key, vel } => MidiEvent::NoteOff {
-                    channel: channel.as_int(),
-                    key: key.as_int(),
-                    velocity: vel.as_int(),
-                },
-                MidiMessage::Controller { controller, value } => MidiEvent::ControlChange {
-                    channel: channel.as_int(),
-                    controller: controller.as_int(),
-                    value: value.as_int(),
-                },
-                MidiMessage::PitchBend { bend } => MidiEvent::PitchBend {
-                    channel: channel.as_int(),
-                    value: bend.as_int() as u16,
-                },
-                _ => MidiEvent::Other,
-            },
-            _ => MidiEvent::Other,
-        }
-    }
 }
 
 // MIDI note utilities

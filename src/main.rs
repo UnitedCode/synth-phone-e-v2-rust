@@ -314,7 +314,7 @@ mod rtic_app {
             let midi_receiver = MidiReceiver::new(midi_rx);
 
             // Spawn MIDI task
-            // midi_handler::spawn().ok();
+            midi_handler::spawn().ok();
 
             info!("Startup done!! yo!");
 
@@ -390,11 +390,11 @@ mod rtic_app {
         ]
         fn update_handler(mut ctx: update_handler::Context) {
             // Process MIDI events first
-            // ctx.shared.midi_events.lock(|events| {
-            //     ctx.shared.midi_osc.lock(|osc| {
-            //         process_midi_events(events, osc);
-            //     });
-            // });
+            ctx.shared.midi_events.lock(|events| {
+                ctx.shared.midi_osc.lock(|osc| {
+                    process_midi_events(events, osc);
+                });
+            });
 
             crate::handler::audio_handler(
                 ctx.local.audio,
@@ -598,57 +598,59 @@ mod rtic_app {
         }
 
         // Helper function to process MIDI events from the queue
-        // fn process_midi_events(
-        //     midi_events: &mut heapless::spsc::Queue<MidiEvent, 32>,
-        //     osc: &mut Oscillator,
-        // ) {
-        //     while let Some(event) = midi_events.dequeue() {
-        //         match event {
-        //             MidiEvent::NoteOn { key, .. } => {
-        //                 // Convert MIDI note to frequency and update oscillator
-        //                 let frequency = MidiEvent::note_to_frequency(key);
-        //                 osc.set_freq(frequency);
-        //                 info!(
-        //                     "Setting oscillator frequency to {} Hz (note {})",
-        //                     frequency, key
-        //                 );
-        //             }
-        //             MidiEvent::NoteOff { key, .. } => {
-        //                 // For now, just log the note off
-        //                 info!("Note off: {}", key);
-        //                 // You might want to implement envelope or voice management here
-        //             }
-        //             MidiEvent::ControlChange {
-        //                 controller, value, ..
-        //             } => {
-        //                 // Example: Use CC 1 (mod wheel) to control some parameter
-        //                 match controller {
-        //                     1 => {
-        //                         // Modulation wheel - could control vibrato, filter, etc.
-        //                         info!("Modulation wheel: {}", value);
-        //                     }
-        //                     7 => {
-        //                         // Volume - could control amplitude
-        //                         info!("Volume: {}", value);
-        //                     }
-        //                     _ => {
-        //                         info!("Unhandled CC: {} = {}", controller, value);
-        //                     }
-        //                 }
-        //             }
-        //             MidiEvent::PitchBend { value, .. } => {
-        //                 // Apply pitch bend to oscillator
-        //                 let bend_ratio = (value as f32 - 8192.0) / 8192.0; // Normalize to -1.0 to 1.0
-        //                 let bent_freq = osc.freq * (1.0 + bend_ratio * 0.1); // +/- 10% bend range
-        //                 osc.set_freq(bent_freq);
-        //                 info!("Pitch bend: {} (ratio: {})", value, bend_ratio);
-        //             }
-        //             MidiEvent::Other => {
-        //                 // Ignore other events
-        //             }
-        //         }
-        //     }
-        // }
+        fn process_midi_events(
+            midi_events: &mut heapless::spsc::Queue<MidiEvent, 32>,
+            osc: &mut Oscillator,
+        ) {
+            while let Some(event) = midi_events.dequeue() {
+                info!("Processing MIDI events");
+
+                match event {
+                    MidiEvent::NoteOn { key, .. } => {
+                        // Convert MIDI note to frequency and update oscillator
+                        let frequency = MidiEvent::note_to_frequency(key);
+                        osc.set_freq(frequency);
+                        info!(
+                            "Setting oscillator frequency to {} Hz (note {})",
+                            frequency, key
+                        );
+                    }
+                    MidiEvent::NoteOff { key, .. } => {
+                        // For now, just log the note off
+                        info!("Note off: {}", key);
+                        // You might want to implement envelope or voice management here
+                    }
+                    MidiEvent::ControlChange {
+                        controller, value, ..
+                    } => {
+                        // Example: Use CC 1 (mod wheel) to control some parameter
+                        match controller {
+                            1 => {
+                                // Modulation wheel - could control vibrato, filter, etc.
+                                info!("Modulation wheel: {}", value);
+                            }
+                            7 => {
+                                // Volume - could control amplitude
+                                info!("Volume: {}", value);
+                            }
+                            _ => {
+                                info!("Unhandled CC: {} = {}", controller, value);
+                            }
+                        }
+                    }
+                    MidiEvent::PitchBend { value, .. } => {
+                        // Apply pitch bend to oscillator
+                        let bend_ratio = (value as f32 - 8192.0) / 8192.0; // Normalize to -1.0 to 1.0
+                        let bent_freq = osc.freq * (1.0 + bend_ratio * 0.1); // +/- 10% bend range
+                        osc.set_freq(bent_freq);
+                        info!("Pitch bend: {} (ratio: {})", value, bend_ratio);
+                    }
+                    MidiEvent::Other => {
+                        // Ignore other events
+                    }
+                }
+            }
+        }
     }
 }
 
