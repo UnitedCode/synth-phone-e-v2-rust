@@ -55,6 +55,11 @@ pub fn audio_handler(
             // ************** BIT DEPTH REDUCE **************
             out_sample = bitcrush(out_sample, bit_depth as u8);
 
+            // ************** ADD MIDI OUTPUT **************
+            // Get MIDI sample and mix it with the processed audio
+            let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
+            out_sample = out_sample + midi_sample * 0.1; // Mix at 50% volume
+
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8);
             // **********************************************
