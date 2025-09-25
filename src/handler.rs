@@ -165,13 +165,13 @@ pub fn interface_handler(
         Direction::Clockwise => {
             update_state = true;
             shared.app_state_machine.lock(|msm| {
-                msm.handle_event(AppEvent::EncoderRotate(1));
+                msm.handle_event(AppEvent::EncoderRotate(-1));
             });
         }
         Direction::Anticlockwise => {
             update_state = true;
             shared.app_state_machine.lock(|msm| {
-                msm.handle_event(AppEvent::EncoderRotate(-1));
+                msm.handle_event(AppEvent::EncoderRotate(1));
             });
         }
         Direction::None => {}
@@ -213,11 +213,12 @@ pub fn handle_vocal_effects(
     let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
     let key = 0;
-    let octave = 2;
+    let mut octave = 2;
     ctx.app_state_machine.lock(|asm| {
         formant = asm.snapshot().formant;
         // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
-        let octave_factor = asm.snapshot().octave as f32 * 0.5;
+        octave = asm.snapshot().octave;
+        let octave_factor = octave as f32 * 0.5;
         pitch_shift_ratio = if octave_factor <= 0.4 {
             1.0
         } else {
