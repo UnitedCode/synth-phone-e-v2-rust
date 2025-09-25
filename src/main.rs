@@ -83,7 +83,7 @@ mod rtic_app {
         impl Voice {
             pub fn new(sample_rate: f32) -> Self {
                 Self {
-                    oscillator: Oscillator::new(440.0, sample_rate, Waveform::Saw),
+                    oscillator: Oscillator::new(440.0, sample_rate, Waveform::Triangle),
                     note: None,
                     velocity: 0,
                     channel: 0,
@@ -656,6 +656,7 @@ mod rtic_app {
                 previous_pitch_shift_ratio,
                 app_state_machine,
                 in_pointer_cached,
+                voice_manager,
             ],
             local = [
                 last_input_phases,

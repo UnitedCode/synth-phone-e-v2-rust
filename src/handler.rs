@@ -57,8 +57,8 @@ pub fn audio_handler(
 
             // ************** ADD MIDI OUTPUT **************
             // Get MIDI sample and mix it with the processed audio
-            let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-            out_sample = out_sample + midi_sample * 0.1; // Mix at 50% volume
+            //let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
+           // out_sample = out_sample + midi_sample * 0.1; // Mix at 50% volume
 
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8);
@@ -239,13 +239,24 @@ pub fn handle_vocal_effects(
     };
 
     if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
-        let carrier_hz = get_frequency(key, note, octave, true);
+        // let carrier_hz = get_frequency(key, note, octave, true);
 
-        osc.set_freq(carrier_hz);
-        for _ in 0..FFT_SIZE {
-            let sample = osc.next_value();
-            carrier_buffer.push(sample);
-        }
+        // osc.set_freq(carrier_hz);
+        // for _ in 0..FFT_SIZE {
+        //     let sample = osc.next_value();
+        //     carrier_buffer.push(sample);
+        // }
+        ctx.voice_manager.lock(|vm| {
+            for i in 0..FFT_SIZE {
+                let sample = vm.get_mixed_sample();   // 0.0 if no active notes
+                // if s == 0.0 {
+                //     // fallback to a simple osc tone when no MIDI is held
+                //     s = osc.next_value();
+                // }
+                // quick safety headroom (optional)
+                carrier_buffer.push(sample);
+            }
+        });
     }
 
     let musical_settings = MusicalSettings {
@@ -262,7 +273,7 @@ pub fn handle_vocal_effects(
         .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut input_buffer));
 
     let mut carrier_unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let write_idx = 0;
+    let write_idx = 0;//carrier_buffer.write_index();
     carrier_buffer.block_from(write_idx, &mut carrier_unwrapped_buffer);
 
     let synthesis_output = process_vocal_effects_1024(
