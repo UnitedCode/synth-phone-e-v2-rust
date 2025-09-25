@@ -113,48 +113,56 @@ pub fn draw_effects_screen(
     display: &mut LcdDisplay,
 ) {
     display.clear();
-
-    // Load the background image
-    let bmp: Bmp<BinaryColor> = Bmp::from_slice(include_bytes!(
-        "../../assets/SynthphoneE-PerformanceProfile-Empty.bmp"
-    ))
-    .expect("Could not load BMP");
-
+    
     //TODO:store these so I don't have to make this each time
-    let sprite_atlas = ImageRawBE::<BinaryColor>::new(
-        include_bytes!("../../assets/SynthphoneE-Spritesheet.raw"),
-        65,
-    );
+       let sprite_atlas = ImageRawBE::<BinaryColor>::new(
+        include_bytes!("assets/SynthphoneE-Full-Spritesheet.raw"),
+        128,
+    ).expect("Could not load Spritesheet");
 
-    // Extract sub-images from the sprite atlas
-    let low_oct_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 0), Size::new(13, 8)));
-    let med_oct_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 0), Size::new(13, 8)));
-    let high_oct_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 0), Size::new(13, 8)));
 
-    let crush_one_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 8), Size::new(13, 8)));
-    let crush_none_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 8), Size::new(13, 8)));
-    let crush_two_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 8), Size::new(13, 8)));
+    //let sprite_atlas = ImageRawBE::<BinaryColor>::new(include_bytes!("./assets/SynthphoneE-Spritesheet.raw"), 65);
+    let background_image = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 32), Size::new(128, 64)));
 
-    let formant_male_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 16), Size::new(13, 8)));
-    let formant_none_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 16), Size::new(13, 8)));
-    let formant_female_on =
-        sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 16), Size::new(13, 8)));
 
-    let key_down_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 24), Size::new(13, 8)));
-    let key_up_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 24), Size::new(13, 8)));
+    //Extract sub-images from the sprite atlas
+    let low_oct_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 64), Size::new(13, 8)));
+    let med_oct_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 64), Size::new(13, 8)));
+    let high_oct_on    = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 64), Size::new(13, 8)));
 
-    let voice_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 0), Size::new(13, 8)));
-    let voice_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 0), Size::new(13, 8)));
-    let vocode_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 24), Size::new(13, 8)));
-    let vocode_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 16), Size::new(13, 8)));
-    let autotune_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 24), Size::new(13, 8)));
-    let autotune_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 8), Size::new(13, 8)));
+    let crush_one_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 72), Size::new(13, 8)));
+    let crush_none_on  = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 72), Size::new(13, 8)));
+    let crush_two_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 72), Size::new(13, 8)));
 
-    // Convert BMPs into Image objects
-    let _bg = Image::new(&bmp, Point::new(0, 0));
+    let formant_male_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 80), Size::new(13, 8)));
+    let formant_none_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 80), Size::new(13, 8)));
+    let formant_female_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 80), Size::new(13, 8)));
+
+    let key_down_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 88), Size::new(13, 8)));
+    let key_up_on   = sprite_atlas.sub_image(&Rectangle::new(Point::new(25, 88), Size::new(13, 8)));
+
+    let voice_on     = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 64), Size::new(13, 8)));
+    let voice_off    = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 72), Size::new(13, 8)));
+    let vocode_on    = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 80), Size::new(13, 8)));
+    let vocode_off   = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 88), Size::new(13, 8)));
+
+    let autotune_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 88), Size::new(13, 8)));
+    let autotune_off  = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 55), Size::new(13, 8)));
+    let harmony_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 88), Size::new(13, 8)));
+    let harmony_off  = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 80), Size::new(13, 8)));
+    let ringer_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(65, 88), Size::new(13, 8)));
+    let ringer_off  = sprite_atlas.sub_image(&Rectangle::new(Point::new(65, 80), Size::new(13, 8)));
+
+    let triangle_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 72), Size::new(13, 8)));
+    let triangle_off  = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 64), Size::new(13, 8)));
+    let square_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(65, 72), Size::new(13, 8)));
+    let square_off  = sprite_atlas.sub_image(&Rectangle::new(Point::new(65, 64), Size::new(13, 8)));
+    let saw_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(77, 72), Size::new(13, 8)));
+    let saw_off  = sprite_atlas.sub_image(&Rectangle::new(Point::new(77, 64), Size::new(13, 8)));
+
+
+    // // Convert BMPs into Image objects
+    let _bg = Image::new(&background_image, Point::new(0, 0));
 
     let low_oct_on_img = Image::new(&low_oct_on, Point::new(0, 0));
     let med_oct_on_img = Image::new(&med_oct_on, Point::new(13, 0));
@@ -164,9 +172,9 @@ pub fn draw_effects_screen(
     let crush_none_on_img = Image::new(&crush_none_on, Point::new(13, 8));
     let crush_two_on_img = Image::new(&crush_two_on, Point::new(25, 8));
 
-    let formant_male_on_img = Image::new(&formant_male_on, Point::new(0, 16));
-    let formant_none_on_img = Image::new(&formant_none_on, Point::new(13, 16));
-    let formant_female_on_img = Image::new(&formant_female_on, Point::new(25, 16));
+    let formant_male_on_img = Image::new(&triangle_on, Point::new(0, 16));
+    let formant_none_on_img = Image::new(&square_off, Point::new(13, 16));
+    let formant_female_on_img = Image::new(&saw_off, Point::new(25, 16));
 
     let key_down_on_img = Image::new(&key_down_on, Point::new(0, 24));
     let key_up_on_img = Image::new(&key_up_on, Point::new(25, 24));
@@ -176,10 +184,8 @@ pub fn draw_effects_screen(
     let vocode_on_img = Image::new(&vocode_on, Point::new(13, 24));
     let vocode_off_img = Image::new(&vocode_off, Point::new(13, 24));
     let autotune_on_img = Image::new(&autotune_on, Point::new(13, 24));
-    let autotune_off_img = Image::new(&autotune_off, Point::new(13, 24));
 
-    let image = Image::new(&bmp, Point::new(0, 0));
-    image.draw(display).expect("Draw background");
+    _bg.draw(display).expect("Draw background");
 
     // Row 1: Octave
     match octave {
