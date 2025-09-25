@@ -1,3 +1,4 @@
+use crate::midi::get_midi_queue_status;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use libdaisy::gpio::Daisy1;
@@ -55,10 +56,45 @@ pub fn audio_handler(
             // ************** BIT DEPTH REDUCE **************
             out_sample = bitcrush(out_sample, bit_depth as u8);
 
+            // ************** PROCESS MIDI EVENTS **************
+            // Process MIDI events when we have available CPU cycles
+            // Only process a small batch per audio frame to prevent underruns
+            shared.midi_events.lock(|events| {
+                if !events.is_empty() {
+                    shared.voice_manager.lock(|voice_manager| {
+                        // Process up to 2 events per audio frame to maintain real-time performance
+                        for _ in 0..2 {
+                            if let Some(event) = events.dequeue() {
+                                // Quick inline processing for critical events
+                                match event {
+                                    crate::midi::MidiEvent::NoteOn {
+                                        channel,
+                                        key,
+                                        velocity,
+                                    } => {
+                                        voice_manager.note_on(key, velocity, channel);
+                                    }
+                                    crate::midi::MidiEvent::NoteOff { channel, key, .. } => {
+                                        voice_manager.note_off(key, channel);
+                                    }
+                                    _ => {
+                                        // Re-queue non-critical events for batch processing
+                                        let _ = events.enqueue(event);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    });
+                }
+            });
+
             // ************** ADD MIDI OUTPUT **************
             // Get MIDI sample and mix it with the processed audio
             let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-            out_sample = out_sample + midi_sample * 0.1; // Mix at 50% volume
+            out_sample = out_sample + midi_sample * 0.1; // Mix at 10% volume
 
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8);
@@ -84,6 +120,18 @@ pub fn audio_handler(
             if audio.push_stereo((out_sample, out_sample)).is_err() {
                 warn!("Failed to write audio data");
             }
+        }
+
+        // Monitor MIDI queue status periodically using hop_counter
+        if *hop_counter % 4800 == 0 {
+            // Check every ~100ms at 48kHz
+            shared.midi_events.lock(|events| {
+                let (len, capacity) = get_midi_queue_status(events);
+                if len > capacity * 3 / 4 {
+                    // Warn if queue is >75% full
+                    warn!("MIDI queue high: {}/{}", len, capacity);
+                }
+            });
         }
     } else {
         warn!("Error reading data!");
