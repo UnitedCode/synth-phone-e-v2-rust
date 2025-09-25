@@ -29,7 +29,7 @@ mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
-    dispatchers = [DMA1_STR0, DMA1_STR2, USART1]
+    dispatchers = [DMA1_STR0, DMA1_STR2]
     )]
     mod app {
         use crate::{
@@ -51,6 +51,7 @@ mod rtic_app {
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
+        use stm32h7xx_hal::nb;
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
             serial::{config::Config as SerialConfig, SerialExt},
@@ -460,11 +461,12 @@ mod rtic_app {
                 )
                 .unwrap();
 
-            let (_midi_tx, midi_rx) = midi_serial.split();
-            let midi_receiver = MidiReceiver::new(midi_rx);
+            let (_midi_tx, mut midi_rx) = midi_serial.split();
 
-            // Spawn MIDI task
-            midi_handler::spawn().ok();
+            // Enable RX interrupt
+            midi_rx.listen();
+
+            let midi_receiver = MidiReceiver::new(midi_rx);
 
             info!("Startup done!! yo!");
 
@@ -675,74 +677,30 @@ mod rtic_app {
             );
         }
 
-        #[task(local = [midi_receiver], shared = [midi_events], priority = 1)]
-        fn midi_handler(ctx: midi_handler::Context) {
-            let midi_handler::LocalResources { midi_receiver, .. } = ctx.local;
+        #[task(binds = USART1, local = [midi_receiver], shared = [midi_events], priority = 1)]
+        fn usart1_interrupt(ctx: usart1_interrupt::Context) {
+            let usart1_interrupt::LocalResources { midi_receiver, .. } = ctx.local;
             let mut midi_events = ctx.shared.midi_events;
 
-            // Try to read MIDI data
-            match midi_receiver.try_read() {
-                Ok(Some(event)) => {
-                    // Handle MIDI event
-                    match event {
-                        MidiEvent::NoteOn {
-                            channel,
-                            key,
-                            velocity,
-                        } => {
-                            info!(
-                                "MIDI Note On: ch={}, key={}, vel={}",
-                                channel, key, velocity
-                            );
-                            // Add to event queue for processing by other tasks
-                            midi_events.lock(|queue| {
-                                queue.enqueue(event).ok();
-                            });
-                        }
-                        MidiEvent::NoteOff {
-                            channel,
-                            key,
-                            velocity,
-                        } => {
-                            info!(
-                                "MIDI Note Off: ch={}, key={}, vel={}",
-                                channel, key, velocity
-                            );
-                            midi_events.lock(|queue| {
-                                queue.enqueue(event).ok();
-                            });
-                        }
-                        MidiEvent::ControlChange {
-                            channel,
-                            controller,
-                            value,
-                        } => {
-                            info!("MIDI CC: ch={}, cc={}, val={}", channel, controller, value);
-                            midi_events.lock(|queue| {
-                                queue.enqueue(event).ok();
-                            });
-                        }
-                        MidiEvent::PitchBend { channel, value } => {
-                            info!("MIDI Pitch Bend: ch={}, val={}", channel, value);
-                            midi_events.lock(|queue| {
-                                queue.enqueue(event).ok();
-                            });
-                        }
-                        MidiEvent::Other => {
-                            // Ignore other MIDI events
-                        }
+            // Limit processing to prevent audio underruns - max 4 events per interrupt
+            for _ in 0..4 {
+                match midi_receiver.try_read() {
+                    Ok(Some(event)) => {
+                        // Handle MIDI event - minimal processing in interrupt
+                        midi_events.lock(|queue| {
+                            if queue.enqueue(event).is_err() {
+                                // Queue is full, drop the event to avoid blocking
+                            }
+                        });
                     }
-
-                    // Schedule next read
-                    midi_handler::spawn().ok();
-                }
-                Ok(None) => {
-                    // No data available, schedule next read with delay
-                    midi_handler::spawn().ok();
-                }
-                Err(_e) => {
-                    // Error reading, schedule retry
-                    midi_handler::spawn().ok();
+                    Ok(None) | Err(nb::Error::WouldBlock) => {
+                        // No more data available, exit early
+                        break;
+                    }
+                    Err(_e) => {
+                        // Handle other errors if needed
+                        break;
+                    }
                 }
             }
         }
