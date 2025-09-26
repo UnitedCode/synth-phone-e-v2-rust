@@ -69,9 +69,9 @@ pub fn draw_processing_screen(
 
     // Process profile name
     let process_profile = match process {
-        ProcessingProfile::Autotune => "Autotune",
+        ProcessingProfile::Autotune => "Pitch Ctrl",
         ProcessingProfile::Vocode => "Vocode",
-        ProcessingProfile::Dry => "Dry Vox",
+        ProcessingProfile::Dry => "Synth+Vox",
     };
 
     // Create text buffers
@@ -96,7 +96,7 @@ pub fn draw_processing_screen(
     draw_text(display, &mode_buffer, Point::new(80, 3), &text_style);
     draw_centered_text(display, &note_buffer, Point::new(62, 15), h1_style);
     draw_text(display, &oct_buffer, Point::new(14, 28), &text_style);
-    draw_text(display, &vol_buffer, Point::new(112, 28), &text_style);
+    draw_centered_text(display, &vol_buffer, Point::new(120, 28), text_style);
     draw_centered_text(display, process_profile, Point::new(62, 28), text_style2);
 }
 
@@ -107,6 +107,7 @@ pub fn draw_effects_screen(
     octave: i32,
     formant: i32,
     crush: i32,
+    volume: i32,
     key_down_pressed: bool,
     process_cycle_pressed: bool,
     key_up_pressed: bool,
@@ -115,11 +116,13 @@ pub fn draw_effects_screen(
     display.clear();
     
     //TODO:store these so I don't have to make this each time
-       let sprite_atlas = ImageRawBE::<BinaryColor>::new(
-        include_bytes!("assets/SynthphoneE-Full-Spritesheet.raw"),
+        let sprite_atlas = ImageRawBE::<BinaryColor>::new(
+        include_bytes!("../../assets/SynthphoneE-Full-Spritesheet.raw"),
         128,
-    ).expect("Could not load Spritesheet");
+    );
 
+    let mut vol_buffer: String<3> = String::new();
+    write!(&mut vol_buffer, "{volume}").expect("Failed converting volume to string");
 
     //let sprite_atlas = ImageRawBE::<BinaryColor>::new(include_bytes!("./assets/SynthphoneE-Spritesheet.raw"), 65);
     let background_image = sprite_atlas.sub_image(&Rectangle::new(Point::new(0, 32), Size::new(128, 64)));
@@ -172,7 +175,11 @@ pub fn draw_effects_screen(
     let crush_none_on_img = Image::new(&crush_none_on, Point::new(13, 8));
     let crush_two_on_img = Image::new(&crush_two_on, Point::new(25, 8));
 
-    let formant_male_on_img = Image::new(&triangle_on, Point::new(0, 16));
+    //let formant_male_on_img = Image::new(&formant_male_on, Point::new(0, 16));
+    //let formant_none_on_img = Image::new(&formant_none_on, Point::new(13, 16));
+    //let formant_female_on_img = Image::new(&formant_female_on, Point::new(25, 16));
+
+    let formant_male_on_img = Image::new(&triangle_off, Point::new(0, 16));
     let formant_none_on_img = Image::new(&square_off, Point::new(13, 16));
     let formant_female_on_img = Image::new(&saw_off, Point::new(25, 16));
 
@@ -184,8 +191,11 @@ pub fn draw_effects_screen(
     let vocode_on_img = Image::new(&vocode_on, Point::new(13, 24));
     let vocode_off_img = Image::new(&vocode_off, Point::new(13, 24));
     let autotune_on_img = Image::new(&autotune_on, Point::new(13, 24));
+    let autotune_off_img = Image::new(&autotune_off, Point::new(13, 24));
 
     _bg.draw(display).expect("Draw background");
+    formant_male_on_img.draw(display).expect("");
+    formant_female_on_img.draw(display).expect("");
 
     // Row 1: Octave
     match octave {
@@ -234,7 +244,7 @@ pub fn draw_effects_screen(
             } else {
                 autotune_off_img.draw(display).expect("Draw autotune off");
             }
-            "Autotune"
+            "Pitch Ctrl"
         }
         ProcessingProfile::Vocode => {
             if process_cycle_pressed {
@@ -265,6 +275,12 @@ pub fn draw_effects_screen(
         .background_color(BinaryColor::Off)
         .build();
 
+    let text_style2 = MonoTextStyleBuilder::new()
+        .font(&FONT_6X9)
+        .text_color(BinaryColor::Off)
+        .background_color(BinaryColor::On)
+        .build();
+
     let mut mode_buffer: String<8> = String::new();
     write!(
         &mut mode_buffer,
@@ -276,7 +292,7 @@ pub fn draw_effects_screen(
 
     Text::with_alignment(
         &mode_buffer,
-        display.bounding_box().center() + Point::new(26, 3),
+        display.bounding_box().center() + Point::new(18, 3),
         text_style,
         Alignment::Center,
     )
@@ -285,12 +301,14 @@ pub fn draw_effects_screen(
 
     Text::with_alignment(
         process_profile,
-        display.bounding_box().center() + Point::new(26, 14),
+        display.bounding_box().center() + Point::new(16, 14),
         text_style,
         Alignment::Center,
     )
     .draw(display)
     .expect("Draw key text");
+
+    draw_centered_text(display, &vol_buffer, Point::new(120, 28), text_style2);
 }
 
 pub fn draw_menu_screen(
