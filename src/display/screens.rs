@@ -249,15 +249,9 @@ pub fn draw_effects_screen(
     else {
         match formant {
             0 => formant_none_on_img.draw(display).expect("Draw no formant"),
-            1 => formant_male_on_img
-                .draw(display)
-                .expect("Draw formant male"),
-            2 => formant_female_on_img
-                .draw(display)
-                .expect("Draw formant female"),
-            _ => formant_none_on_img
-                .draw(display)
-                .expect("Draw no formant (default)"),
+            1 => formant_male_on_img.draw(display).expect("Draw formant male"),
+            2 => formant_female_on_img.draw(display).expect("Draw formant female"),
+            _ => formant_none_on_img.draw(display).expect("Draw no formant (default)"),
         }
     }
 
