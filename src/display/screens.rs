@@ -111,6 +111,7 @@ pub fn draw_effects_screen(
     key_down_pressed: bool,
     process_cycle_pressed: bool,
     key_up_pressed: bool,
+    waveform: i32,
     display: &mut LcdDisplay,
 ) {
     display.clear();
@@ -149,8 +150,8 @@ pub fn draw_effects_screen(
     let vocode_on    = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 80), Size::new(13, 8)));
     let vocode_off   = sprite_atlas.sub_image(&Rectangle::new(Point::new(39, 88), Size::new(13, 8)));
 
-    let autotune_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 88), Size::new(13, 8)));
-    let autotune_off  = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 55), Size::new(13, 8)));
+    let pitchctrl_off = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 88), Size::new(13, 8)));
+    let pitchctrl_on  = sprite_atlas.sub_image(&Rectangle::new(Point::new(13, 55), Size::new(13, 8)));
     let harmony_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 88), Size::new(13, 8)));
     let harmony_off  = sprite_atlas.sub_image(&Rectangle::new(Point::new(52, 80), Size::new(13, 8)));
     let ringer_on = sprite_atlas.sub_image(&Rectangle::new(Point::new(65, 88), Size::new(13, 8)));
@@ -175,13 +176,16 @@ pub fn draw_effects_screen(
     let crush_none_on_img = Image::new(&crush_none_on, Point::new(13, 8));
     let crush_two_on_img = Image::new(&crush_two_on, Point::new(25, 8));
 
-    //let formant_male_on_img = Image::new(&formant_male_on, Point::new(0, 16));
-    //let formant_none_on_img = Image::new(&formant_none_on, Point::new(13, 16));
-    //let formant_female_on_img = Image::new(&formant_female_on, Point::new(25, 16));
+    let formant_male_on_img = Image::new(&formant_male_on, Point::new(0, 16));
+    let formant_none_on_img = Image::new(&formant_none_on, Point::new(13, 16));
+    let formant_female_on_img = Image::new(&formant_female_on, Point::new(25, 16));
 
-    let formant_male_on_img = Image::new(&triangle_off, Point::new(0, 16));
-    let formant_none_on_img = Image::new(&square_off, Point::new(13, 16));
-    let formant_female_on_img = Image::new(&saw_off, Point::new(25, 16));
+    let triangle_on_img = Image::new(&triangle_on, Point::new(0, 16));
+    let triangle_off_img = Image::new(&triangle_off, Point::new(0, 16));
+    let square_on_img = Image::new(&square_on, Point::new(13, 16));
+    let square_off_img = Image::new(&square_off, Point::new(13, 16));
+    let saw_on_img = Image::new(&saw_on, Point::new(25, 16));
+    let saw_off_img = Image::new(&saw_off, Point::new(25, 16));
 
     let key_down_on_img = Image::new(&key_down_on, Point::new(0, 24));
     let key_up_on_img = Image::new(&key_up_on, Point::new(25, 24));
@@ -190,12 +194,12 @@ pub fn draw_effects_screen(
     let voice_off_img = Image::new(&voice_off, Point::new(13, 24));
     let vocode_on_img = Image::new(&vocode_on, Point::new(13, 24));
     let vocode_off_img = Image::new(&vocode_off, Point::new(13, 24));
-    let autotune_on_img = Image::new(&autotune_on, Point::new(13, 24));
-    let autotune_off_img = Image::new(&autotune_off, Point::new(13, 24));
+    let pitchctrl_on_img = Image::new(&pitchctrl_on, Point::new(13, 24));
+    let pitchctrl_off_img = Image::new(&pitchctrl_off, Point::new(13, 24));
 
     _bg.draw(display).expect("Draw background");
-    formant_male_on_img.draw(display).expect("");
-    formant_female_on_img.draw(display).expect("");
+    //formant_male_on_img.draw(display).expect("");
+    //formant_female_on_img.draw(display).expect("");
 
     // Row 1: Octave
     match octave {
@@ -218,17 +222,43 @@ pub fn draw_effects_screen(
     }
 
     // Row 3: Formant
-    match formant {
-        0 => formant_none_on_img.draw(display).expect("Draw no formant"),
-        1 => formant_male_on_img
-            .draw(display)
-            .expect("Draw formant male"),
-        2 => formant_female_on_img
-            .draw(display)
-            .expect("Draw formant female"),
-        _ => formant_none_on_img
-            .draw(display)
-            .expect("Draw no formant (default)"),
+    if(process == ProcessingProfile::Vocode || process == ProcessingProfile::Dry){
+        match waveform {
+            0 => {
+                triangle_on_img.draw(display).expect("draw triangle on");
+                square_off_img.draw(display).expect("Draw square off");
+                saw_off_img.draw(display).expect("Draw saw off");
+            },
+            1 => {
+                triangle_off_img.draw(display).expect("draw triangle off");
+                square_on_img.draw(display).expect("Draw square on");
+                saw_off_img.draw(display).expect("Draw saw off");
+            },
+            2 => {
+                triangle_off_img.draw(display).expect("draw triangle off");
+                square_off_img.draw(display).expect("Draw square off");
+                saw_on_img.draw(display).expect("Draw saw on");
+            },
+            _ => {
+                triangle_on_img.draw(display).expect("draw triangle on");
+                square_off_img.draw(display).expect("Draw square off");
+                saw_off_img.draw(display).expect("Draw saw off");
+            }
+        }
+    }
+    else {
+        match formant {
+            0 => formant_none_on_img.draw(display).expect("Draw no formant"),
+            1 => formant_male_on_img
+                .draw(display)
+                .expect("Draw formant male"),
+            2 => formant_female_on_img
+                .draw(display)
+                .expect("Draw formant female"),
+            _ => formant_none_on_img
+                .draw(display)
+                .expect("Draw no formant (default)"),
+        }
     }
 
     // Row 4: Key & Voice
@@ -240,9 +270,9 @@ pub fn draw_effects_screen(
     let process_profile = match process {
         ProcessingProfile::Autotune => {
             if process_cycle_pressed {
-                autotune_on_img.draw(display).expect("Draw autotune on");
+                pitchctrl_on_img.draw(display).expect("Draw autotune on");
             } else {
-                autotune_off_img.draw(display).expect("Draw autotune off");
+                pitchctrl_off_img.draw(display).expect("Draw autotune off");
             }
             "Pitch Ctrl"
         }
