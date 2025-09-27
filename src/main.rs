@@ -514,9 +514,11 @@ mod rtic_app {
                             snapshot.octave,
                             snapshot.formant,
                             snapshot.crush,
+                            snapshot.volume,
                             snapshot.key_down_pressed,
                             snapshot.process_cycle_pressed,
                             snapshot.key_up_pressed,
+                            snapshot.waveform,
                             ctx.local.display,
                         );
                     }
