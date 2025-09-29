@@ -1,4 +1,7 @@
-use crate::display::text::{draw_centered_text, draw_text};
+use crate::display::text::{
+    draw_centered_text, draw_text, 
+    normal_text, inverted_text, small_text, header_text, menu_normal, menu_highlight
+};
 use crate::state_machine::ProcessingProfile;
 use crate::types::LcdDisplay;
 use core::fmt::Write;
@@ -41,26 +44,6 @@ pub fn draw_processing_screen(
     // Load the background image
     draw_processing_bg(display);
 
-    //TODO: move these to text?
-    // Styles for text
-    let text_style = MonoTextStyleBuilder::new()
-        .font(&FONT_6X9)
-        .text_color(BinaryColor::Off)
-        .background_color(BinaryColor::On)
-        .build();
-
-    let text_style2 = MonoTextStyleBuilder::new()
-        .font(&FONT_5X7)
-        .text_color(BinaryColor::On)
-        .background_color(BinaryColor::Off)
-        .build();
-
-    let h1_style = MonoTextStyleBuilder::new()
-        .font(&FONT_10X20)
-        .text_color(BinaryColor::Off)
-        .background_color(BinaryColor::On)
-        .build();
-
     // Process profile name
     let process_profile = match process {
         ProcessingProfile::Autotune => "Pitch Ctrl",
@@ -86,12 +69,12 @@ pub fn draw_processing_screen(
     write!(&mut vol_buffer, "{volume}").expect("Failed converting volume to string");
 
     // Draw text
-    draw_text(display, &key_buffer, Point::new(26, 3), &text_style);
-    draw_text(display, &mode_buffer, Point::new(80, 3), &text_style);
-    draw_centered_text(display, &note_buffer, Point::new(62, 15), h1_style);
-    draw_text(display, &oct_buffer, Point::new(14, 28), &text_style);
-    draw_centered_text(display, &vol_buffer, Point::new(120, 28), text_style);
-    draw_centered_text(display, process_profile, Point::new(62, 28), text_style2);
+    draw_text(display, &key_buffer, Point::new(26, 3), &inverted_text());
+    draw_text(display, &mode_buffer, Point::new(80, 3), &inverted_text());
+    draw_centered_text(display, &note_buffer, Point::new(62, 15), header_text());
+    draw_text(display, &oct_buffer, Point::new(14, 28), &inverted_text());
+    draw_centered_text(display, &vol_buffer, Point::new(120, 28), inverted_text());
+    draw_centered_text(display, process_profile, Point::new(62, 28), small_text());
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -130,18 +113,6 @@ pub fn draw_effects_screen(
 }
 
 fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProfile, volume: i32) {
-    // Text styles - TODO: Move these to constants later
-    let text_style = MonoTextStyleBuilder::new()
-        .font(&FONT_6X9)
-        .text_color(BinaryColor::On)
-        .background_color(BinaryColor::Off)
-        .build();
-
-    let text_style2 = MonoTextStyleBuilder::new()
-        .font(&FONT_6X9)
-        .text_color(BinaryColor::Off)
-        .background_color(BinaryColor::On)
-        .build();
 
     // Format strings - TODO: Cache these later
     let mut mode_buffer: String<8> = String::new();
@@ -157,11 +128,11 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProf
         ProcessingProfile::Dry => "Dry Vox",
     };
 
-    // Draw text elements
+    // Draw text elements using cached styles - no more style creation!
     Text::with_alignment(
         &mode_buffer,
         display.bounding_box().center() + Point::new(18, 3),
-        text_style,
+        normal_text(),
         Alignment::Center,
     )
     .draw(display)
@@ -170,13 +141,13 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProf
     Text::with_alignment(
         process_profile,
         display.bounding_box().center() + Point::new(16, 14),
-        text_style,
+        normal_text(),
         Alignment::Center,
     )
     .draw(display)
     .expect("Draw process text");
 
-    draw_centered_text(display, &vol_buffer, Point::new(120, 28), text_style2);
+    draw_centered_text(display, &vol_buffer, Point::new(120, 28), inverted_text());
 }
 
 pub fn draw_menu_screen(
@@ -187,19 +158,6 @@ pub fn draw_menu_screen(
     display: &mut LcdDisplay,
 ) {
     display.clear();
-
-    // Styles for text
-    let text_style = MonoTextStyleBuilder::new()
-        .font(&FONT_6X9)
-        .text_color(BinaryColor::On)
-        .background_color(BinaryColor::Off)
-        .build();
-
-    let h1_style = MonoTextStyleBuilder::new()
-        .font(&FONT_6X13)
-        .text_color(BinaryColor::On)
-        .background_color(BinaryColor::Off)
-        .build();
 
     // Draw items
     let options = [prev, current, next];
@@ -218,7 +176,7 @@ pub fn draw_menu_screen(
 
     // Draw all menu items (previous, current, next)
     for (i, &option) in options.iter().enumerate() {
-        let style = if i == 1 { h1_style } else { text_style };
+        let style = if i == 1 { menu_highlight() } else { menu_normal() };
         let y = 4 + (i as i32 * 12);
 
         // Draw option name
