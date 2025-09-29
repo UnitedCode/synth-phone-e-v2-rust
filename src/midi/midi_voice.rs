@@ -20,6 +20,10 @@ impl Voice {
         }
     }
 
+    pub fn set_waveform(&mut self, waveform: Waveform) {
+        self.oscillator.set_waveform(waveform);
+    }
+
     pub fn is_free(&self) -> bool {
         self.note.is_none()
     }
@@ -65,6 +69,12 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         Self {
             voices,
             pitch_bend_ratio: 0.0,
+        }
+    }
+
+    pub fn set_waveform(&mut self, waveform: Waveform) {
+        for voice in self.voices.iter_mut() {
+            voice.set_waveform(waveform);
         }
     }
 
