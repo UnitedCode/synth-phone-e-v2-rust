@@ -7,7 +7,7 @@ use libdaisy::{audio, hid};
 use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
-use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator};
+use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator, Waveform};
 use synthphone_e_vocal_dsp::dsp::{bitcrush, normalize_sample, sample_rate_reduce};
 use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
 use synthphone_e_vocal_dsp::{
@@ -25,12 +25,16 @@ pub fn audio_handler(
     let is_hangup_button_pressed = hangup_button.is_high();
 
     let mut sr_factor = 1;
-    shared.app_state_machine.lock(|msm| {
-        sr_factor = msm.snapshot().sample_reduction;
-    });
-
+    let mut wave_type = Waveform::Sine;
     let mut bit_depth = 32;
     shared.app_state_machine.lock(|msm| {
+        sr_factor = msm.snapshot().sample_reduction;
+        wave_type = match msm.snapshot().waveform {
+            0 => Waveform::Triangle,
+            1 => Waveform::Square,
+            2 => Waveform::Saw,
+            _ => Waveform::Sine,
+        };
         bit_depth = msm.snapshot().bit_rate;
     });
 
@@ -62,6 +66,7 @@ pub fn audio_handler(
             shared.midi_events.lock(|events| {
                 if !events.is_empty() {
                     shared.voice_manager.lock(|voice_manager| {
+                        voice_manager.set_waveform(wave_type);
                         // Process up to 2 events per audio frame to maintain real-time performance
                         for _ in 0..2 {
                             if let Some(event) = events.dequeue() {
@@ -267,6 +272,7 @@ pub fn handle_vocal_effects(
     let mut note = 0;
     let key = 0;
     let octave = 2;
+    let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
         formant = asm.snapshot().formant;
         // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
@@ -278,6 +284,13 @@ pub fn handle_vocal_effects(
         };
         note = asm.snapshot().note;
         //formant_ratio = asm.snapshot().formant_factor;
+        //
+        wave_type = match asm.snapshot().waveform {
+            0 => Waveform::Triangle,
+            1 => Waveform::Square,
+            2 => Waveform::Saw,
+            _ => Waveform::Sine,
+        }
     });
 
     let mode = match current_process {
@@ -288,6 +301,8 @@ pub fn handle_vocal_effects(
 
     if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
         let carrier_hz = get_frequency(key, note, octave, true);
+
+        osc.set_waveform(wave_type);
 
         osc.set_freq(carrier_hz);
         for _ in 0..FFT_SIZE {

@@ -355,7 +355,7 @@ mod rtic_app {
                     last_input_phases: [0.0; FFT_SIZE],
                     last_output_phases: [0.0; FFT_SIZE],
                     carrier_ring: RingBuffer::new(),
-                    osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
+                    osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Triangle),
                     midi_receiver,
                 },
                 init::Monotonics(),
