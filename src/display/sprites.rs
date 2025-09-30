@@ -20,22 +20,22 @@ pub struct SpriteData {
     pub effects_background: SpriteInfo,
     pub processing_background: SpriteInfo,
     pub splash: SpriteInfo,
-    
+
     // Octave controls (row 1)
     pub low_oct: SpriteInfo,
     pub med_oct: SpriteInfo,
     pub high_oct: SpriteInfo,
-    
-    // Crush controls (row 2)  
+
+    // Crush controls (row 2)
     pub crush_one: SpriteInfo,
     pub crush_none: SpriteInfo,
     pub crush_two: SpriteInfo,
-    
+
     // Formant controls (row 3)
     pub formant_male: SpriteInfo,
     pub formant_none: SpriteInfo,
     pub formant_female: SpriteInfo,
-    
+
     // Waveform controls (row 3, alternative)
     pub triangle_on: SpriteInfo,
     pub triangle_off: SpriteInfo,
@@ -43,11 +43,11 @@ pub struct SpriteData {
     pub square_off: SpriteInfo,
     pub saw_on: SpriteInfo,
     pub saw_off: SpriteInfo,
-    
+
     // Key controls (row 4)
     pub key_down: SpriteInfo,
     pub key_up: SpriteInfo,
-    
+
     // Process indicators (center of row 4)
     pub pitchctrl_on: SpriteInfo,
     pub pitchctrl_off: SpriteInfo,
@@ -75,7 +75,6 @@ impl SpriteData {
                 draw_position: Point::new(0, 0),
             },
 
-            
             // Octave controls
             low_oct: SpriteInfo {
                 source_rect: Rectangle::new(Point::new(0, 64), Size::new(13, 8)),
@@ -89,7 +88,7 @@ impl SpriteData {
                 source_rect: Rectangle::new(Point::new(25, 64), Size::new(13, 8)),
                 draw_position: Point::new(25, 0),
             },
-            
+
             // Crush controls
             crush_one: SpriteInfo {
                 source_rect: Rectangle::new(Point::new(0, 72), Size::new(13, 8)),
@@ -103,7 +102,7 @@ impl SpriteData {
                 source_rect: Rectangle::new(Point::new(25, 72), Size::new(13, 8)),
                 draw_position: Point::new(25, 8),
             },
-            
+
             // Formant controls
             formant_male: SpriteInfo {
                 source_rect: Rectangle::new(Point::new(0, 80), Size::new(13, 8)),
@@ -117,7 +116,7 @@ impl SpriteData {
                 source_rect: Rectangle::new(Point::new(25, 80), Size::new(13, 8)),
                 draw_position: Point::new(25, 16),
             },
-            
+
             // Waveform controls (same positions as formant)
             triangle_on: SpriteInfo {
                 source_rect: Rectangle::new(Point::new(52, 72), Size::new(13, 8)),
@@ -143,7 +142,7 @@ impl SpriteData {
                 source_rect: Rectangle::new(Point::new(77, 64), Size::new(13, 8)),
                 draw_position: Point::new(25, 16),
             },
-            
+
             // Key controls
             key_down: SpriteInfo {
                 source_rect: Rectangle::new(Point::new(0, 88), Size::new(13, 8)),
@@ -153,7 +152,7 @@ impl SpriteData {
                 source_rect: Rectangle::new(Point::new(25, 88), Size::new(13, 8)),
                 draw_position: Point::new(25, 24),
             },
-            
+
             // Process controls
             pitchctrl_on: SpriteInfo {
                 source_rect: Rectangle::new(Point::new(13, 55), Size::new(13, 8)),
@@ -195,24 +194,15 @@ pub fn draw_sprite(
     let _ = image.draw(display);
 }
 
-pub fn draw_effects_bg(
-    display: &mut crate::types::LcdDisplay,
-    atlas: &ImageRawBE<BinaryColor>,
-) {
+pub fn draw_effects_bg(display: &mut crate::types::LcdDisplay, atlas: &ImageRawBE<BinaryColor>) {
     draw_sprite(display, atlas, &SPRITE_DATA.effects_background);
 }
 
-pub fn draw_processing_bg(
-    display: &mut crate::types::LcdDisplay,
-    atlas: &ImageRawBE<BinaryColor>,
-) {
+pub fn draw_processing_bg(display: &mut crate::types::LcdDisplay, atlas: &ImageRawBE<BinaryColor>) {
     draw_sprite(display, atlas, &SPRITE_DATA.processing_background);
 }
 
-pub fn draw_splash(
-    display: &mut crate::types::LcdDisplay,
-    atlas: &ImageRawBE<BinaryColor>,
-) {
+pub fn draw_splash(display: &mut crate::types::LcdDisplay, atlas: &ImageRawBE<BinaryColor>) {
     draw_sprite(display, atlas, &SPRITE_DATA.splash);
 }
 
@@ -265,9 +255,27 @@ pub fn draw_waveform(
 ) {
     for i in 0..3 {
         let sprite = match i {
-            0 => if waveform == 0 { &SPRITE_DATA.triangle_on } else { &SPRITE_DATA.triangle_off },
-            1 => if waveform == 1 { &SPRITE_DATA.square_on } else { &SPRITE_DATA.square_off },
-            2 => if waveform == 2 { &SPRITE_DATA.saw_on } else { &SPRITE_DATA.saw_off },
+            0 => {
+                if waveform == 0 {
+                    &SPRITE_DATA.triangle_on
+                } else {
+                    &SPRITE_DATA.triangle_off
+                }
+            }
+            1 => {
+                if waveform == 1 {
+                    &SPRITE_DATA.square_on
+                } else {
+                    &SPRITE_DATA.square_off
+                }
+            }
+            2 => {
+                if waveform == 2 {
+                    &SPRITE_DATA.saw_on
+                } else {
+                    &SPRITE_DATA.saw_off
+                }
+            }
             _ => continue,
         };
         draw_sprite(display, atlas, sprite);

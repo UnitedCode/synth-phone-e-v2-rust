@@ -37,7 +37,11 @@ mod rtic_app {
             midi::{midi_voice::VoiceManager, try_enqueue_midi_event, MidiEvent, MidiReceiver},
             state_machine::{AppState, AppStateMachine, MenuState},
         };
-        use embedded_graphics::{image::{Image, ImageRawBE}, pixelcolor::BinaryColor, prelude::*};
+        use embedded_graphics::{
+            image::{Image, ImageRawBE},
+            pixelcolor::BinaryColor,
+            prelude::*,
+        };
         use fugit::RateExtU32;
         use heapless;
         use libdaisy::{
@@ -360,7 +364,7 @@ mod rtic_app {
                     carrier_ring: RingBuffer::new(),
                     osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
                     midi_receiver,
-                    sprite_atlas
+                    sprite_atlas,
                 },
                 init::Monotonics(),
             )
@@ -499,7 +503,10 @@ mod rtic_app {
                 // Draw based on current state
                 match snapshot.current_state {
                     AppState::Splash => {
-                        crate::display::screens::draw_splash_screen(ctx.local.display, ctx.local.sprite_atlas);
+                        crate::display::screens::draw_splash_screen(
+                            ctx.local.display,
+                            ctx.local.sprite_atlas,
+                        );
                     }
                     AppState::Processing(process) => {
                         crate::display::screens::draw_processing_screen(

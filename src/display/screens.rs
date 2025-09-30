@@ -1,29 +1,26 @@
 use crate::display::text::{
-    draw_centered_text, draw_text, 
-    normal_text, inverted_text, small_text, header_text, menu_normal, menu_highlight
+    draw_centered_text, draw_text, header_text, inverted_text, menu_highlight, menu_normal,
+    normal_text, small_text,
 };
 use crate::state_machine::ProcessingProfile;
 use crate::types::LcdDisplay;
 use core::fmt::Write;
 use embedded_graphics::{
+    image::ImageRawBE,
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{Line, PrimitiveStyle},
     text::{Alignment, Baseline, Text},
-    image::ImageRawBE,
 };
 use heapless::String;
 
-use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
 use super::sprites::{
-    draw_effects_bg, draw_processing_bg, draw_splash, draw_octave, draw_crush, draw_formant, 
-    draw_waveform, draw_key_controls, draw_process_indicator
+    draw_crush, draw_effects_bg, draw_formant, draw_key_controls, draw_octave,
+    draw_process_indicator, draw_processing_bg, draw_splash, draw_waveform,
 };
+use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
 
-pub fn draw_splash_screen(
-    display: &mut LcdDisplay,
-    atlas: &ImageRawBE<BinaryColor>,
-) {
+pub fn draw_splash_screen(display: &mut LcdDisplay, atlas: &ImageRawBE<BinaryColor>) {
     draw_splash(display, atlas);
 }
 
@@ -36,12 +33,11 @@ pub fn draw_processing_screen(
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
 ) {
-
     // Load the background image
     draw_processing_bg(display, atlas);
 
     let inverted_style = inverted_text();
-    let header_style = header_text(); 
+    let header_style = header_text();
     let small_style = small_text();
 
     // Process profile name
@@ -92,42 +88,45 @@ pub fn draw_effects_screen(
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
 ) {
-
     // Draw all sprite elements using the safe convenience functions
     draw_effects_bg(display, atlas);
     draw_octave(display, atlas, octave);
     draw_crush(display, atlas, crush);
-    
+
     // Draw formant or waveform controls depending on processing profile
     if process == ProcessingProfile::Vocode || process == ProcessingProfile::Dry {
         draw_waveform(display, atlas, waveform);
     } else {
         draw_formant(display, atlas, formant);
     }
-    
+
     draw_key_controls(display, atlas, key_down_pressed, key_up_pressed);
     draw_process_indicator(display, atlas, process, process_cycle_pressed);
-    
+
     // Draw text elements
     draw_effects_text(display, key, process, volume);
 }
 
 fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProfile, volume: i32) {
-
     let normal_style = normal_text();
     let inverted_style = inverted_text();
 
     // Format strings - TODO: Cache these later
     let mut mode_buffer: String<8> = String::new();
-    write!(&mut mode_buffer, "{} {}", get_key_name(key), get_mode_name(key))
-        .expect("Failed converting mode to string");
+    write!(
+        &mut mode_buffer,
+        "{} {}",
+        get_key_name(key),
+        get_mode_name(key)
+    )
+    .expect("Failed converting mode to string");
 
     let mut vol_buffer: String<3> = String::new();
     write!(&mut vol_buffer, "{volume}").expect("Failed converting volume to string");
 
     let process_profile = match process {
         ProcessingProfile::Autotune => "Pitch Ctrl",
-        ProcessingProfile::Vocode => "Vocode", 
+        ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Dry Vox",
     };
 
