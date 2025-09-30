@@ -44,6 +44,10 @@ pub fn draw_processing_screen(
     // Load the background image
     draw_processing_bg(display);
 
+    let inverted_style = inverted_text();
+    let header_style = header_text(); 
+    let small_style = small_text();
+
     // Process profile name
     let process_profile = match process {
         ProcessingProfile::Autotune => "Pitch Ctrl",
@@ -69,12 +73,12 @@ pub fn draw_processing_screen(
     write!(&mut vol_buffer, "{volume}").expect("Failed converting volume to string");
 
     // Draw text
-    draw_text(display, &key_buffer, Point::new(26, 3), &inverted_text());
-    draw_text(display, &mode_buffer, Point::new(80, 3), &inverted_text());
-    draw_centered_text(display, &note_buffer, Point::new(62, 15), header_text());
-    draw_text(display, &oct_buffer, Point::new(14, 28), &inverted_text());
-    draw_centered_text(display, &vol_buffer, Point::new(120, 28), inverted_text());
-    draw_centered_text(display, process_profile, Point::new(62, 28), small_text());
+    draw_text(display, &key_buffer, Point::new(26, 3), &inverted_style);
+    draw_text(display, &mode_buffer, Point::new(80, 3), &inverted_style);
+    draw_centered_text(display, &note_buffer, Point::new(62, 15), header_style);
+    draw_text(display, &oct_buffer, Point::new(14, 28), &inverted_style);
+    draw_centered_text(display, &vol_buffer, Point::new(120, 28), inverted_style);
+    draw_centered_text(display, process_profile, Point::new(62, 28), small_style);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -114,6 +118,9 @@ pub fn draw_effects_screen(
 
 fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProfile, volume: i32) {
 
+    let normal_style = normal_text();
+    let inverted_style = inverted_text();
+
     // Format strings - TODO: Cache these later
     let mut mode_buffer: String<8> = String::new();
     write!(&mut mode_buffer, "{} {}", get_key_name(key), get_mode_name(key))
@@ -132,7 +139,7 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProf
     Text::with_alignment(
         &mode_buffer,
         display.bounding_box().center() + Point::new(18, 3),
-        normal_text(),
+        normal_style,
         Alignment::Center,
     )
     .draw(display)
@@ -141,13 +148,13 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProf
     Text::with_alignment(
         process_profile,
         display.bounding_box().center() + Point::new(16, 14),
-        normal_text(),
+        normal_style,
         Alignment::Center,
     )
     .draw(display)
     .expect("Draw process text");
 
-    draw_centered_text(display, &vol_buffer, Point::new(120, 28), inverted_text());
+    draw_centered_text(display, &vol_buffer, Point::new(120, 28), inverted_style);
 }
 
 pub fn draw_menu_screen(
@@ -158,6 +165,9 @@ pub fn draw_menu_screen(
     display: &mut LcdDisplay,
 ) {
     display.clear();
+
+    let menu_highlight = menu_highlight();
+    let menu_normal = menu_normal();
 
     // Draw items
     let options = [prev, current, next];
@@ -176,7 +186,7 @@ pub fn draw_menu_screen(
 
     // Draw all menu items (previous, current, next)
     for (i, &option) in options.iter().enumerate() {
-        let style = if i == 1 { menu_highlight() } else { menu_normal() };
+        let style = if i == 1 { menu_highlight } else { menu_normal };
         let y = 4 + (i as i32 * 12);
 
         // Draw option name
