@@ -37,7 +37,11 @@ mod rtic_app {
             midi::{midi_voice::VoiceManager, try_enqueue_midi_event, MidiEvent, MidiReceiver},
             state_machine::{AppState, AppStateMachine, MenuState},
         };
-        use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
+        use embedded_graphics::{
+            image::{Image, ImageRawBE},
+            pixelcolor::BinaryColor,
+            prelude::*,
+        };
         use fugit::RateExtU32;
         use heapless;
         use libdaisy::{
@@ -128,6 +132,7 @@ mod rtic_app {
             osc: Oscillator,
             previous_pitch_shift_ratio: f32,
             midi_receiver: MidiReceiver,
+            sprite_atlas: ImageRawBE<'static, BinaryColor>,
         }
 
         #[init]
@@ -258,13 +263,15 @@ mod rtic_app {
             display.init().expect("Failed to initialize display");
             display.clear();
 
-            let bmp: Bmp<BinaryColor> =
-                Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp")).unwrap();
+            let sprite_atlas = ImageRawBE::<BinaryColor>::new(
+                include_bytes!("../assets/SynthphoneE-Full-Spritesheet.raw"),
+                128,
+            );
 
-            let image = Image::new(&bmp, Point::new(0, 0));
-            image.draw(&mut display).expect("Failed to display image");
-            display.flush().expect("Could not write to display");
-            display.clear();
+            // let image = Image::new(&bmp, Point::new(0, 0));
+            // image.draw(&mut display).expect("Failed to display image");
+            // display.flush().expect("Could not write to display");
+            // display.clear();
 
             let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
@@ -357,6 +364,7 @@ mod rtic_app {
                     carrier_ring: RingBuffer::new(),
                     osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Triangle),
                     midi_receiver,
+                    sprite_atlas,
                 },
                 init::Monotonics(),
             )
@@ -474,7 +482,7 @@ mod rtic_app {
         }
 
         #[task(
-            local = [display],
+            local = [display, sprite_atlas],
             shared = [display_needs_update, app_state_machine],
             priority = 2
         )]
@@ -495,7 +503,10 @@ mod rtic_app {
                 // Draw based on current state
                 match snapshot.current_state {
                     AppState::Splash => {
-                        crate::display::screens::draw_splash_screen(ctx.local.display);
+                        crate::display::screens::draw_splash_screen(
+                            ctx.local.display,
+                            ctx.local.sprite_atlas,
+                        );
                     }
                     AppState::Processing(process) => {
                         crate::display::screens::draw_processing_screen(
@@ -505,6 +516,7 @@ mod rtic_app {
                             snapshot.note,
                             snapshot.volume,
                             ctx.local.display,
+                            ctx.local.sprite_atlas,
                         );
                     }
                     AppState::EffectsProfile(process) => {
@@ -520,6 +532,7 @@ mod rtic_app {
                             snapshot.key_up_pressed,
                             snapshot.waveform,
                             ctx.local.display,
+                            ctx.local.sprite_atlas,
                         );
                     }
                     AppState::Menu(nav_state, _) => {
