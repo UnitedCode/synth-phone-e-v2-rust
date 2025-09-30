@@ -36,7 +36,6 @@ pub fn draw_processing_screen(
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
 ) {
-    display.clear();
 
     // Load the background image
     draw_processing_bg(display, atlas);
@@ -93,7 +92,6 @@ pub fn draw_effects_screen(
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
 ) {
-    display.clear();
 
     // Draw all sprite elements using the safe convenience functions
     draw_effects_bg(display, atlas);
