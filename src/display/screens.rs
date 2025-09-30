@@ -10,6 +10,7 @@ use embedded_graphics::{
     prelude::*,
     primitives::{Line, PrimitiveStyle},
     text::{Alignment, Baseline, Text},
+    image::ImageRawBE,
 };
 use heapless::String;
 
@@ -19,10 +20,11 @@ use super::sprites::{
     draw_waveform, draw_key_controls, draw_process_indicator
 };
 
-pub fn draw_splash_screen(display: &mut LcdDisplay) {
-    display.clear();
-
-    draw_splash(display);
+pub fn draw_splash_screen(
+    display: &mut LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+) {
+    draw_splash(display, atlas);
 }
 
 pub fn draw_processing_screen(
@@ -32,11 +34,12 @@ pub fn draw_processing_screen(
     note: i32,
     volume: i32,
     display: &mut LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
 ) {
     display.clear();
 
     // Load the background image
-    draw_processing_bg(display);
+    draw_processing_bg(display, atlas);
 
     let inverted_style = inverted_text();
     let header_style = header_text(); 
@@ -88,23 +91,24 @@ pub fn draw_effects_screen(
     key_up_pressed: bool,
     waveform: i32,
     display: &mut LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
 ) {
     display.clear();
 
     // Draw all sprite elements using the safe convenience functions
-    draw_effects_bg(display);
-    draw_octave(display, octave);
-    draw_crush(display, crush);
+    draw_effects_bg(display, atlas);
+    draw_octave(display, atlas, octave);
+    draw_crush(display, atlas, crush);
     
     // Draw formant or waveform controls depending on processing profile
     if process == ProcessingProfile::Vocode || process == ProcessingProfile::Dry {
-        draw_waveform(display, waveform);
+        draw_waveform(display, atlas, waveform);
     } else {
-        draw_formant(display, formant);
+        draw_formant(display, atlas, formant);
     }
     
-    draw_key_controls(display, key_down_pressed, key_up_pressed);
-    draw_process_indicator(display, process, process_cycle_pressed);
+    draw_key_controls(display, atlas, key_down_pressed, key_up_pressed);
+    draw_process_indicator(display, atlas, process, process_cycle_pressed);
     
     // Draw text elements
     draw_effects_text(display, key, process, volume);

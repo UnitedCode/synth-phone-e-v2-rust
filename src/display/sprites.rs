@@ -185,61 +185,84 @@ impl SpriteData {
 
 // Helper functions that create the atlas and draw sprites
 // This approach creates the ImageRaw each time, but it's still much better than your original
-pub fn draw_sprite(display: &mut crate::types::LcdDisplay, sprite_info: &SpriteInfo) {
-    let atlas = ImageRawBE::<BinaryColor>::new(
-        include_bytes!("../../assets/SynthphoneE-Full-Spritesheet.raw"),
-        128,
-    );
+pub fn draw_sprite(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+    sprite_info: &SpriteInfo,
+) {
     let sub_image = atlas.sub_image(&sprite_info.source_rect);
     let image = Image::new(&sub_image, sprite_info.draw_position);
     let _ = image.draw(display);
 }
 
-// Convenience functions using the const sprite data
-pub fn draw_effects_bg(display: &mut crate::types::LcdDisplay) {
-    draw_sprite(display, &SPRITE_DATA.effects_background);
+pub fn draw_effects_bg(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+) {
+    draw_sprite(display, atlas, &SPRITE_DATA.effects_background);
 }
 
-pub fn draw_processing_bg(display: &mut crate::types::LcdDisplay) {
-    draw_sprite(display, &SPRITE_DATA.processing_background);
+pub fn draw_processing_bg(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+) {
+    draw_sprite(display, atlas, &SPRITE_DATA.processing_background);
 }
 
-pub fn draw_splash(display: &mut crate::types::LcdDisplay) {
-    draw_sprite(display, &SPRITE_DATA.splash);
+pub fn draw_splash(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+) {
+    draw_sprite(display, atlas, &SPRITE_DATA.splash);
 }
 
-pub fn draw_octave(display: &mut crate::types::LcdDisplay, octave: i32) {
+pub fn draw_octave(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+    octave: i32,
+) {
     let sprite = match octave {
         1 => &SPRITE_DATA.low_oct,
         2 => &SPRITE_DATA.med_oct,
         4 => &SPRITE_DATA.high_oct,
-        _ => &SPRITE_DATA.med_oct, // default
+        _ => &SPRITE_DATA.med_oct,
     };
-    draw_sprite(display, sprite);
+    draw_sprite(display, atlas, sprite);
 }
 
-pub fn draw_crush(display: &mut crate::types::LcdDisplay, crush: i32) {
+pub fn draw_crush(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+    crush: i32,
+) {
     let sprite = match crush {
         1 => &SPRITE_DATA.crush_one,
         0 => &SPRITE_DATA.crush_none,
         2 => &SPRITE_DATA.crush_two,
-        _ => &SPRITE_DATA.crush_none, // default
+        _ => &SPRITE_DATA.crush_none,
     };
-    draw_sprite(display, sprite);
+    draw_sprite(display, atlas, sprite);
 }
 
-pub fn draw_formant(display: &mut crate::types::LcdDisplay, formant: i32) {
+pub fn draw_formant(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+    formant: i32,
+) {
     let sprite = match formant {
         1 => &SPRITE_DATA.formant_male,
         0 => &SPRITE_DATA.formant_none,
         2 => &SPRITE_DATA.formant_female,
-        _ => &SPRITE_DATA.formant_none, // default
+        _ => &SPRITE_DATA.formant_none,
     };
-    draw_sprite(display, sprite);
+    draw_sprite(display, atlas, sprite);
 }
 
-pub fn draw_waveform(display: &mut crate::types::LcdDisplay, waveform: i32) {
-    // Draw all three waveform buttons (active/inactive)
+pub fn draw_waveform(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+    waveform: i32,
+) {
     for i in 0..3 {
         let sprite = match i {
             0 => if waveform == 0 { &SPRITE_DATA.triangle_on } else { &SPRITE_DATA.triangle_off },
@@ -247,14 +270,15 @@ pub fn draw_waveform(display: &mut crate::types::LcdDisplay, waveform: i32) {
             2 => if waveform == 2 { &SPRITE_DATA.saw_on } else { &SPRITE_DATA.saw_off },
             _ => continue,
         };
-        draw_sprite(display, sprite);
+        draw_sprite(display, atlas, sprite);
     }
 }
 
 pub fn draw_process_indicator(
-    display: &mut crate::types::LcdDisplay, 
-    process: crate::state_machine::ProcessingProfile, 
-    is_pressed: bool
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+    process: crate::state_machine::ProcessingProfile,
+    is_pressed: bool,
 ) {
     use crate::state_machine::ProcessingProfile;
     let sprite = match (process, is_pressed) {
@@ -265,18 +289,19 @@ pub fn draw_process_indicator(
         (ProcessingProfile::Dry, true) => &SPRITE_DATA.voice_on,
         (ProcessingProfile::Dry, false) => &SPRITE_DATA.voice_off,
     };
-    draw_sprite(display, sprite);
+    draw_sprite(display, atlas, sprite);
 }
 
 pub fn draw_key_controls(
-    display: &mut crate::types::LcdDisplay, 
-    key_down: bool, 
-    key_up: bool
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+    key_down: bool,
+    key_up: bool,
 ) {
     if key_down {
-        draw_sprite(display, &SPRITE_DATA.key_down);
+        draw_sprite(display, atlas, &SPRITE_DATA.key_down);
     }
     if key_up {
-        draw_sprite(display, &SPRITE_DATA.key_up);
+        draw_sprite(display, atlas, &SPRITE_DATA.key_up);
     }
 }
