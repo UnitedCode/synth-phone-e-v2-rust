@@ -6,11 +6,6 @@ use crate::state_machine::ProcessingProfile;
 use crate::types::LcdDisplay;
 use core::fmt::Write;
 use embedded_graphics::{
-    image::{Image, ImageRawBE},
-    mono_font::{
-        ascii::{FONT_10X20, FONT_5X7, FONT_6X13, FONT_6X9},
-        MonoTextStyleBuilder,
-    },
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{Line, PrimitiveStyle},
@@ -19,7 +14,6 @@ use embedded_graphics::{
 use heapless::String;
 
 use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
-use tinybmp::Bmp;
 use super::sprites::{
     draw_effects_bg, draw_processing_bg, draw_splash, draw_octave, draw_crush, draw_formant, 
     draw_waveform, draw_key_controls, draw_process_indicator
