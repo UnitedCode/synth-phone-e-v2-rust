@@ -21,6 +21,7 @@ mod constants;
 mod display;
 mod handler;
 mod input;
+mod midi;
 mod state_machine;
 mod types;
 
@@ -28,15 +29,21 @@ mod rtic_app {
     #[rtic::app(
     device = stm32h7xx_hal::stm32,
     peripherals = true,
-    dispatchers = [DMA1_STR0, DMA1_STR2]
+    dispatchers = [DMA1_STR0, DMA1_STR2, DMA1_STR3, DMA1_STR4, DMA1_STR5, DMA1_STR6]
     )]
     mod app {
         use crate::{
             constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
+            midi::{midi_voice::VoiceManager, try_enqueue_midi_event, MidiEvent, MidiReceiver},
             state_machine::{AppState, AppStateMachine, MenuState},
         };
-        use embedded_graphics::{image::Image, pixelcolor::BinaryColor, prelude::*};
+        use embedded_graphics::{
+            image::{Image, ImageRawBE},
+            pixelcolor::BinaryColor,
+            prelude::*,
+        };
         use fugit::RateExtU32;
+        use heapless;
         use libdaisy::{
             audio,
             gpio::*,
@@ -44,14 +51,17 @@ mod rtic_app {
             prelude::{Input, Output, PushPull},
             system,
         };
-        use log::info;
+        use log::{info, warn};
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
+        use stm32h7xx_hal::nb;
         use stm32h7xx_hal::{
             i2c::{I2c, I2cExt},
+            serial::{config::Config as SerialConfig, SerialExt},
             stm32,
             time::MilliSeconds,
+            time::U32Ext,
             timer::Timer,
         };
         use synthphone_e_vocal_dsp::{
@@ -94,6 +104,8 @@ mod rtic_app {
             sr_hold_counter: i32,
             sr_held_value: f32,
             display_needs_update: bool,
+            midi_events: heapless::spsc::Queue<MidiEvent, 128>,
+            voice_manager: VoiceManager<8>,
         }
 
         #[local]
@@ -119,6 +131,8 @@ mod rtic_app {
             carrier_ring: RingBuffer<FFT_SIZE>,
             osc: Oscillator,
             previous_pitch_shift_ratio: f32,
+            midi_receiver: MidiReceiver,
+            sprite_atlas: ImageRawBE<'static, BinaryColor>,
         }
 
         #[init]
@@ -249,13 +263,15 @@ mod rtic_app {
             display.init().expect("Failed to initialize display");
             display.clear();
 
-            let bmp: Bmp<BinaryColor> =
-                Bmp::from_slice(include_bytes!("../assets/synthophoneV2.bmp")).unwrap();
+            let sprite_atlas = ImageRawBE::<BinaryColor>::new(
+                include_bytes!("../assets/SynthphoneE-Full-Spritesheet.raw"),
+                128,
+            );
 
-            let image = Image::new(&bmp, Point::new(0, 0));
-            image.draw(&mut display).expect("Failed to display image");
-            display.flush().expect("Could not write to display");
-            display.clear();
+            // let image = Image::new(&bmp, Point::new(0, 0));
+            // image.draw(&mut display).expect("Failed to display image");
+            // display.flush().expect("Could not write to display");
+            // display.clear();
 
             let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
@@ -274,6 +290,41 @@ mod rtic_app {
             timer2.listen(stm32h7xx_hal::timer::Event::TimeOut);
             display_update_task::spawn().ok();
 
+            // Initialize MIDI USART1 on pin 14 (RX only)
+            let midi_rx_pin = system
+                .gpio
+                .daisy14
+                .take()
+                .expect("Failed to get daisy14 for MIDI RX")
+                .into_alternate::<7>(); // USART1_RX alternate function
+
+            let midi_tx_pin = system
+                .gpio
+                .daisy13
+                .take()
+                .expect("Failed to get daisy13 for MIDI TX")
+                .into_alternate::<7>(); // USART1_TX alternate function (not used but needed for Serial)
+
+            let mut midi_config = SerialConfig::default();
+            midi_config.baudrate = 31_250_u32.bps(); // MIDI baud rate
+
+            let midi_serial = device
+                .USART1
+                .serial(
+                    (midi_tx_pin, midi_rx_pin),
+                    midi_config,
+                    ccdr.peripheral.USART1,
+                    &ccdr.clocks,
+                )
+                .unwrap();
+
+            let (_midi_tx, mut midi_rx) = midi_serial.split();
+
+            // Enable RX interrupt
+            midi_rx.listen();
+
+            let midi_receiver = MidiReceiver::new(midi_rx);
+
             info!("Startup done!! yo!");
 
             (
@@ -287,6 +338,8 @@ mod rtic_app {
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
                     display_needs_update: false,
+                    midi_events: heapless::spsc::Queue::new(),
+                    voice_manager: VoiceManager::new(SAMPLE_RATE),
                 },
                 Local {
                     audio: system.audio,
@@ -309,7 +362,9 @@ mod rtic_app {
                     last_input_phases: [0.0; FFT_SIZE],
                     last_output_phases: [0.0; FFT_SIZE],
                     carrier_ring: RingBuffer::new(),
-                    osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Saw),
+                    osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Triangle),
+                    midi_receiver,
+                    sprite_atlas,
                 },
                 init::Monotonics(),
             )
@@ -326,21 +381,25 @@ mod rtic_app {
             local = [
                 audio,
                 buffer,
-                button,
                 hangup_button,
                 hop_counter,
+
             ],
             shared = [
                 in_ring,
                 out_ring,
                 in_pointer_cached,
+                previous_pitch_shift_ratio,
                 app_state_machine,
                 sr_hold_counter,
                 sr_held_value,
+                midi_events,
+                voice_manager
             ],
             priority = 8)
         ]
         fn update_handler(mut ctx: update_handler::Context) {
+            // Audio processing only - MIDI is handled separately
             crate::handler::audio_handler(
                 ctx.local.audio,
                 ctx.local.buffer,
@@ -351,9 +410,81 @@ mod rtic_app {
         }
 
         #[task(
-            local = [display],
-            shared = [app_state_machine, display_needs_update],
-            priority = 1
+            shared = [midi_events, voice_manager],
+            priority = 3
+        )]
+        fn midi_batch_processing_task(mut ctx: midi_batch_processing_task::Context) {
+            // Periodic MIDI processing task for non-critical events
+            // Runs at lower priority to handle CC, pitch bend, etc.
+            ctx.shared.midi_events.lock(|events| {
+                ctx.shared.voice_manager.lock(|voice_manager| {
+                    // Process larger batches of non-critical events
+                    let mut processed_count = 0;
+                    const MAX_BATCH_EVENTS: usize = 16;
+
+                    while let Some(event) = events.dequeue() {
+                        processed_count += 1;
+                        if processed_count >= MAX_BATCH_EVENTS {
+                            // Re-queue this event for next batch
+                            let _ = events.enqueue(event);
+                            break;
+                        }
+
+                        match event {
+                            crate::midi::MidiEvent::NoteOn {
+                                channel,
+                                key,
+                                velocity,
+                            } => {
+                                voice_manager.note_on(key, velocity, channel);
+                                let frequency = crate::midi::MidiEvent::note_to_frequency(key);
+                                info!(
+                                    "Note on: ch={}, key={}, vel={} (freq: {:.2} Hz)",
+                                    channel, key, velocity, frequency
+                                );
+                            }
+                            crate::midi::MidiEvent::NoteOff { channel, key, .. } => {
+                                voice_manager.note_off(key, channel);
+                                info!("Note off: ch={}, key={}", channel, key);
+                            }
+                            crate::midi::MidiEvent::ControlChange {
+                                channel,
+                                controller,
+                                value,
+                            } => match controller {
+                                1 => info!("Modulation wheel: ch={}, val={}", channel, value),
+                                7 => info!("Volume: ch={}, val={}", channel, value),
+                                64 => info!("Sustain pedal: ch={}, val={}", channel, value),
+                                123 => {
+                                    voice_manager.all_notes_off(Some(channel));
+                                    info!("All notes off: ch={}", channel);
+                                }
+                                _ => info!(
+                                    "Unhandled CC: ch={}, cc={} = {}",
+                                    channel, controller, value
+                                ),
+                            },
+                            crate::midi::MidiEvent::PitchBend { channel, value } => {
+                                let bend_ratio = (value as f32 - 8192.0) / 8192.0;
+                                voice_manager.apply_pitch_bend(bend_ratio);
+                                info!(
+                                    "Pitch bend: ch={}, val={} (ratio: {:.3})",
+                                    channel, value, bend_ratio
+                                );
+                            }
+                            crate::midi::MidiEvent::Other => {
+                                warn!("Unknown MIDI event");
+                            }
+                        }
+                    }
+                });
+            });
+        }
+
+        #[task(
+            local = [display, sprite_atlas],
+            shared = [display_needs_update, app_state_machine],
+            priority = 2
         )]
         fn display_update_task(mut ctx: display_update_task::Context) {
             // Check if update is needed
@@ -372,7 +503,10 @@ mod rtic_app {
                 // Draw based on current state
                 match snapshot.current_state {
                     AppState::Splash => {
-                        crate::display::screens::draw_splash_screen(ctx.local.display);
+                        crate::display::screens::draw_splash_screen(
+                            ctx.local.display,
+                            ctx.local.sprite_atlas,
+                        );
                     }
                     AppState::Processing(process) => {
                         crate::display::screens::draw_processing_screen(
@@ -382,6 +516,7 @@ mod rtic_app {
                             snapshot.note,
                             snapshot.volume,
                             ctx.local.display,
+                            ctx.local.sprite_atlas,
                         );
                     }
                     AppState::EffectsProfile(process) => {
@@ -391,10 +526,13 @@ mod rtic_app {
                             snapshot.octave,
                             snapshot.formant,
                             snapshot.crush,
+                            snapshot.volume,
                             snapshot.key_down_pressed,
                             snapshot.process_cycle_pressed,
                             snapshot.key_up_pressed,
+                            snapshot.waveform,
                             ctx.local.display,
+                            ctx.local.sprite_atlas,
                         );
                     }
                     AppState::Menu(nav_state, _) => {
@@ -468,6 +606,40 @@ mod rtic_app {
                 ctx.local.carrier_ring,
                 ctx.local.osc,
             );
+        }
+
+        #[task(binds = USART1, local = [midi_receiver], shared = [midi_events], priority = 1)]
+        fn usart1_interrupt(ctx: usart1_interrupt::Context) {
+            let usart1_interrupt::LocalResources { midi_receiver, .. } = ctx.local;
+            let mut midi_events = ctx.shared.midi_events;
+
+            // Limit processing to prevent audio underruns - max 8 events per interrupt
+            for _ in 0..8 {
+                match midi_receiver.try_read() {
+                    Ok(Some(event)) => {
+                        // Handle MIDI event - use smart enqueue with overflow protection
+                        midi_events.lock(|queue| {
+                            if let Err(dropped_event) = try_enqueue_midi_event(queue, event) {
+                                // Log dropped event for debugging - this should rarely happen now
+                                log::warn!("Dropped MIDI event: {:?}", dropped_event);
+                            }
+                        });
+
+                        // Spawn batch processing for all events
+                        if crate::rtic_app::app::midi_batch_processing_task::spawn().is_err() {
+                            // Task already spawned - that's ok
+                        }
+                    }
+                    Ok(None) | Err(nb::Error::WouldBlock) => {
+                        // No more data available, exit early
+                        break;
+                    }
+                    Err(_e) => {
+                        // Handle other errors if needed
+                        break;
+                    }
+                }
+            }
         }
     }
 }

@@ -174,15 +174,15 @@ impl AppState {
         match (self, event) {
             // From Splash screen
             (AppState::Splash, AppEvent::SplashComplete) => {
-                AppState::Processing(ProcessingProfile::Autotune)
+                AppState::EffectsProfile(ProcessingProfile::Autotune)
             }
 
             // Encoder press to toggle between Processing and Effects
-            (AppState::Processing(profile), AppEvent::EncoderPress) => {
-                AppState::EffectsProfile(profile)
-            }
             (AppState::EffectsProfile(profile), AppEvent::EncoderPress) => {
                 AppState::Processing(profile)
+            }
+            (AppState::Processing(profile), AppEvent::EncoderPress) => {
+                AppState::EffectsProfile(profile)
             }
 
             // Double press to enter menu from anywhere
@@ -286,6 +286,7 @@ pub struct AppStateMachine {
     current_octave: i32,
     current_bitcrush: i32,
     current_formant: i32,
+    current_waveform: i32,
     sample_reduction: i32,
     bit_rate: i32,
     pub volume: i32,
@@ -313,6 +314,7 @@ pub struct AppStateMachineSnapshot {
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
+    pub waveform: i32,
 }
 
 // Add a MenuContext struct for menu display
@@ -338,6 +340,7 @@ impl AppStateMachine {
             current_octave: 2,
             current_bitcrush: 0,
             current_formant: 0,
+            current_waveform: 0,
             sample_reduction: 1,
             bit_rate: 32,
             volume: 10,
@@ -371,6 +374,7 @@ impl AppStateMachine {
             key_down_pressed: self.key_down_pressed,
             process_cycle_pressed: self.process_cycle_pressed,
             key_up_pressed: self.key_up_pressed,
+            waveform: self.current_waveform,
         }
     }
 
@@ -387,20 +391,17 @@ impl AppStateMachine {
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
                 match key {
-                    1..=9 => {
+                    1..=12 => {
                         // First 9 buttons are notes
                         self.play_note(key);
                         self.note = key as i32;
                     }
-                    10 => self.current_key = (self.current_key + 23) % 24,
-                    11 => self.state = self.state.cycle_profile(),
-                    12 => self.current_key = (self.current_key + 1) % 24,
                     _ => {}
                 }
             }
 
             // Handle keypad presses in Effects profile
-            (AppState::EffectsProfile(_), AppEvent::KeypadPress(key)) => {
+            (AppState::EffectsProfile(profile), AppEvent::KeypadPress(key)) => {
                 match key {
                     // Row 1: Octave controls
                     1 => self.current_octave = 1, // Low
@@ -424,10 +425,29 @@ impl AppStateMachine {
                         self.sample_reduction = self.values.sample_reduction_2;
                     }
 
-                    // Row 3: Formant controls
-                    7 => self.current_formant = 1, // Male
-                    8 => self.current_formant = 0, // None
-                    9 => self.current_formant = 2, // Female
+                    // Row 3: Formant controls or waveform
+                    7..=9 => {
+                        match profile {
+                            ProcessingProfile::Autotune => {
+                                // map 7/8/9 -> male/none/female (or whatever mapping you want)
+                                self.current_formant = match key {
+                                    7 => 1, // male
+                                    8 => 0, // none
+                                    9 => 2, // female
+                                    _ => 0,
+                                };
+                            }
+                            ProcessingProfile::Vocode | ProcessingProfile::Dry => {
+                                // map 7/8/9 -> waveforms 0/1/2 (example)
+                                self.current_waveform = match key {
+                                    7 => 0, // triangle
+                                    8 => 1, // square
+                                    9 => 2, // saw
+                                    _ => 0,
+                                }
+                            }
+                        }
+                    }
 
                     // Row 4: Key and profile controls (keys 10-12)
                     10 => {

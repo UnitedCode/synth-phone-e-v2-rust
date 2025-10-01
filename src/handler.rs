@@ -1,3 +1,4 @@
+use crate::midi::get_midi_queue_status;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use libdaisy::gpio::Daisy1;
@@ -6,7 +7,7 @@ use libdaisy::{audio, hid};
 use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
-use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator};
+use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator, Waveform};
 use synthphone_e_vocal_dsp::dsp::{bitcrush, normalize_sample, sample_rate_reduce};
 use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
 use synthphone_e_vocal_dsp::{
@@ -24,12 +25,16 @@ pub fn audio_handler(
     let is_hangup_button_pressed = hangup_button.is_high();
 
     let mut sr_factor = 1;
-    shared.app_state_machine.lock(|msm| {
-        sr_factor = msm.snapshot().sample_reduction;
-    });
-
+    let mut wave_type = Waveform::Sine;
     let mut bit_depth = 32;
     shared.app_state_machine.lock(|msm| {
+        sr_factor = msm.snapshot().sample_reduction;
+        wave_type = match msm.snapshot().waveform {
+            0 => Waveform::Triangle,
+            1 => Waveform::Square,
+            2 => Waveform::Saw,
+            _ => Waveform::Sine,
+        };
         bit_depth = msm.snapshot().bit_rate;
     });
 
@@ -55,6 +60,47 @@ pub fn audio_handler(
             // ************** BIT DEPTH REDUCE **************
             out_sample = bitcrush(out_sample, bit_depth as u8);
 
+            // ************** PROCESS MIDI EVENTS **************
+            // Process MIDI events when we have available CPU cycles
+            // Only process a small batch per audio frame to prevent underruns
+            shared.midi_events.lock(|events| {
+                if !events.is_empty() {
+                    shared.voice_manager.lock(|voice_manager| {
+                        voice_manager.set_waveform(wave_type);
+                        // Process up to 2 events per audio frame to maintain real-time performance
+                        for _ in 0..2 {
+                            if let Some(event) = events.dequeue() {
+                                // Quick inline processing for critical events
+                                match event {
+                                    crate::midi::MidiEvent::NoteOn {
+                                        channel,
+                                        key,
+                                        velocity,
+                                    } => {
+                                        voice_manager.note_on(key, velocity, channel);
+                                    }
+                                    crate::midi::MidiEvent::NoteOff { channel, key, .. } => {
+                                        voice_manager.note_off(key, channel);
+                                    }
+                                    _ => {
+                                        // Re-queue non-critical events for batch processing
+                                        let _ = events.enqueue(event);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    });
+                }
+            });
+
+            // ************** ADD MIDI OUTPUT **************
+            // Get MIDI sample and mix it with the processed audio
+            let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
+            out_sample = out_sample + midi_sample * 0.1; // Mix at 10% volume
+
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8);
             // **********************************************
@@ -79,6 +125,18 @@ pub fn audio_handler(
             if audio.push_stereo((out_sample, out_sample)).is_err() {
                 warn!("Failed to write audio data");
             }
+        }
+
+        // Monitor MIDI queue status periodically using hop_counter
+        if *hop_counter % 4800 == 0 {
+            // Check every ~100ms at 48kHz
+            shared.midi_events.lock(|events| {
+                let (len, capacity) = get_midi_queue_status(events);
+                if len > capacity * 3 / 4 {
+                    // Warn if queue is >75% full
+                    warn!("MIDI queue high: {}/{}", len, capacity);
+                }
+            });
         }
     } else {
         warn!("Error reading data!");
@@ -214,6 +272,7 @@ pub fn handle_vocal_effects(
     let mut note = 0;
     let key = 0;
     let mut octave = 2;
+    let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
         formant = asm.snapshot().formant;
         // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
@@ -226,6 +285,13 @@ pub fn handle_vocal_effects(
         };
         note = asm.snapshot().note;
         //formant_ratio = asm.snapshot().formant_factor;
+        //
+        wave_type = match asm.snapshot().waveform {
+            0 => Waveform::Triangle,
+            1 => Waveform::Square,
+            2 => Waveform::Saw,
+            _ => Waveform::Sine,
+        }
     });
 
     let mode = match current_process {
@@ -236,6 +302,8 @@ pub fn handle_vocal_effects(
 
     if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
         let carrier_hz = get_frequency(key, note, octave, true);
+
+        osc.set_waveform(wave_type);
 
         osc.set_freq(carrier_hz);
         for _ in 0..FFT_SIZE {

@@ -5117,12 +5117,6 @@
 		(uuid "7cf8e491-05d6-46c6-a777-cb1599ac00af")
 	)
 	(junction
-		(at 234.95 111.76)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "838c9500-2a98-4137-bfda-d2a2f5e9baf2")
-	)
-	(junction
 		(at 180.34 138.43)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -5139,6 +5133,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "a9925d24-df88-4805-830c-8b8c94806e67")
+	)
+	(junction
+		(at 234.95 111.76)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "cf4af80f-d267-45c5-af8d-9fb064febc80")
 	)
 	(junction
 		(at 25.4 132.08)
@@ -5714,6 +5714,16 @@
 	)
 	(wire
 		(pts
+			(xy 234.95 111.76) (xy 246.38 111.76)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "611e3ea9-aba9-451e-8f1b-6e992c8bca8f")
+	)
+	(wire
+		(pts
 			(xy 227.33 58.42) (xy 231.14 58.42)
 		)
 		(stroke
@@ -6251,16 +6261,6 @@
 			(type default)
 		)
 		(uuid "d2238487-726f-4374-96e2-1399bb814210")
-	)
-	(wire
-		(pts
-			(xy 234.95 111.76) (xy 246.38 111.76)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d972fbdc-a640-458d-8219-223474b6edfa")
 	)
 	(wire
 		(pts
@@ -9186,7 +9186,7 @@
 	)
 	(symbol
 		(lib_id "Diode:1N4148")
-		(at 234.95 115.57 90)
+		(at 234.95 115.57 270)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -9200,7 +9200,7 @@
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(property "Value" "1N4148"
@@ -9209,7 +9209,7 @@
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
 		(property "Footprint" "Diode_THT:D_DO-35_SOD27_P7.62mm_Horizontal"
