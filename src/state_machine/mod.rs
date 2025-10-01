@@ -178,6 +178,9 @@ impl AppState {
             (AppState::Splash, AppEvent::SplashComplete) => {
                 AppState::EffectsProfile(ProcessingProfile::Autotune)
             }
+            (AppState::Splash, AppEvent::EncoderPress) => {
+                AppState::EffectsProfile(ProcessingProfile::Autotune)
+            }
 
             // Encoder press to toggle between Processing and Effects
             (AppState::EffectsProfile(profile), AppEvent::EncoderPress) => {
