@@ -297,9 +297,11 @@ pub fn handle_vocal_effects(
         ProcessingProfile::Autotune => ProcessingMode::Autotune,
         ProcessingProfile::Vocode => ProcessingMode::Vocode,
         ProcessingProfile::Dry => ProcessingMode::Dry,
+        ProcessingProfile::Harmony => ProcessingMode::Harmony,
+        ProcessingProfile::Phone => ProcessingMode::Phone,
     };
 
-    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
+    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry{
         let carrier_hz = get_frequency(key, note, octave, true);
 
         osc.set_waveform(wave_type);

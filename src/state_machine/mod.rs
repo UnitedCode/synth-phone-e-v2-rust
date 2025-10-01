@@ -6,6 +6,8 @@ pub enum ProcessingProfile {
     Autotune,
     Vocode,
     Dry,
+    Harmony,
+    Phone,
 }
 
 /// The top-level states
@@ -222,6 +224,12 @@ impl AppState {
                 AppState::EffectsProfile(ProcessingProfile::Dry)
             }
             AppState::EffectsProfile(ProcessingProfile::Dry) => {
+                AppState::EffectsProfile(ProcessingProfile::Harmony)
+            }
+            AppState::EffectsProfile(ProcessingProfile::Harmony) => {
+                AppState::EffectsProfile(ProcessingProfile::Phone)
+            }
+            AppState::EffectsProfile(ProcessingProfile::Phone) => {
                 AppState::EffectsProfile(ProcessingProfile::Autotune)
             }
             AppState::Processing(ProcessingProfile::Autotune) => {
@@ -231,6 +239,12 @@ impl AppState {
                 AppState::Processing(ProcessingProfile::Dry)
             }
             AppState::Processing(ProcessingProfile::Dry) => {
+                AppState::Processing(ProcessingProfile::Harmony)
+            }
+            AppState::Processing(ProcessingProfile::Harmony) => {
+                AppState::Processing(ProcessingProfile::Phone)
+            }
+            AppState::Processing(ProcessingProfile::Phone) => {
                 AppState::Processing(ProcessingProfile::Autotune)
             }
             // For any other state, don't change
@@ -390,14 +404,8 @@ impl AppStateMachine {
 
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
-                match key {
-                    1..=12 => {
-                        // First 9 buttons are notes
-                        self.play_note(key);
-                        self.note = key as i32;
-                    }
-                    _ => {}
-                }
+                self.play_note(key);
+                self.note = key as i32;
             }
 
             // Handle keypad presses in Effects profile
@@ -428,7 +436,9 @@ impl AppStateMachine {
                     // Row 3: Formant controls or waveform
                     7..=9 => {
                         match profile {
-                            ProcessingProfile::Autotune => {
+                            ProcessingProfile::Autotune
+                            | ProcessingProfile::Harmony
+                            | ProcessingProfile::Phone => {
                                 // map 7/8/9 -> male/none/female (or whatever mapping you want)
                                 self.current_formant = match key {
                                     7 => 1, // male
@@ -479,12 +489,7 @@ impl AppStateMachine {
             },
 
             (AppState::Processing(profile), AppEvent::KeypadRelease(_key)) => {
-                if matches!(
-                    profile,
-                    ProcessingProfile::Autotune | ProcessingProfile::Dry
-                ) {
-                    self.play_note(0); // stop tone for those modes
-                }
+                self.play_note(0); // stop tone for those modes
             }
 
             // Handle encoder rotation in Menu profile
