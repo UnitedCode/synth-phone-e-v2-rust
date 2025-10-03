@@ -268,11 +268,6 @@ mod rtic_app {
                 128,
             );
 
-            // let image = Image::new(&bmp, Point::new(0, 0));
-            // image.draw(&mut display).expect("Failed to display image");
-            // display.flush().expect("Could not write to display");
-            // display.clear();
-
             let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
             switch1.set_held_thresh(Some(150));
@@ -326,6 +321,7 @@ mod rtic_app {
             let midi_receiver = MidiReceiver::new(midi_rx);
 
             info!("Startup done!! yo!");
+            startup_complete_task::spawn().ok();
 
             (
                 Shared {
@@ -337,7 +333,7 @@ mod rtic_app {
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
-                    display_needs_update: false,
+                    display_needs_update: true,
                     midi_events: heapless::spsc::Queue::new(),
                     voice_manager: VoiceManager::new(SAMPLE_RATE),
                 },
@@ -375,6 +371,26 @@ mod rtic_app {
             loop {
                 cortex_m::asm::nop();
             }
+        }
+
+        #[task(
+            shared = [app_state_machine, display_needs_update],
+            priority = 1
+        )]
+        fn startup_complete_task(mut ctx: startup_complete_task::Context) {
+            use crate::state_machine::AppEvent;
+
+            log::info!("Startup complete, transitioning away from splash screen");
+
+            ctx.shared.app_state_machine.lock(|state_machine| {
+                state_machine.handle_event(AppEvent::SplashComplete);
+            });
+
+            ctx.shared.display_needs_update.lock(|flag| {
+                *flag = true;
+            });
+
+            display_update_task::spawn().ok();
         }
 
         #[task(binds = DMA1_STR1,
@@ -587,6 +603,7 @@ mod rtic_app {
                 previous_pitch_shift_ratio,
                 app_state_machine,
                 in_pointer_cached,
+                voice_manager,
             ],
             local = [
                 last_input_phases,
