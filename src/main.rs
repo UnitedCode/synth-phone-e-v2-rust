@@ -268,11 +268,6 @@ mod rtic_app {
                 128,
             );
 
-            let image = Image::new(&sprite_atlas, Point::new(0, 0));
-            image.draw(&mut display).expect("Failed to display image");
-            display.flush().expect("Could not write to display");
-            display.clear();
-
             let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
             switch1.set_held_thresh(Some(150));
@@ -325,7 +320,7 @@ mod rtic_app {
 
             let midi_receiver = MidiReceiver::new(midi_rx);
 
-            info!("Startup done!");
+            info!("Startup done!! yo!");
             startup_complete_task::spawn().ok();
 
             (
