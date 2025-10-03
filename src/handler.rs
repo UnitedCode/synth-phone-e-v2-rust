@@ -99,7 +99,7 @@ pub fn audio_handler(
             // ************** ADD MIDI OUTPUT **************
             // Get MIDI sample and mix it with the processed audio
             let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-            out_sample = out_sample + midi_sample * 0.1; // Mix at 10% volume
+            //out_sample = out_sample + midi_sample * 0.1; // Mix at 10% volume
 
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8);
@@ -302,7 +302,7 @@ pub fn handle_vocal_effects(
         ProcessingProfile::Phone => ProcessingMode::Phone,
     };
 
-    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry{
+    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
         let carrier_hz = get_frequency(key, note, octave, true);
 
         osc.set_waveform(wave_type);
@@ -314,9 +314,13 @@ pub fn handle_vocal_effects(
         }
     }
 
+    // Lock-free frequency access - no more blocking!
+    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
+
     let musical_settings = MusicalSettings {
         formant,
         note,
+        midi_frequencies,
         key,
         octave,
         mode,

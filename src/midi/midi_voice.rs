@@ -1,6 +1,15 @@
 use log::info;
 use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
 
+// Helper functions for atomic f32 storage
+fn f32_to_u32(f: f32) -> u32 {
+    f.to_bits()
+}
+
+fn u32_to_f32(u: u32) -> f32 {
+    f32::from_bits(u)
+}
+
 // Voice management for polyphony
 pub struct Voice {
     pub oscillator: Oscillator,
@@ -60,15 +69,20 @@ impl Voice {
 pub struct VoiceManager<const MAX_VOICES: usize> {
     pub voices: [Voice; MAX_VOICES],
     pub pitch_bend_ratio: f32,
+    // Lock-free frequency cache for vocal effects
+    pub cached_frequencies: [core::sync::atomic::AtomicU32; MAX_VOICES],
 }
 
 impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     pub fn new(sample_rate: f32) -> Self {
         // Create array of voices using from_fn
         let voices = core::array::from_fn(|_| Voice::new(sample_rate));
+        // Initialize atomic frequency cache with zeros (0.0 Hz)
+        let cached_frequencies = core::array::from_fn(|_| core::sync::atomic::AtomicU32::new(0));
         Self {
             voices,
             pitch_bend_ratio: 0.0,
+            cached_frequencies,
         }
     }
 
@@ -79,22 +93,28 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
+        let frequency = crate::midi::MidiEvent::note_to_frequency(note);
+        
         // First, check if this note is already playing - if so, retrigger it
-        for voice in self.voices.iter_mut() {
+        for (i, voice) in self.voices.iter_mut().enumerate() {
             if voice.note == Some(note) && voice.channel == channel {
                 voice.note_on(note, velocity, channel);
                 // Apply current pitch bend
                 voice.apply_pitch_bend(note, self.pitch_bend_ratio);
+                // Update atomic frequency cache
+                self.cached_frequencies[i].store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
                 return;
             }
         }
 
         // Find a free voice
-        for voice in self.voices.iter_mut() {
+        for (i, voice) in self.voices.iter_mut().enumerate() {
             if voice.is_free() {
                 voice.note_on(note, velocity, channel);
                 // Apply current pitch bend
                 voice.apply_pitch_bend(note, self.pitch_bend_ratio);
+                // Update atomic frequency cache
+                self.cached_frequencies[i].store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
                 return;
             }
         }
@@ -106,12 +126,16 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         );
         self.voices[0].note_on(note, velocity, channel);
         self.voices[0].apply_pitch_bend(note, self.pitch_bend_ratio);
+        // Update atomic frequency cache for stolen voice
+        self.cached_frequencies[0].store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn note_off(&mut self, note: u8, channel: u8) {
-        for voice in self.voices.iter_mut() {
+        for (i, voice) in self.voices.iter_mut().enumerate() {
             if voice.note == Some(note) && voice.channel == channel {
                 voice.note_off();
+                // Clear atomic frequency cache
+                self.cached_frequencies[i].store(0, core::sync::atomic::Ordering::Relaxed);
                 return;
             }
         }
@@ -140,17 +164,23 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
     pub fn apply_pitch_bend(&mut self, bend_ratio: f32) {
         self.pitch_bend_ratio = bend_ratio;
-        for voice in self.voices.iter_mut() {
+        for (i, voice) in self.voices.iter_mut().enumerate() {
             if let Some(note) = voice.note {
                 voice.apply_pitch_bend(note, bend_ratio);
+                // Update cached frequency with pitch bend applied
+                let base_freq = crate::midi::MidiEvent::note_to_frequency(note);
+                let bent_freq = base_freq * (1.0 + bend_ratio * 0.1);
+                self.cached_frequencies[i].store(f32_to_u32(bent_freq), core::sync::atomic::Ordering::Relaxed);
             }
         }
     }
 
     pub fn all_notes_off(&mut self, channel: Option<u8>) {
-        for voice in self.voices.iter_mut() {
+        for (i, voice) in self.voices.iter_mut().enumerate() {
             if channel.is_none() || voice.channel == channel.unwrap() {
                 voice.note_off();
+                // Clear atomic frequency cache
+                self.cached_frequencies[i].store(0, core::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -159,5 +189,16 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for sample in buffer.iter_mut() {
             *sample = self.get_mixed_sample();
         }
+    }
+
+    /// Lock-free method to get current frequencies for vocal effects
+    /// Returns frequencies in Hz, 0.0 means voice is inactive
+    pub fn get_cached_frequencies(&self) -> [f32; MAX_VOICES] {
+        let mut frequencies = [0.0; MAX_VOICES];
+        for (i, cached_freq) in self.cached_frequencies.iter().enumerate() {
+            let freq_bits = cached_freq.load(core::sync::atomic::Ordering::Relaxed);
+            frequencies[i] = u32_to_f32(freq_bits);
+        }
+        frequencies
     }
 }

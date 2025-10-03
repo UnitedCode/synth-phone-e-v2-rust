@@ -587,6 +587,7 @@ mod rtic_app {
                 previous_pitch_shift_ratio,
                 app_state_machine,
                 in_pointer_cached,
+                voice_manager,
             ],
             local = [
                 last_input_phases,
