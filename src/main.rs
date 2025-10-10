@@ -268,10 +268,10 @@ mod rtic_app {
                 128,
             );
 
-            // let image = Image::new(&bmp, Point::new(0, 0));
-            // image.draw(&mut display).expect("Failed to display image");
-            // display.flush().expect("Could not write to display");
-            // display.clear();
+            let image = Image::new(&sprite_atlas, Point::new(0, 0));
+            image.draw(&mut display).expect("Failed to display image");
+            display.flush().expect("Could not write to display");
+            display.clear();
 
             let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));

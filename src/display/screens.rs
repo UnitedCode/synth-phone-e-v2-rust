@@ -42,7 +42,7 @@ pub fn draw_processing_screen(
 
     // Process profile name
     let process_profile = match process {
-        ProcessingProfile::Autotune => "Pitch Ctrl",
+        ProcessingProfile::PitchControl => "Pitch Ctrl",
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
         ProcessingProfile::Harmony => "Harmony",
@@ -127,7 +127,7 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProf
     write!(&mut vol_buffer, "{volume}").expect("Failed converting volume to string");
 
     let process_profile = match process {
-        ProcessingProfile::Autotune => "Pitch Ctrl",
+        ProcessingProfile::PitchControl => "Pitch Ctrl",
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
         ProcessingProfile::Harmony => "Harmony",

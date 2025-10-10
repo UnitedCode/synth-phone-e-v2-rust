@@ -1,5 +1,5 @@
 use embedded_graphics::{
-    image::{Image, ImageRawBE, SubImage},
+    image::{Image, ImageRawBE},
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::Rectangle,
@@ -310,8 +310,8 @@ pub fn draw_process_indicator(
 ) {
     use crate::state_machine::ProcessingProfile;
     let sprite = match (process, is_pressed) {
-        (ProcessingProfile::Autotune, true) => &SPRITE_DATA.pitchctrl_on,
-        (ProcessingProfile::Autotune, false) => &SPRITE_DATA.pitchctrl_off,
+        (ProcessingProfile::PitchControl, true) => &SPRITE_DATA.pitchctrl_on,
+        (ProcessingProfile::PitchControl, false) => &SPRITE_DATA.pitchctrl_off,
         (ProcessingProfile::Vocode, true) => &SPRITE_DATA.vocode_on,
         (ProcessingProfile::Vocode, false) => &SPRITE_DATA.vocode_off,
         (ProcessingProfile::Dry, true) => &SPRITE_DATA.voice_on,

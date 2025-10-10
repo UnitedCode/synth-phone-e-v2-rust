@@ -94,7 +94,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
         let frequency = crate::midi::MidiEvent::note_to_frequency(note);
-        
+
         // First, check if this note is already playing - if so, retrigger it
         for (i, voice) in self.voices.iter_mut().enumerate() {
             if voice.note == Some(note) && voice.channel == channel {
@@ -102,7 +102,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 // Apply current pitch bend
                 voice.apply_pitch_bend(note, self.pitch_bend_ratio);
                 // Update atomic frequency cache
-                self.cached_frequencies[i].store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
+                self.cached_frequencies[i]
+                    .store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
                 return;
             }
         }
@@ -114,7 +115,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 // Apply current pitch bend
                 voice.apply_pitch_bend(note, self.pitch_bend_ratio);
                 // Update atomic frequency cache
-                self.cached_frequencies[i].store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
+                self.cached_frequencies[i]
+                    .store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
                 return;
             }
         }
@@ -127,7 +129,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         self.voices[0].note_on(note, velocity, channel);
         self.voices[0].apply_pitch_bend(note, self.pitch_bend_ratio);
         // Update atomic frequency cache for stolen voice
-        self.cached_frequencies[0].store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
+        self.cached_frequencies[0]
+            .store(f32_to_u32(frequency), core::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn note_off(&mut self, note: u8, channel: u8) {
@@ -170,7 +173,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 // Update cached frequency with pitch bend applied
                 let base_freq = crate::midi::MidiEvent::note_to_frequency(note);
                 let bent_freq = base_freq * (1.0 + bend_ratio * 0.1);
-                self.cached_frequencies[i].store(f32_to_u32(bent_freq), core::sync::atomic::Ordering::Relaxed);
+                self.cached_frequencies[i]
+                    .store(f32_to_u32(bent_freq), core::sync::atomic::Ordering::Relaxed);
             }
         }
     }
