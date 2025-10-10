@@ -58,7 +58,7 @@ pub fn audio_handler(
             });
 
             // ************** BIT DEPTH REDUCE **************
-            out_sample = bitcrush(out_sample, bit_depth as u8);
+            out_sample = bitcrush(out_sample, bit_depth as i8);
 
             // ************** PROCESS MIDI EVENTS **************
             // Process MIDI events when we have available CPU cycles
@@ -313,11 +313,11 @@ pub fn handle_vocal_effects(
     }
 
     let musical_settings = MusicalSettings {
-        formant,
-        note,
-        key,
-        octave,
-        mode,
+        formant: formant,
+        note: note,
+        key: key,
+        octave: octave,
+        mode: mode,
     };
     let config = VocalEffectsConfig::default();
     let mut input_buffer = [0.0; FFT_SIZE];
