@@ -26,10 +26,10 @@ pub fn draw_splash_screen(display: &mut LcdDisplay, atlas: &ImageRawBE<BinaryCol
 
 pub fn draw_processing_screen(
     process: ProcessingProfile,
-    key: i32,
-    octave: i32,
-    note: i32,
-    volume: i32,
+    key: i8,
+    octave: i8,
+    note: i8,
+    volume: i8,
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
 ) {
@@ -76,15 +76,15 @@ pub fn draw_processing_screen(
 #[allow(clippy::too_many_arguments)]
 pub fn draw_effects_screen(
     process: ProcessingProfile,
-    key: i32,
-    octave: i32,
-    formant: i32,
-    crush: i32,
-    volume: i32,
+    key: i8,
+    octave: i8,
+    formant: i8,
+    crush: i8,
+    volume: i8,
     key_down_pressed: bool,
     process_cycle_pressed: bool,
     key_up_pressed: bool,
-    waveform: i32,
+    waveform: i8,
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
 ) {
@@ -107,7 +107,7 @@ pub fn draw_effects_screen(
     draw_effects_text(display, key, process, volume);
 }
 
-fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProfile, volume: i32) {
+fn draw_effects_text(display: &mut LcdDisplay, key: i8, process: ProcessingProfile, volume: i8) {
     let normal_style = normal_text();
     let inverted_style = inverted_text();
 
@@ -153,9 +153,9 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i32, process: ProcessingProf
 }
 
 pub fn draw_menu_screen(
-    prev: (&str, i32),
-    current: (&str, i32),
-    next: (&str, i32),
+    prev: (&str, i8),
+    current: (&str, i8),
+    next: (&str, i8),
     is_editing: bool,
     display: &mut LcdDisplay,
 ) {

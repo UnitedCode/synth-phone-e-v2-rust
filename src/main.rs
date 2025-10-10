@@ -37,11 +37,7 @@ mod rtic_app {
             midi::{midi_voice::VoiceManager, try_enqueue_midi_event, MidiEvent, MidiReceiver},
             state_machine::{AppState, AppStateMachine, MenuState},
         };
-        use embedded_graphics::{
-            image::{Image, ImageRawBE},
-            pixelcolor::BinaryColor,
-            prelude::*,
-        };
+        use embedded_graphics::{image::ImageRawBE, pixelcolor::BinaryColor};
         use fugit::RateExtU32;
         use heapless;
         use libdaisy::{
@@ -68,7 +64,6 @@ mod rtic_app {
             audio::{Oscillator, Waveform},
             ring_buffer::RingBuffer,
         };
-        use tinybmp::Bmp;
 
         type LcdDisplay = Ssd1306<
             ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>,
@@ -112,7 +107,6 @@ mod rtic_app {
         struct Local {
             audio: audio::Audio,
             buffer: audio::AudioBuffer,
-            button: hid::Switch<Daisy28<Input>>,
             timer2: Timer<stm32::TIM2>,
             knob_1: Knob,
             display: LcdDisplay,
@@ -340,7 +334,6 @@ mod rtic_app {
                 Local {
                     audio: system.audio,
                     buffer,
-                    button: switch1,
                     timer2,
                     knob_1,
                     display,

@@ -1,5 +1,5 @@
 use embedded_graphics::{
-    image::{Image, ImageRawBE, SubImage},
+    image::{Image, ImageRawBE},
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::Rectangle,
@@ -209,7 +209,7 @@ pub fn draw_splash(display: &mut crate::types::LcdDisplay, atlas: &ImageRawBE<Bi
 pub fn draw_octave(
     display: &mut crate::types::LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
-    octave: i32,
+    octave: i8,
 ) {
     let sprite = match octave {
         1 => &SPRITE_DATA.low_oct,
@@ -223,7 +223,7 @@ pub fn draw_octave(
 pub fn draw_crush(
     display: &mut crate::types::LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
-    crush: i32,
+    crush: i8,
 ) {
     let sprite = match crush {
         1 => &SPRITE_DATA.crush_one,
@@ -237,7 +237,7 @@ pub fn draw_crush(
 pub fn draw_formant(
     display: &mut crate::types::LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
-    formant: i32,
+    formant: i8,
 ) {
     let sprite = match formant {
         1 => &SPRITE_DATA.formant_male,
@@ -251,7 +251,7 @@ pub fn draw_formant(
 pub fn draw_waveform(
     display: &mut crate::types::LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
-    waveform: i32,
+    waveform: i8,
 ) {
     for i in 0..3 {
         let sprite = match i {
