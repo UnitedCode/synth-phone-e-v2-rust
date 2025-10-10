@@ -3,7 +3,7 @@
 // New state machine structure only
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ProcessingProfile {
-    Autotune,
+    PitchControl,
     Vocode,
     Dry,
     Harmony,
@@ -176,10 +176,10 @@ impl AppState {
         match (self, event) {
             // From Splash screen
             (AppState::Splash, AppEvent::SplashComplete) => {
-                AppState::EffectsProfile(ProcessingProfile::Autotune)
+                AppState::EffectsProfile(ProcessingProfile::PitchControl)
             }
             (AppState::Splash, AppEvent::EncoderPress) => {
-                AppState::EffectsProfile(ProcessingProfile::Autotune)
+                AppState::EffectsProfile(ProcessingProfile::PitchControl)
             }
 
             // Encoder press to toggle between Processing and Effects
@@ -220,7 +220,7 @@ impl AppState {
     /// Helper function to cycle through processing profiles
     pub fn cycle_profile(&self) -> Self {
         match self {
-            AppState::EffectsProfile(ProcessingProfile::Autotune) => {
+            AppState::EffectsProfile(ProcessingProfile::PitchControl) => {
                 AppState::EffectsProfile(ProcessingProfile::Vocode)
             }
             AppState::EffectsProfile(ProcessingProfile::Vocode) => {
@@ -233,9 +233,9 @@ impl AppState {
                 AppState::EffectsProfile(ProcessingProfile::Phone)
             }
             AppState::EffectsProfile(ProcessingProfile::Phone) => {
-                AppState::EffectsProfile(ProcessingProfile::Autotune)
+                AppState::EffectsProfile(ProcessingProfile::PitchControl)
             }
-            AppState::Processing(ProcessingProfile::Autotune) => {
+            AppState::Processing(ProcessingProfile::PitchControl) => {
                 AppState::Processing(ProcessingProfile::Vocode)
             }
             AppState::Processing(ProcessingProfile::Vocode) => {
@@ -248,7 +248,7 @@ impl AppState {
                 AppState::Processing(ProcessingProfile::Phone)
             }
             AppState::Processing(ProcessingProfile::Phone) => {
-                AppState::Processing(ProcessingProfile::Autotune)
+                AppState::Processing(ProcessingProfile::PitchControl)
             }
             // For any other state, don't change
             _ => *self,
@@ -439,7 +439,7 @@ impl AppStateMachine {
                     // Row 3: Formant controls or waveform
                     7..=9 => {
                         match profile {
-                            ProcessingProfile::Autotune
+                            ProcessingProfile::PitchControl
                             | ProcessingProfile::Harmony
                             | ProcessingProfile::Phone => {
                                 // map 7/8/9 -> male/none/female (or whatever mapping you want)
