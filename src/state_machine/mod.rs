@@ -27,53 +27,90 @@ pub enum MenuState {
 }
 
 /// Menu items available for adjustment
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum MenuItem {
-    BitRate1,
-    BitRate2,
-    SampleRate1,
-    SampleRate2,
-    FormantMale,
-    FormantFemale,
-    AutotuneSpeed,
-    Magnitude,
-    PadMatrix,
+// Macro to generate MenuItem enum and related implementations
+macro_rules! menu_items {
+    ($(
+        $variant:ident => {
+            field: $field:ident,
+            name: $name:expr,
+            min: $min:expr,
+            max: $max:expr $(,)?
+        }
+    ),* $(,)?) => {
+        // Generate the MenuItem enum
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum MenuItem {
+            $($variant,)*
+        }
+
+        // Generate the MENU_ITEMS array
+        pub const MENU_ITEMS: [MenuItem; menu_items!(@count $($variant)*)] = [
+            $(MenuItem::$variant,)*
+        ];
+
+        impl MenuValues {
+            /// Get a value for a specific menu item
+            pub fn get(&self, item: MenuItem) -> i8 {
+                match item {
+                    $(MenuItem::$variant => self.$field,)*
+                }
+            }
+
+            /// Set a value for a specific menu item (with appropriate clamping)
+            pub fn set(&mut self, item: MenuItem, value: i8) {
+                match item {
+                    $(MenuItem::$variant => self.$field = value.clamp($min, $max),)*
+                }
+            }
+
+            /// Get a user-friendly name for a menu item
+            pub fn get_item_name(item: MenuItem) -> &'static str {
+                match item {
+                    $(MenuItem::$variant => $name,)*
+                }
+            }
+        }
+    };
+
+    // Helper to count variants
+    (@count) => { 0 };
+    (@count $head:ident $($tail:ident)*) => { 1 + menu_items!(@count $($tail)*) };
 }
 
-/// Array of all menu items for iteration
-pub const MENU_ITEMS: [MenuItem; 9] = [
-    MenuItem::BitRate1,
-    MenuItem::BitRate2,
-    MenuItem::SampleRate1,
-    MenuItem::SampleRate2,
-    MenuItem::FormantMale,
-    MenuItem::FormantFemale,
-    MenuItem::AutotuneSpeed,
-    MenuItem::Magnitude,
-    MenuItem::PadMatrix,
-];
+// Define all menu items with their metadata in one place
+menu_items! {
+    BitRate1 => { field: bit_rate_soft, name: "Bit Rate 1", min: 4, max: 32 },
+    BitRate2 => { field: bit_rate_harsh, name: "Bit Rate 2", min: 4, max: 32 },
+    SampleRate1 => { field: sample_reduction_soft, name: "Sample Rate 1", min: 1, max: 32 },
+    SampleRate2 => { field: sample_reduction_harsh, name: "Sample Rate 2", min: 1, max: 32 },
+    FormantMale => { field: formant_male, name: "Formant Male", min: 1, max: 10 },
+    FormantFemale => { field: formant_female, name: "Formant Female", min: 1, max: 10 },
+    AutotuneSpeed => { field: autotune_speed, name: "Autotune Speed", min: 1, max: 10 },
+    Magnitude => { field: magnitude, name: "Magnitude", min: 1, max: 10 },
+    PadMatrix => { field: pad_matrix, name: "Pad Matrix", min: 0, max: 1 },
+}
 
 /// Storage for all adjustable menu values
 #[derive(Debug, Clone, Copy)]
 pub struct MenuValues {
-    pub bit_rate_1: i32,
-    pub bit_rate_2: i32,
-    pub sample_reduction_1: i32,
-    pub sample_reduction_2: i32,
-    pub formant_male: i32,
-    pub formant_female: i32,
-    pub autotune_speed: i32,
-    pub magnitude: i32,
-    pub pad_matrix: i32,
+    pub bit_rate_soft: i8,
+    pub bit_rate_harsh: i8,
+    pub sample_reduction_soft: i8,
+    pub sample_reduction_harsh: i8,
+    pub formant_male: i8,
+    pub formant_female: i8,
+    pub autotune_speed: i8,
+    pub magnitude: i8,
+    pub pad_matrix: i8,
 }
 
 impl Default for MenuValues {
     fn default() -> Self {
         Self {
-            bit_rate_1: 32,
-            bit_rate_2: 10,
-            sample_reduction_1: 5,
-            sample_reduction_2: 16,
+            bit_rate_soft: 32,
+            bit_rate_harsh: 10,
+            sample_reduction_soft: 5,
+            sample_reduction_harsh: 16,
             formant_male: 5,
             formant_female: 5,
             autotune_speed: 5,
@@ -85,53 +122,6 @@ impl Default for MenuValues {
 
 use log::info;
 
-impl MenuValues {
-    /// Get a value for a specific menu item
-    pub fn get(&self, item: MenuItem) -> i32 {
-        match item {
-            MenuItem::BitRate1 => self.bit_rate_1,
-            MenuItem::BitRate2 => self.bit_rate_2,
-            MenuItem::SampleRate1 => self.sample_reduction_1,
-            MenuItem::SampleRate2 => self.sample_reduction_2,
-            MenuItem::FormantMale => self.formant_male,
-            MenuItem::FormantFemale => self.formant_female,
-            MenuItem::AutotuneSpeed => self.autotune_speed,
-            MenuItem::Magnitude => self.magnitude,
-            MenuItem::PadMatrix => self.pad_matrix,
-        }
-    }
-
-    /// Set a value for a specific menu item (with appropriate clamping)
-    pub fn set(&mut self, item: MenuItem, value: i32) {
-        match item {
-            MenuItem::BitRate1 => self.bit_rate_1 = value.clamp(4, 32),
-            MenuItem::BitRate2 => self.bit_rate_2 = value.clamp(4, 32),
-            MenuItem::SampleRate1 => self.sample_reduction_1 = value.clamp(1, 32),
-            MenuItem::SampleRate2 => self.sample_reduction_2 = value.clamp(1, 32),
-            MenuItem::FormantMale => self.formant_male = value.clamp(1, 10),
-            MenuItem::FormantFemale => self.formant_female = value.clamp(1, 10),
-            MenuItem::AutotuneSpeed => self.autotune_speed = value.clamp(1, 10),
-            MenuItem::Magnitude => self.magnitude = value.clamp(1, 10),
-            MenuItem::PadMatrix => self.pad_matrix = value.clamp(0, 1),
-        }
-    }
-
-    /// Get a user-friendly name for a menu item
-    pub fn get_item_name(item: MenuItem) -> &'static str {
-        match item {
-            MenuItem::BitRate1 => "Bit Rate 1",
-            MenuItem::BitRate2 => "Bit Rate 2",
-            MenuItem::SampleRate1 => "Sample Rate 1",
-            MenuItem::SampleRate2 => "Sample Rate 2",
-            MenuItem::FormantMale => "Formant Male",
-            MenuItem::FormantFemale => "Formant Female",
-            MenuItem::AutotuneSpeed => "Autotune Speed",
-            MenuItem::Magnitude => "Magnitude",
-            MenuItem::PadMatrix => "Pad Matrix",
-        }
-    }
-}
-
 /// Events that can be triggered by hardware inputs
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AppEvent {
@@ -139,7 +129,7 @@ pub enum AppEvent {
     SplashComplete,     // Splash screen animation finished
     EncoderPress,       // Single press of the encoder
     EncoderDoublePress, // Double press of the encoder
-    EncoderRotate(i32), // Rotation of the encoder (positive or negative)
+    EncoderRotate(i8),  // Rotation of the encoder (positive or negative)
     HangupPress,        // Hangup button press
 
     // Button presses in different profiles
@@ -151,10 +141,10 @@ pub enum AppEvent {
     SetProcessingProfile(ProcessingProfile), // Set a specific processing profile
 
     // Effects parameters
-    SetOctave(i32),   // Set octave (low=-1, normal=0, high=1)
-    SetBitCrush(i32), // Set bit crush (1=crush1, 0=none, 2=crush2)
-    SetFormant(i32),  // Set formant (-1=male, 0=none, 1=female)
-    KeyChange(i32),   // Change musical key up or down
+    SetOctave(i8),   // Set octave (low=-1, normal=0, high=1)
+    SetBitCrush(i8), // Set bit crush (1=crush1, 0=none, 2=crush2)
+    SetFormant(i8),  // Set formant (-1=male, 0=none, 1=female)
+    KeyChange(i8),   // Change musical key up or down
 
     NoOp,
 }
@@ -299,15 +289,15 @@ impl MenuState {
 pub struct AppStateMachine {
     state: AppState,
     values: MenuValues,
-    current_key: i32,
-    current_octave: i32,
-    current_bitcrush: i32,
-    current_formant: i32,
-    current_waveform: i32,
-    sample_reduction: i32,
-    bit_rate: i32,
-    pub volume: i32,
-    pub note: i32,
+    current_key: i8,
+    current_octave: i8,
+    current_bitcrush: i8,
+    current_formant: i8,
+    current_waveform: i8,
+    sample_reduction: i8,
+    bit_rate: i8,
+    pub volume: i8,
+    pub note: i8,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
@@ -317,28 +307,28 @@ pub struct AppStateMachine {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct AppStateMachineSnapshot {
     pub current_state: AppState,
-    pub key: i32,
-    pub octave: i32,
-    pub note: i32,
-    pub volume: i32,
-    pub crush: i32,
-    pub sample_reduction: i32,
-    pub bit_rate: i32,
-    pub formant: i32,
-    pub autotune_speed: i32,
-    pub magnitude: i32,
-    pub pad_matrix: i32,
+    pub key: i8,
+    pub octave: i8,
+    pub note: i8,
+    pub volume: i8,
+    pub crush: i8,
+    pub sample_reduction: i8,
+    pub bit_rate: i8,
+    pub formant: i8,
+    pub autotune_speed: i8,
+    pub magnitude: i8,
+    pub pad_matrix: i8,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
-    pub waveform: i32,
+    pub waveform: i8,
 }
 
 // Add a MenuContext struct for menu display
 pub struct MenuContext {
-    pub previous_item: (&'static str, i32),
-    pub current_item: (&'static str, i32),
-    pub next_item: (&'static str, i32),
+    pub previous_item: (&'static str, i8),
+    pub current_item: (&'static str, i8),
+    pub next_item: (&'static str, i8),
 }
 
 impl Default for AppStateMachine {
@@ -408,7 +398,7 @@ impl AppStateMachine {
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
                 self.play_note(key);
-                self.note = key as i32;
+                self.note = key as i8;
             }
 
             // Handle keypad presses in Effects profile
@@ -422,8 +412,8 @@ impl AppStateMachine {
                     // Row 2: Bit crush controls
                     4 => {
                         self.current_bitcrush = 1;
-                        self.bit_rate = self.values.bit_rate_1;
-                        self.sample_reduction = self.values.sample_reduction_1;
+                        self.bit_rate = self.values.bit_rate_soft;
+                        self.sample_reduction = self.values.sample_reduction_soft;
                     }
                     5 => {
                         self.current_bitcrush = 0;
@@ -432,8 +422,8 @@ impl AppStateMachine {
                     }
                     6 => {
                         self.current_bitcrush = 2;
-                        self.bit_rate = self.values.bit_rate_2;
-                        self.sample_reduction = self.values.sample_reduction_2;
+                        self.bit_rate = self.values.bit_rate_harsh;
+                        self.sample_reduction = self.values.sample_reduction_harsh;
                     }
 
                     // Row 3: Formant controls or waveform
@@ -536,10 +526,10 @@ impl AppStateMachine {
     pub fn current(&self) -> MenuContext {
         let idx = self.active_menu_index().unwrap_or(0);
         let menu_items = [
-            ("BitRate1", self.values.bit_rate_1),
-            ("BitRate2", self.values.bit_rate_2),
-            ("SampleRate1", self.values.sample_reduction_1),
-            ("SampleRate2", self.values.sample_reduction_2),
+            ("BitRate1", self.values.bit_rate_soft),
+            ("BitRate2", self.values.bit_rate_harsh),
+            ("SampleRate1", self.values.sample_reduction_soft),
+            ("SampleRate2", self.values.sample_reduction_harsh),
             ("FormantMale", self.values.formant_male),
             ("FormantFemale", self.values.formant_female),
             ("Speed", self.values.autotune_speed),
@@ -572,8 +562,8 @@ impl AppStateMachine {
         // Convert keypad position to a note in the current key and octave
         // Implementation depends on your audio system
         // This is just a placeholder
-        self.note = key_index as i32; //self.current_key + (key_index as i32) + (self.current_octave * 12);
-                                      // Play the note with current effects
+        self.note = key_index as i8; //self.current_key + (key_index as i8) + (self.current_octave * 12);
+                                     // Play the note with current effects
         info!("the note after {}", self.note);
     }
 
@@ -583,7 +573,7 @@ impl AppStateMachine {
     }
 
     // Get processing-related parameters
-    // pub fn get_processing_params(&self) -> (i32, i32, i32, i32) {
+    // pub fn get_processing_params(&self) -> (i8, i8, i8, i8) {
     //     (
     //         self.current_key,
     //         self.current_octave,
@@ -593,13 +583,13 @@ impl AppStateMachine {
     // }
 }
 
-/// A small helper function to clamp an i32.
-fn clamp_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
+/// A small helper function to clamp an i8.
+fn clamp_value(current: i8, delta: i8, min: i8, max: i8) -> i8 {
     (current + delta).clamp(min, max)
 }
 
 #[allow(dead_code)]
-fn wrap_value(current: i32, delta: i32, min: i32, max: i32) -> i32 {
+fn wrap_value(current: i8, delta: i8, min: i8, max: i8) -> i8 {
     let range = max - min + 1;
     ((current + delta - min) % range + range) % range + min
 }

@@ -58,7 +58,7 @@ pub fn audio_handler(
             });
 
             // ************** BIT DEPTH REDUCE **************
-            out_sample = bitcrush(out_sample, bit_depth as u8);
+            out_sample = bitcrush(out_sample, bit_depth as i8);
 
             // ************** PROCESS MIDI EVENTS **************
             // Process MIDI events when we have available CPU cycles

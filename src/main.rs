@@ -37,11 +37,7 @@ mod rtic_app {
             midi::{midi_voice::VoiceManager, try_enqueue_midi_event, MidiEvent, MidiReceiver},
             state_machine::{AppState, AppStateMachine, MenuState},
         };
-        use embedded_graphics::{
-            image::{Image, ImageRawBE},
-            pixelcolor::BinaryColor,
-            prelude::*,
-        };
+        use embedded_graphics::{image::ImageRawBE, pixelcolor::BinaryColor};
         use fugit::RateExtU32;
         use heapless;
         use libdaisy::{
@@ -68,7 +64,6 @@ mod rtic_app {
             audio::{Oscillator, Waveform},
             ring_buffer::RingBuffer,
         };
-        use tinybmp::Bmp;
 
         type LcdDisplay = Ssd1306<
             ssd1306::prelude::I2CInterface<I2c<stm32h7xx_hal::stm32::I2C1>>,
@@ -112,7 +107,6 @@ mod rtic_app {
         struct Local {
             audio: audio::Audio,
             buffer: audio::AudioBuffer,
-            button: hid::Switch<Daisy28<Input>>,
             timer2: Timer<stm32::TIM2>,
             knob_1: Knob,
             display: LcdDisplay,
@@ -268,11 +262,6 @@ mod rtic_app {
                 128,
             );
 
-            let image = Image::new(&sprite_atlas, Point::new(0, 0));
-            image.draw(&mut display).expect("Failed to display image");
-            display.flush().expect("Could not write to display");
-            display.clear();
-
             let mut switch1 = hid::Switch::new(daisy28_btn, hid::SwitchType::PullUp);
             switch1.set_double_thresh(Some(500));
             switch1.set_held_thresh(Some(150));
@@ -326,6 +315,7 @@ mod rtic_app {
             let midi_receiver = MidiReceiver::new(midi_rx);
 
             info!("Startup done!! yo!");
+            startup_complete_task::spawn().ok();
 
             (
                 Shared {
@@ -337,14 +327,13 @@ mod rtic_app {
                     old_matrix_state: [[false; 3]; 4],
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
-                    display_needs_update: false,
+                    display_needs_update: true,
                     midi_events: heapless::spsc::Queue::new(),
                     voice_manager: VoiceManager::new(SAMPLE_RATE),
                 },
                 Local {
                     audio: system.audio,
                     buffer,
-                    button: switch1,
                     timer2,
                     knob_1,
                     display,
@@ -375,6 +364,26 @@ mod rtic_app {
             loop {
                 cortex_m::asm::nop();
             }
+        }
+
+        #[task(
+            shared = [app_state_machine, display_needs_update],
+            priority = 1
+        )]
+        fn startup_complete_task(mut ctx: startup_complete_task::Context) {
+            use crate::state_machine::AppEvent;
+
+            log::info!("Startup complete, transitioning away from splash screen");
+
+            ctx.shared.app_state_machine.lock(|state_machine| {
+                state_machine.handle_event(AppEvent::SplashComplete);
+            });
+
+            ctx.shared.display_needs_update.lock(|flag| {
+                *flag = true;
+            });
+
+            display_update_task::spawn().ok();
         }
 
         #[task(binds = DMA1_STR1,
