@@ -25,31 +25,68 @@ pub enum MenuState {
 }
 
 /// Menu items available for adjustment
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum MenuItem {
-    BitRate1,
-    BitRate2,
-    SampleRate1,
-    SampleRate2,
-    FormantMale,
-    FormantFemale,
-    AutotuneSpeed,
-    Magnitude,
-    PadMatrix,
+// Macro to generate MenuItem enum and related implementations
+macro_rules! menu_items {
+    ($(
+        $variant:ident => {
+            field: $field:ident,
+            name: $name:expr,
+            min: $min:expr,
+            max: $max:expr $(,)?
+        }
+    ),* $(,)?) => {
+        // Generate the MenuItem enum
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum MenuItem {
+            $($variant,)*
+        }
+
+        // Generate the MENU_ITEMS array
+        pub const MENU_ITEMS: [MenuItem; menu_items!(@count $($variant)*)] = [
+            $(MenuItem::$variant,)*
+        ];
+
+        impl MenuValues {
+            /// Get a value for a specific menu item
+            pub fn get(&self, item: MenuItem) -> i8 {
+                match item {
+                    $(MenuItem::$variant => self.$field,)*
+                }
+            }
+
+            /// Set a value for a specific menu item (with appropriate clamping)
+            pub fn set(&mut self, item: MenuItem, value: i8) {
+                match item {
+                    $(MenuItem::$variant => self.$field = value.clamp($min, $max),)*
+                }
+            }
+
+            /// Get a user-friendly name for a menu item
+            pub fn get_item_name(item: MenuItem) -> &'static str {
+                match item {
+                    $(MenuItem::$variant => $name,)*
+                }
+            }
+        }
+    };
+
+    // Helper to count variants
+    (@count) => { 0 };
+    (@count $head:ident $($tail:ident)*) => { 1 + menu_items!(@count $($tail)*) };
 }
 
-/// Array of all menu items for iteration
-pub const MENU_ITEMS: [MenuItem; 9] = [
-    MenuItem::BitRate1,
-    MenuItem::BitRate2,
-    MenuItem::SampleRate1,
-    MenuItem::SampleRate2,
-    MenuItem::FormantMale,
-    MenuItem::FormantFemale,
-    MenuItem::AutotuneSpeed,
-    MenuItem::Magnitude,
-    MenuItem::PadMatrix,
-];
+// Define all menu items with their metadata in one place
+menu_items! {
+    BitRate1 => { field: bit_rate_soft, name: "Bit Rate 1", min: 4, max: 32 },
+    BitRate2 => { field: bit_rate_harsh, name: "Bit Rate 2", min: 4, max: 32 },
+    SampleRate1 => { field: sample_reduction_soft, name: "Sample Rate 1", min: 1, max: 32 },
+    SampleRate2 => { field: sample_reduction_harsh, name: "Sample Rate 2", min: 1, max: 32 },
+    FormantMale => { field: formant_male, name: "Formant Male", min: 1, max: 10 },
+    FormantFemale => { field: formant_female, name: "Formant Female", min: 1, max: 10 },
+    AutotuneSpeed => { field: autotune_speed, name: "Autotune Speed", min: 1, max: 10 },
+    Magnitude => { field: magnitude, name: "Magnitude", min: 1, max: 10 },
+    PadMatrix => { field: pad_matrix, name: "Pad Matrix", min: 0, max: 1 },
+}
 
 /// Storage for all adjustable menu values
 #[derive(Debug, Clone, Copy)]
@@ -82,53 +119,6 @@ impl Default for MenuValues {
 }
 
 use log::info;
-
-impl MenuValues {
-    /// Get a value for a specific menu item
-    pub fn get(&self, item: MenuItem) -> i8 {
-        match item {
-            MenuItem::BitRate1 => self.bit_rate_soft,
-            MenuItem::BitRate2 => self.bit_rate_harsh,
-            MenuItem::SampleRate1 => self.sample_reduction_soft,
-            MenuItem::SampleRate2 => self.sample_reduction_harsh,
-            MenuItem::FormantMale => self.formant_male,
-            MenuItem::FormantFemale => self.formant_female,
-            MenuItem::AutotuneSpeed => self.autotune_speed,
-            MenuItem::Magnitude => self.magnitude,
-            MenuItem::PadMatrix => self.pad_matrix,
-        }
-    }
-
-    /// Set a value for a specific menu item (with appropriate clamping)
-    pub fn set(&mut self, item: MenuItem, value: i8) {
-        match item {
-            MenuItem::BitRate1 => self.bit_rate_soft = value.clamp(4, 32),
-            MenuItem::BitRate2 => self.bit_rate_harsh = value.clamp(4, 32),
-            MenuItem::SampleRate1 => self.sample_reduction_soft = value.clamp(1, 32),
-            MenuItem::SampleRate2 => self.sample_reduction_harsh = value.clamp(1, 32),
-            MenuItem::FormantMale => self.formant_male = value.clamp(1, 10),
-            MenuItem::FormantFemale => self.formant_female = value.clamp(1, 10),
-            MenuItem::AutotuneSpeed => self.autotune_speed = value.clamp(1, 10),
-            MenuItem::Magnitude => self.magnitude = value.clamp(1, 10),
-            MenuItem::PadMatrix => self.pad_matrix = value.clamp(0, 1),
-        }
-    }
-
-    /// Get a user-friendly name for a menu item
-    pub fn get_item_name(item: MenuItem) -> &'static str {
-        match item {
-            MenuItem::BitRate1 => "Bit Rate 1",
-            MenuItem::BitRate2 => "Bit Rate 2",
-            MenuItem::SampleRate1 => "Sample Rate 1",
-            MenuItem::SampleRate2 => "Sample Rate 2",
-            MenuItem::FormantMale => "Formant Male",
-            MenuItem::FormantFemale => "Formant Female",
-            MenuItem::AutotuneSpeed => "Autotune Speed",
-            MenuItem::Magnitude => "Magnitude",
-            MenuItem::PadMatrix => "Pad Matrix",
-        }
-    }
-}
 
 /// Events that can be triggered by hardware inputs
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
