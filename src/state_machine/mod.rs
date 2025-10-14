@@ -430,8 +430,7 @@ impl AppStateMachine {
                     7..=9 => {
                         match profile {
                             ProcessingProfile::PitchControl
-                            | ProcessingProfile::Harmony
-                            | ProcessingProfile::Phone => {
+                            | ProcessingProfile::Harmony => {
                                 // map 7/8/9 -> male/none/female (or whatever mapping you want)
                                 self.current_formant = match key {
                                     7 => 1, // male
@@ -440,7 +439,9 @@ impl AppStateMachine {
                                     _ => 0,
                                 };
                             }
-                            ProcessingProfile::Vocode | ProcessingProfile::Dry => {
+                            ProcessingProfile::Vocode 
+                            | ProcessingProfile::Dry
+                            | ProcessingProfile::Phone => {
                                 // map 7/8/9 -> waveforms 0/1/2 (example)
                                 self.current_waveform = match key {
                                     7 => 0, // triangle
@@ -451,6 +452,8 @@ impl AppStateMachine {
                             }
                         }
                     }
+
+                    //TODO: add an if phone profile and have tone vs drum options
 
                     // Row 4: Key and profile controls (keys 10-12)
                     10 => {
