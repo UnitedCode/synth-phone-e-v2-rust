@@ -429,8 +429,7 @@ impl AppStateMachine {
                     // Row 3: Formant controls or waveform
                     7..=9 => {
                         match profile {
-                            ProcessingProfile::PitchControl
-                            | ProcessingProfile::Harmony => {
+                            ProcessingProfile::PitchControl | ProcessingProfile::Harmony => {
                                 // map 7/8/9 -> male/none/female (or whatever mapping you want)
                                 self.current_formant = match key {
                                     7 => 1, // male
@@ -439,7 +438,7 @@ impl AppStateMachine {
                                     _ => 0,
                                 };
                             }
-                            ProcessingProfile::Vocode 
+                            ProcessingProfile::Vocode
                             | ProcessingProfile::Dry
                             | ProcessingProfile::Phone => {
                                 // map 7/8/9 -> waveforms 0/1/2 (example)

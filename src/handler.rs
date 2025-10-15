@@ -99,10 +99,10 @@ pub fn audio_handler(
             // ************** ADD MIDI OUTPUT **************
             // Get MIDI sample and mix it with the processed audio
             let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-           // out_sample = out_sample + midi_sample * 0.1; // Mix at 10% volume
+            // out_sample = out_sample + midi_sample * 0.1; // Mix at 10% volume
 
             // Normalize final output
-           // out_sample = normalize_sample(out_sample, 0.8);
+            // out_sample = normalize_sample(out_sample, 0.8);
             // **********************************************
 
             // Check and handle hop counter
