@@ -314,7 +314,6 @@ pub fn handle_vocal_effects(
         }
     }
 
-    // Lock-free frequency access - no more blocking!
     let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
 
     let musical_settings = MusicalSettings {
