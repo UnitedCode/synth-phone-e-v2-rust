@@ -1,12 +1,26 @@
 use log::info;
 use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
+use crate::audio::drum_synth::{DrumSynth, DrumType};
 // Voice management for polyphony
+
+pub enum VoiceType {
+    Synth(Voice),
+    Drum(DrumVoice),
+    //Sample(SampleVoice),
+}
+
 pub struct Voice {
     pub oscillator: Oscillator,
     // None means voice is free
     pub note: Option<u8>,
     pub velocity: u8,
     pub channel: u8,
+}
+
+pub struct DrumVoice {
+    pub synth: DrumSynth,
+    pub note: Option<u8>,
+    pub velocity: u8,
 }
 
 impl Voice {
@@ -56,10 +70,42 @@ impl Voice {
     }
 }
 
+
+impl DrumVoice {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            synth: DrumSynth::new(sample_rate, DrumType::Kick),
+            note: None,
+            velocity: 0,
+        }
+    }
+    
+    pub fn is_free(&self) -> bool {
+        self.note.is_none() || self.synth.is_finished()
+    }
+    
+    pub fn trigger(&mut self, note: u8, velocity: u8, drum_type: DrumType) {
+        self.note = Some(note);
+        self.velocity = velocity;
+        self.synth.set_drum_type(drum_type);
+        self.synth.trigger();
+    }
+    
+    pub fn get_sample(&mut self) -> f32 {
+        if self.note.is_some() {
+            let sample = self.synth.next_value();
+            // Scale by velocity
+            sample * (self.velocity as f32 / 127.0)
+        } else {
+            0.0
+        }
+    }
+}
+
 pub struct VoiceManager<const MAX_VOICES: usize> {
     pub voices: [Voice; MAX_VOICES],
+    pub drum_voices: [DrumVoice; MAX_VOICES],
     pub pitch_bend_ratio: f32,
-    // Lock-free frequency cache for vocal effects
     pub cached_frequencies: [f32; MAX_VOICES],
 }
 
@@ -67,11 +113,13 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     pub fn new(sample_rate: f32) -> Self {
         // Create array of voices using from_fn
         let voices = core::array::from_fn(|_| Voice::new(sample_rate));
+        let drum_voices = core::array::from_fn(|_| DrumVoice::new(sample_rate));
         // Initialize frequency cache with zeros (0.0 Hz)
         let cached_frequencies = [0.0; MAX_VOICES];
 
         Self {
             voices,
+            drum_voices,
             pitch_bend_ratio: 0.0,
             cached_frequencies,
         }
@@ -89,11 +137,18 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         // First, check if this note is already playing - if so, retrigger it
         for (i, voice) in self.voices.iter_mut().enumerate() {
             if voice.note == Some(note) && voice.channel == channel {
+                self.cached_frequencies[i] = frequency;
+
+                if(channel == 10) {
+                    info!("Retriggering note {} on channel {} with velocity {} (drum channel)", note, channel, velocity);
+                } else if channel == 1 {
+                    return;
+                }
+
                 voice.note_on(note, velocity, channel);
                 // Apply current pitch bend
                 voice.apply_pitch_bend(note, self.pitch_bend_ratio);
                 // Update frequency cache
-                self.cached_frequencies[i] = frequency;
                 return;
             }
         }
@@ -101,11 +156,18 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         // Find a free voice
         for (i, voice) in self.voices.iter_mut().enumerate() {
             if voice.is_free() {
+                self.cached_frequencies[i] = frequency;
+
+                if(channel == 10) {
+                    info!("Retriggering note {} on channel {} with velocity {} (drum channel)", note, channel, velocity);
+                } else if channel == 1 {
+                    return;
+                }
+
                 voice.note_on(note, velocity, channel);
                 // Apply current pitch bend
                 voice.apply_pitch_bend(note, self.pitch_bend_ratio);
                 // Update frequency cache
-                self.cached_frequencies[i] = frequency;
                 return;
             }
         }
@@ -117,7 +179,6 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         );
         self.voices[0].note_on(note, velocity, channel);
         self.voices[0].apply_pitch_bend(note, self.pitch_bend_ratio);
-        // Update frequency cache for stolen voice
         self.cached_frequencies[0] ;
     }
 
