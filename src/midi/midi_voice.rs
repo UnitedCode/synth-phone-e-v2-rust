@@ -1,247 +1,191 @@
-use log::info;
-use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
-use crate::audio::drum_synth::{DrumSynth, DrumType};
-use crate::midi::voice_generator::{VoiceType, VoiceTypeId, VoiceGenerator};
-// Voice management for polyphony
+// src/audio/sample_player.rs
+// Pure synthesis - no flash reads
 
-pub struct Voice {
-    pub voice_type: VoiceType,
-    // None means voice is free
-    pub note: Option<u8>,
-    pub velocity: u8,
-    pub channel: u8,
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum DrumType {
+    Kick,
+    Snare,
+    HiHat,
+    Tom,
+    Clap,
+    Cymbal,
 }
 
-impl Voice {
-    // Default to synth, but can be repurposed
-      pub fn new(voice_type: VoiceType) -> Self {
-        Self {
-            voice_type,
-            note: None,
-            velocity: 0,
-            channel: 0,
-        }
-    }
+pub struct DrumSampler {
+    drum_type: DrumType,
+    sample_count: u32,
+    max_samples: u32,
     
-    // Convert voice type on-the-fly when triggered
-    pub fn set_voice_type(&mut self, voice_type: VoiceType) {
-        self.voice_type = voice_type;
-    }
-
-    pub fn set_waveform(&mut self, waveform: Waveform) {
-        if let VoiceType::Synth(osc) = &mut self.voice_type {
-            osc.set_waveform(waveform);
-        }
-    }
-
-    pub fn is_free(&self) -> bool {
-        self.note.is_none()
-    }
-
-    pub fn is_playing(&self, note: u8, channel: u8) -> bool {
-        self.note == Some(note) && self.channel == channel
-    }
-
-    pub fn type_id(&self) -> VoiceTypeId {
-        self.voice_type.type_id()
-    }
-
-    pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
-        self.note = Some(note);
-        self.velocity = velocity;
-        self.channel = channel;
-        //let frequency = crate::midi::MidiEvent::note_to_frequency(note);
-        //self.oscillator.set_freq(frequency);
-        self.voice_type.as_trait_mut().trigger(note, velocity);
-    }
-
-    pub fn note_off(&mut self) {
-        self.voice_type.as_trait_mut().release();
-        self.note = None;
-        self.velocity = 0;
-    }
-
-    pub fn get_sample(&mut self) -> f32 {
-        if self.note.is_some() && self.velocity > 0 {
-            // Scale by velocity (0-127 -> 0.0-1.0)
-            // self.oscillator.next_value() * (self.velocity as f32 / 127.0)
-            self.voice_type.as_trait_mut().get_sample() * (self.velocity as f32 / 127.0)
-        } else {
-            0.0
-        }
-    }
-
-    pub fn apply_pitch_bend(&mut self, note: u8, bend_ratio: f32) {
-        // let base_freq = crate::midi::MidiEvent::note_to_frequency(note);
-        // let bent_freq = base_freq * (1.0 + bend_ratio * 0.1); // +/- 10% bend range
-        // self.oscillator.set_freq(bent_freq);
-
-        self.voice_type.as_trait_mut().apply_pitch_bend(note, bend_ratio);
-    }
+    // State
+    phase: u32,        // Fixed-point phase (16.16)
+    phase_inc: u32,    // Fixed-point increment
+    base_phase_inc: u32, // Starting pitch (for decay)
+    env: u16,          // 16-bit envelope
+    noise: u16,        // LFSR state
 }
 
-pub struct VoiceManager<const MAX_VOICES: usize> {
-    pub voices: [Voice; MAX_VOICES],
-    pub pitch_bend_ratio: f32,
-    pub cached_frequencies: [f32; MAX_VOICES],
-    sample_rate: f32,  // Store this so we can create voice types on demand
-}
-
-impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
-    pub fn new(sample_rate: f32) -> Self {
-        // Create array of voices using from_fn
-        let voices = core::array::from_fn(|_| {
-            Voice::new(VoiceType::new_synth(sample_rate))
-        });
-        // Initialize frequency cache with zeros (0.0 Hz)
-        let cached_frequencies = [0.0; MAX_VOICES];
-
+impl DrumSampler {
+    pub fn new() -> Self {
         Self {
-            voices,
-            pitch_bend_ratio: 0.0,
-            cached_frequencies,
-            sample_rate,
+            drum_type: DrumType::Kick,
+            sample_count: 0,
+            max_samples: 0,
+            phase: 0,
+            phase_inc: 0,
+            base_phase_inc: 10737000, // Default tom ~120Hz
+            env: 0,
+            noise: 0xACE1,
         }
     }
 
-    //TODO: skip setting waveform for voices that are not Osc?
-    pub fn set_waveform(&mut self, waveform: Waveform) {
-        for voice in self.voices.iter_mut() {
-            voice.set_waveform(waveform);
-        }
+    pub fn set_drum_type(&mut self, drum_type: DrumType) {
+        self.drum_type = drum_type;
     }
 
-    pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
-        let frequency = crate::midi::MidiEvent::note_to_frequency(note);
-        let needed_type = if channel == 9 {  // MIDI channel 10 (0-indexed = 9)
-            VoiceTypeId::Drum
-        } else {
-            VoiceTypeId::Synth
+    /// Set pitch for toms (MIDI note number)  
+    pub fn set_pitch(&mut self, note: u8) {
+        // phase_inc = freq * 89478 (for 32-bit phase at 48kHz)
+        self.base_phase_inc = match note {
+            41 => 7158000,   // Low Floor Tom ~80Hz
+            43 => 8948000,   // High Floor Tom ~100Hz
+            45 => 10737000,  // Low Tom ~120Hz
+            47 => 13421000,  // Low-Mid Tom ~150Hz
+            48 => 16106000,  // Hi-Mid Tom ~180Hz
+            50 => 17895000,  // High Tom ~200Hz
+            _ => 10737000,   // Default ~120Hz
         };
+    }
+
+    pub fn trigger(&mut self) {
+        self.sample_count = 0;
+        self.phase = 0;
+        self.noise = 0xACE1;
+        self.env = 0xFFFF;
         
-          // Step 1: Check if this note is already playing (retrigger)
-        for i in 0..MAX_VOICES {
-            if self.voices[i].is_playing(note, channel) {
-                self.voices[i].note_on(note, velocity, channel);
-                self.voices[i].apply_pitch_bend(note, self.pitch_bend_ratio);
-                self.cached_frequencies[i] = frequency * (1.0 + self.pitch_bend_ratio * 0.1);
-                return;
+        match self.drum_type {
+            DrumType::Kick => {
+                self.max_samples = 6000;
+                self.phase_inc = 0; // Not used - we'll use float
+                self.base_phase_inc = 0;
+            }
+            DrumType::Snare => {
+                self.max_samples = 3800;
+                self.phase_inc = 273000;    // ~200Hz
+                self.base_phase_inc = 273000;
+            }
+            DrumType::HiHat => {
+                self.max_samples = 2400;
+                self.phase_inc = 0;
+                self.base_phase_inc = 0;
+            }
+            DrumType::Tom => {
+                self.max_samples = 4000;
+                // NO pitch bend for toms - just start at the target pitch
+                self.phase_inc = self.base_phase_inc;
+            }
+            DrumType::Clap => {
+                self.max_samples = 2900;
+                self.phase_inc = 0;
+                self.base_phase_inc = 0;
+            }
+            DrumType::Cymbal => {
+                self.max_samples = 7200;
+                self.phase_inc = 0;
+                self.base_phase_inc = 0;
             }
         }
-        
-        // Step 2: Find a free voice of the correct type (prefer matching type)
-        for i in 0..MAX_VOICES {
-            if self.voices[i].is_free() && self.voices[i].type_id() == needed_type {
-                self.voices[i].note_on(note, velocity, channel);
-                self.voices[i].apply_pitch_bend(note, self.pitch_bend_ratio);
-                self.cached_frequencies[i] = frequency * (1.0 + self.pitch_bend_ratio * 0.1);
-                return;
-            }
+    }
+
+    #[inline(always)]
+    pub fn next_value(&mut self) -> f32 {
+        if self.sample_count >= self.max_samples || self.env < 100 {
+            return 0.0;
         }
+        self.sample_count += 1;
+
+        // LFSR noise - always update
+        let lsb = self.noise & 1;
+        self.noise >>= 1;
+        if lsb == 1 {
+            self.noise ^= 0xB400;
+        }
+        // Noise: -1.0 to 1.0 range (as i16: -32768 to 32767)
+        let noise = ((self.noise & 0x7FFF) as i16).wrapping_sub(16384) << 1;
+
+        // Square wave from phase
+        let square: i16 = if self.phase < 0x80000000 { 32000 } else { -32000 };
         
-        // Step 3: Find ANY free voice and convert it to the type we need
-        for i in 0..MAX_VOICES {
-            if self.voices[i].is_free() {
-                // Convert voice to correct type
-                let new_generator = match needed_type {
-                    VoiceTypeId::Synth => VoiceType::new_synth(self.sample_rate),
-                    VoiceTypeId::Drum => VoiceType::new_drum(self.sample_rate),
-                    //VoiceTypeId::Sample => VoiceType::new_sample(self.sample_rate),
-                };
-                self.voices[i].set_voice_type(new_generator);
+        // Update phase
+        self.phase = self.phase.wrapping_add(self.phase_inc);
+
+        // Mix based on drum type
+        let raw: i32 = match self.drum_type {
+            DrumType::Kick => {
+                // Pitch decay - slower
+                if self.phase_inc > 81900 {
+                    self.phase_inc = self.phase_inc.saturating_sub(100);
+                }
+                // Env decay - slower (65530/65536 ≈ 0.9999)
+                self.env = ((self.env as u32 * 65530) >> 16) as u16;
+                square as i32
+            }
+            DrumType::Snare => {
+                self.env = ((self.env as u32 * 65500) >> 16) as u16;
+                (square as i32 / 3) + (noise as i32 * 2 / 3)
+            }
+            DrumType::HiHat => {
+                self.env = ((self.env as u32 * 65400) >> 16) as u16;
+                noise as i32
+            }
+            DrumType::Tom => {
+                // NO pitch decay - toms hold their pitch
+                // Just envelope decay
+                self.env = ((self.env as u32 * 65510) >> 16) as u16;
                 
-                self.voices[i].note_on(note, velocity, channel);
-                self.voices[i].apply_pitch_bend(note, self.pitch_bend_ratio);
-                self.cached_frequencies[i] = frequency * (1.0 + self.pitch_bend_ratio * 0.1);
-                return;
+                // Use triangle wave instead of square for cleaner tone
+                // Triangle has fewer harmonics, sounds more like a drum head
+                let tri: i32 = if self.phase < 0x80000000 {
+                    // Rising: 0 to max
+                    ((self.phase >> 16) as i32) - 16384
+                } else {
+                    // Falling: max to 0
+                    16384 - (((self.phase - 0x80000000) >> 16) as i32)
+                };
+                tri * 2  // Scale up
             }
-        }
-        
-        // Step 4: No free voices - voice stealing
-        info!("Voice stealing - note {} on channel {}", note, channel);
-        
-        // Convert stolen voice to correct type
-        let new_generator = match needed_type {
-            VoiceTypeId::Synth => VoiceType::new_synth(self.sample_rate),
-            VoiceTypeId::Drum => VoiceType::new_drum(self.sample_rate),
-            // VoiceTypeId::Sample => VoiceType::new_sample(self.sample_rate),
+            DrumType::Clap => {
+                self.env = ((self.env as u32 * 65450) >> 16) as u16;
+                noise as i32
+            }
+            DrumType::Cymbal => {
+                self.env = ((self.env as u32 * 65510) >> 16) as u16;
+                noise as i32
+            }
         };
-        self.voices[0].set_voice_type(new_generator);
+
+        // Apply envelope (env is 0-65535, raw is ~-32000 to 32000)
+        let out = (raw * self.env as i32) >> 16;
         
-        self.voices[0].note_on(note, velocity, channel);
-        self.voices[0].apply_pitch_bend(note, self.pitch_bend_ratio);
-        self.cached_frequencies[0] = frequency * (1.0 + self.pitch_bend_ratio * 0.1);
+        // Convert to float (-1.0 to 1.0)
+        (out as f32) / 32768.0
     }
+}
 
-    pub fn note_off(&mut self, note: u8, channel: u8) {
-        for (i, voice) in self.voices.iter_mut().enumerate() {
-            if voice.note == Some(note) && voice.channel == channel {
-                voice.note_off();
-                // Clear frequency cache
-                self.cached_frequencies[i] = 0.0;
-                return;
-            }
-        }
+impl Default for DrumSampler {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    pub fn get_mixed_sample(&mut self) -> f32 {
-        let mut mixed_sample = 0.0;
-        let mut active_voices = 0;
-
-        for voice in self.voices.iter_mut() {
-            let sample = voice.get_sample();
-            if sample != 0.0 {
-                mixed_sample += sample;
-                active_voices += 1;
-            }
-        }
-
-        // Normalize by number of active voices to prevent clipping
-        // Use a simple division instead of sqrt to avoid trait issues
-        if active_voices > 0 {
-            mixed_sample / active_voices as f32
-        } else {
-            0.0
-        }
-    }
-
-    pub fn apply_pitch_bend(&mut self, bend_ratio: f32) {
-        self.pitch_bend_ratio = bend_ratio;
-        for (i, voice) in self.voices.iter_mut().enumerate() {
-            if let Some(note) = voice.note {
-                voice.apply_pitch_bend(note, bend_ratio);
-                // Update cached frequency with pitch bend applied
-                let base_freq = crate::midi::MidiEvent::note_to_frequency(note);
-                let bent_freq = base_freq * (1.0 + bend_ratio * 0.1);
-                self.cached_frequencies[i] = bent_freq;
-            }
-        }
-    }
-
-    pub fn all_notes_off(&mut self, channel: Option<u8>) {
-        for (i, voice) in self.voices.iter_mut().enumerate() {
-            if channel.is_none() || voice.channel == channel.unwrap() {
-                voice.note_off();
-                // Clear frequency cache
-                self.cached_frequencies[i] = 0.0;
-            }
-        }
-    }
-
-    pub fn fill_audio_buffer(&mut self, buffer: &mut [f32]) {
-        for sample in buffer.iter_mut() {
-            *sample = self.get_mixed_sample();
-        }
-    }
-
-    /// method to get current frequencies for vocal effects
-    /// Returns frequencies in Hz, 0.0 means voice is inactive
-    pub fn get_cached_frequencies(&self) -> [f32; MAX_VOICES] {
-        let mut frequencies = [0.0; MAX_VOICES];
-        for (i, cached_freq) in self.cached_frequencies.iter().enumerate() {
-            let freq_bits = cached_freq;
-            frequencies[i] = *freq_bits;
-        }
-        frequencies
+/// Map MIDI note to drum type
+pub fn midi_note_to_drum_type(note: u8) -> Option<DrumType> {
+    match note {
+        35 | 36 => Some(DrumType::Kick),
+        38 | 40 => Some(DrumType::Snare),
+        42 | 44 | 46 => Some(DrumType::HiHat),
+        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom),
+        39 => Some(DrumType::Clap),
+        49 | 55 | 57 => Some(DrumType::Cymbal),
+        _ => None,
     }
 }

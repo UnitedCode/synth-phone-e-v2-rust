@@ -1,12 +1,25 @@
-// In your main project, create: src/audio/drum_synth.rs
+// drum_synth.rs - Optimized for embedded real-time audio
 
-use libm::{expf, floorf, sinf};
+use core::f32::consts::PI;
+use libm::{expf, sinf};
 
-/// Drum synthesizer for percussive sounds
+const TWO_PI: f32 = 2.0 * PI;
+
+/// Drum synthesizer optimized for embedded systems
 pub struct DrumSynth {
     sample_rate: f32,
-    phase: f32,
+    inv_sample_rate: f32,  // Pre-computed 1/sample_rate
+    phase: f32,            // Time in seconds
+    sample_count: u32,     // Integer sample counter (more precise)
     drum_type: DrumType,
+    // Pre-computed envelope values to avoid expf() calls
+    env_state: f32,
+    env_decay: f32,
+    // Oscillator state for kicks/toms
+    osc_phase: f32,
+    osc_freq: f32,
+    // Noise state (LFSR is faster than sinf-based noise)
+    noise_state: u32,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -23,204 +36,251 @@ impl DrumSynth {
     pub fn new(sample_rate: f32, drum_type: DrumType) -> Self {
         Self {
             sample_rate,
+            inv_sample_rate: 1.0 / sample_rate,
             phase: 0.0,
+            sample_count: 0,
             drum_type,
+            env_state: 0.0,
+            env_decay: 0.0,
+            osc_phase: 0.0,
+            osc_freq: 60.0,
+            noise_state: 0x12345678,  // Non-zero seed for LFSR
         }
     }
-    
-    /// Trigger the drum sound (reset to beginning)
+
     pub fn trigger(&mut self) {
         self.phase = 0.0;
+        self.sample_count = 0;
+        self.env_state = 1.0;
+        self.osc_phase = 0.0;
+        self.noise_state = 0x12345678;
+        
+        // Pre-compute envelope decay rate per sample
+        self.env_decay = match self.drum_type {
+            DrumType::Kick => expf(-8.0 * self.inv_sample_rate),
+            DrumType::Snare => expf(-12.0 * self.inv_sample_rate),
+            DrumType::HiHat => expf(-35.0 * self.inv_sample_rate),
+            DrumType::Tom => expf(-6.0 * self.inv_sample_rate),
+            DrumType::Clap => expf(-20.0 * self.inv_sample_rate),
+            DrumType::Cymbal => expf(-3.0 * self.inv_sample_rate),
+        };
+        
+        // Initial oscillator frequency
+        self.osc_freq = match self.drum_type {
+            DrumType::Kick => 180.0,  // Start high for pitch sweep
+            DrumType::Tom => 270.0,
+            _ => 200.0,
+        };
     }
-    
-    /// Change drum type
+
     pub fn set_drum_type(&mut self, drum_type: DrumType) {
         self.drum_type = drum_type;
     }
-    
-    /// Check if the drum sound has finished playing
+
+    #[inline(always)]
     pub fn is_finished(&self) -> bool {
-        match self.drum_type {
-            DrumType::Kick | DrumType::Snare | DrumType::HiHat | DrumType::Clap => {
-                self.phase > 0.5
-            }
-            DrumType::Tom => self.phase > 1.0,
-            DrumType::Cymbal => self.phase > 3.0,
-        }
+        // Use envelope state instead of time comparison
+        self.env_state < 0.001
     }
-    
-    /// Get the next audio sample
+
+    #[inline(always)]
     pub fn next_value(&mut self) -> f32 {
-        if self.is_finished() {
+        if self.env_state < 0.001 {
             return 0.0;
         }
-        
+
         let output = match self.drum_type {
-            DrumType::Kick => self.synthesize_kick(),
-            DrumType::Snare => self.synthesize_snare(),
-            DrumType::HiHat => self.synthesize_hihat(),
-            DrumType::Tom => self.synthesize_tom(),
-            DrumType::Clap => self.synthesize_clap(),
-            DrumType::Cymbal => self.synthesize_cymbal(),
+            DrumType::Kick => self.synth_kick_fast(),
+            DrumType::Snare => self.synth_snare_fast(),
+            DrumType::HiHat => self.synth_hihat_fast(),
+            DrumType::Tom => self.synth_tom_fast(),
+            DrumType::Clap => self.synth_clap_fast(),
+            DrumType::Cymbal => self.synth_cymbal_fast(),
         };
-        
-        // Advance phase (time)
-        self.phase += 1.0 / self.sample_rate;
-        
+
+        // Update envelope (multiply is faster than expf)
+        self.env_state *= self.env_decay;
+        self.sample_count += 1;
+        self.phase += self.inv_sample_rate;
+
         output
     }
-    
-    // === KICK DRUM ===
-    // Classic 808-style kick: pitch-swept sine with tight envelope
-    fn synthesize_kick(&self) -> f32 {
-        let t = self.phase;
-        
-        // Amplitude envelope (tight decay)
-        let env = expf(-8.0 * t);
-        
-        // Pitch sweep: starts high, drops quickly
-        let pitch_hz = 60.0 + 120.0 * expf(-40.0 * t);
-        
-        // Generate sine wave at swept pitch
-        let osc_phase = 2.0 * core::f32::consts::PI * pitch_hz * t;
-        let sine = sinf(osc_phase);
-        
-        // Add a bit of click at the start
-        let click = expf(-100.0 * t) * 0.3;
-        
-        (sine * env * 0.9 + click) * 0.8
-    }
-    
-    // === SNARE DRUM ===
-    // Mix of tonal component (body) and noise (snares)
-    fn synthesize_snare(&self) -> f32 {
-        let t = self.phase;
-        
-        // Two-stage envelope
-        let env1 = expf(-15.0 * t); // Body decay
-        let env2 = expf(-8.0 * t);  // Snare buzz decay
-        
-        // Tonal body (around 200Hz with harmonics)
-        let body = sinf(2.0 * core::f32::consts::PI * 200.0 * t);
-        let harmonic = sinf(2.0 * core::f32::consts::PI * 350.0 * t) * 0.5;
-        
-        // Noise (simulates snare wires)
-        let noise = Self::fast_noise(t * 12345.6789);
-        
-        // Mix: body + harmonics + filtered noise
-        let tonal = (body + harmonic) * env1 * 0.4;
-        let rattle = noise * env2 * 0.6;
-        
-        (tonal + rattle) * 0.7
-    }
-    
-    // === HI-HAT ===
-    // High-frequency noise with very fast decay
-    fn synthesize_hihat(&self) -> f32 {
-        let t = self.phase;
-        
-        // Very fast decay
-        let env = expf(-35.0 * t);
-        
-        // Multi-frequency noise for metallic sound
-        let noise1 = Self::fast_noise(t * 98765.4321);
-        let noise2 = Self::fast_noise(t * 45678.9012);
-        let noise3 = Self::fast_noise(t * 23456.7890);
-        
-        // Mix and filter
-        let mixed = (noise1 + noise2 * 0.7 + noise3 * 0.5) / 2.2;
-        
-        mixed * env * 0.5
-    }
-    
-    // === TOM ===
-    // Similar to kick but higher pitch, longer decay
-    fn synthesize_tom(&self) -> f32 {
-        let t = self.phase;
-        
-        // Medium decay
-        let env = expf(-6.0 * t);
-        
-        // Pitch sweep (configurable base pitch)
-        let base_pitch = 120.0; // Mid tom frequency
-        let pitch_hz = base_pitch + 150.0 * expf(-20.0 * t);
-        
-        let sine = sinf(2.0 * core::f32::consts::PI * pitch_hz * t);
-        
-        // Add overtone for depth
-        let overtone = sinf(2.0 * core::f32::consts::PI * pitch_hz * 2.1 * t) * 0.3;
-        
-        (sine + overtone) * env * 0.75
-    }
-    
-    // === CLAP ===
-    // Multiple short bursts of noise
-    fn synthesize_clap(&self) -> f32 {
-        let t = self.phase;
-        
-        // Create multiple "slaps" with slight delays
-        let slap1 = Self::noise_burst(t, 0.0, 15.0);
-        let slap2 = Self::noise_burst(t, 0.01, 20.0);
-        let slap3 = Self::noise_burst(t, 0.02, 25.0);
-        let slap4 = Self::noise_burst(t, 0.03, 30.0);
-        
-        (slap1 + slap2 + slap3 + slap4) * 0.6
-    }
-    
-    // === CRASH CYMBAL ===
-    // Complex metallic noise with slower decay
-    fn synthesize_cymbal(&self) -> f32 {
-        let t = self.phase;
-        
-        // Slower decay than hi-hat
-        let env = expf(-3.0 * t);
-        
-        // Multiple noise sources for complex timbre
-        let noise1 = Self::fast_noise(t * 87654.3210);
-        let noise2 = Self::fast_noise(t * 65432.1098);
-        let noise3 = Self::fast_noise(t * 43210.9876);
-        let noise4 = Self::fast_noise(t * 21098.7654);
-        
-        // Add some metallic ringing (high sine waves)
-        let ring = sinf(2.0 * core::f32::consts::PI * 4200.0 * t) * 0.15;
-        
-        let mixed = (noise1 + noise2 * 0.8 + noise3 * 0.6 + noise4 * 0.4) / 2.8 + ring;
-        
-        mixed * env * 0.5
-    }
-    
-    // === HELPER FUNCTIONS ===
-    
-    /// Fast pseudo-random noise generator (-1 to 1)
+
+    // === FAST LFSR NOISE (much faster than sinf-based) ===
     #[inline(always)]
-    fn fast_noise(seed: f32) -> f32 {
-        let x = seed * 12.9898;
-        let y = seed * 78.233;
-        let value = sinf(x + y) * 43758.5453;
-        2.0 * (value - floorf(value)) - 1.0
+    fn fast_noise(&mut self) -> f32 {
+        // Galois LFSR - very fast pseudo-random
+        let lsb = self.noise_state & 1;
+        self.noise_state >>= 1;
+        if lsb == 1 {
+            self.noise_state ^= 0xB400; // Taps for maximal length
+        }
+        // Convert to -1.0 to 1.0
+        (self.noise_state as f32 / 32768.0) - 1.0
     }
-    
-    /// Helper for clap: single noise burst
+
+    // === OPTIMIZED KICK ===
     #[inline(always)]
-    fn noise_burst(t: f32, delay: f32, decay_rate: f32) -> f32 {
-        if t < delay {
+    fn synth_kick_fast(&mut self) -> f32 {
+        // Pitch sweep using incremental update (no expf per sample)
+        // Approximate exponential decay of pitch
+        let pitch_decay = 0.9997_f32;  // Pre-tuned for ~40x decay rate
+        self.osc_freq = 60.0 + (self.osc_freq - 60.0) * pitch_decay;
+        
+        // Update oscillator phase
+        self.osc_phase += TWO_PI * self.osc_freq * self.inv_sample_rate;
+        if self.osc_phase > TWO_PI {
+            self.osc_phase -= TWO_PI;
+        }
+        
+        // Fast sine approximation for kick body
+        let sine = fast_sin(self.osc_phase);
+        
+        // Click component (first ~50 samples)
+        let click = if self.sample_count < 50 {
+            let click_env = 1.0 - (self.sample_count as f32 / 50.0);
+            click_env * click_env * 0.3
+        } else {
+            0.0
+        };
+        
+        (sine * self.env_state * 0.9 + click) * 0.8
+    }
+
+    // === OPTIMIZED SNARE ===
+    #[inline(always)]
+    fn synth_snare_fast(&mut self) -> f32 {
+        // Two separate envelope states
+        let body_env = self.env_state;
+        // Noise envelope decays slower - use fast inverse sqrt approximation
+        let noise_env = self.env_state * fast_sqrt(self.env_state);
+        
+        // Body oscillator
+        self.osc_phase += TWO_PI * 200.0 * self.inv_sample_rate;
+        if self.osc_phase > TWO_PI {
+            self.osc_phase -= TWO_PI;
+        }
+        
+        let body = fast_sin(self.osc_phase);
+        let noise = self.fast_noise();
+        
+        (body * body_env * 0.4 + noise * noise_env * 0.6) * 0.7
+    }
+
+    // === OPTIMIZED HI-HAT ===
+    #[inline(always)]
+    fn synth_hihat_fast(&mut self) -> f32 {
+        // Just filtered noise with fast envelope
+        let n1 = self.fast_noise();
+        let n2 = self.fast_noise();
+        
+        // Simple high-pass effect by mixing two noise sources
+        let mixed = (n1 + n2 * 0.7) * 0.6;
+        
+        mixed * self.env_state * 0.5
+    }
+
+    // === OPTIMIZED TOM ===
+    #[inline(always)]
+    fn synth_tom_fast(&mut self) -> f32 {
+        // Similar to kick but higher, longer
+        let pitch_decay = 0.9998_f32;
+        self.osc_freq = 120.0 + (self.osc_freq - 120.0) * pitch_decay;
+        
+        self.osc_phase += TWO_PI * self.osc_freq * self.inv_sample_rate;
+        if self.osc_phase > TWO_PI {
+            self.osc_phase -= TWO_PI;
+        }
+        
+        let sine = fast_sin(self.osc_phase);
+        sine * self.env_state * 0.75
+    }
+
+    // === OPTIMIZED CLAP ===
+    #[inline(always)]
+    fn synth_clap_fast(&mut self) -> f32 {
+        // Multiple bursts - use sample count for timing
+        let burst_len = (self.sample_rate * 0.01) as u32;  // 10ms per burst
+        let burst_idx = self.sample_count / burst_len;
+        
+        if burst_idx > 3 {
             return 0.0;
         }
-        let local_t = t - delay;
-        let env = expf(-decay_rate * local_t);
-        Self::fast_noise(local_t * 54321.0987) * env
+        
+        let local_sample = self.sample_count % burst_len;
+        let burst_env = 1.0 - (local_sample as f32 / burst_len as f32);
+        
+        self.fast_noise() * burst_env * self.env_state * 0.6
+    }
+
+    // === OPTIMIZED CYMBAL ===
+    #[inline(always)]
+    fn synth_cymbal_fast(&mut self) -> f32 {
+        // Multiple noise sources + metallic ring
+        let n1 = self.fast_noise();
+        let n2 = self.fast_noise();
+        
+        // Simple ring oscillator
+        self.osc_phase += TWO_PI * 4200.0 * self.inv_sample_rate;
+        if self.osc_phase > TWO_PI {
+            self.osc_phase -= TWO_PI;
+        }
+        let ring = fast_sin(self.osc_phase) * 0.15;
+        
+        let mixed = (n1 + n2 * 0.6) * 0.5 + ring;
+        mixed * self.env_state * 0.5
     }
 }
 
-/// Helper function to map MIDI notes to drum types (General MIDI standard)
+/// Fast sine approximation using parabolic approximation
+/// Accurate to ~0.1% which is fine for audio
+#[inline(always)]
+fn fast_sin(x: f32) -> f32 {
+    // Normalize to -PI to PI
+    let mut x = x;
+    while x > PI {
+        x -= TWO_PI;
+    }
+    while x < -PI {
+        x += TWO_PI;
+    }
+    
+    // Parabolic approximation
+    const B: f32 = 4.0 / PI;
+    const C: f32 = -4.0 / (PI * PI);
+    
+    let y = B * x + C * x * x.abs();
+    
+    // Extra precision (optional, comment out if too slow)
+    const P: f32 = 0.225;
+    P * (y * y.abs() - y) + y
+}
+
+/// Fast square root approximation (Quake III style)
+/// Good enough for audio envelope shaping
+#[inline(always)]
+fn fast_sqrt(x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    // Fast inverse sqrt then invert
+    let half = 0.5 * x;
+    let mut i = x.to_bits();
+    i = 0x5f3759df - (i >> 1);  // Initial guess
+    let mut y = f32::from_bits(i);
+    y = y * (1.5 - half * y * y);  // One Newton iteration
+    x * y  // x * (1/sqrt(x)) = sqrt(x)
+}
+
+/// Map MIDI note to drum type (General MIDI standard)
 pub fn midi_note_to_drum_type(note: u8) -> Option<DrumType> {
     match note {
-        35 | 36 => Some(DrumType::Kick),      // Bass Drum
-        38 | 40 => Some(DrumType::Snare),     // Snare
-        42 | 44 | 46 => Some(DrumType::HiHat), // Hi-Hats
-        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom), // Toms
-        49 | 55 | 57 => Some(DrumType::Cymbal), // Cymbals
-        39 => Some(DrumType::Clap),           // Hand Clap
+        35 | 36 => Some(DrumType::Kick),
+        38 | 40 => Some(DrumType::Snare),
+        42 | 44 | 46 => Some(DrumType::HiHat),
+        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom),
+        49 | 55 | 57 => Some(DrumType::Cymbal),
+        39 => Some(DrumType::Clap),
         _ => None,
     }
 }
