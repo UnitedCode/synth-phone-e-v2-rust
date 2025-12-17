@@ -1,192 +1,213 @@
-// src/audio/sample_player.rs
-// Pure synthesis - no flash reads
+// keymap_sampler.rs - Direct keymap sample playback (no pitch shifting)
+// Each key plays its own specific sample at original speed
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum DrumType {
-    Kick,
-    Snare,
-    HiHat,
-    Tom,
-    Clap,
-    Cymbal,
+/// Simple sample player - plays a sample from start to finish
+pub struct SamplePlayer {
+    sample_data: Option<&'static [f32]>,
+    playback_position: usize,
+    is_playing: bool,
+    volume: f32,
+    loop_enabled: bool,
 }
 
-pub struct DrumSampler {
-    drum_type: DrumType,
-    sample_count: u32,
-    max_samples: u32,
-    
-    // State
-    phase: u32,        // Fixed-point phase (16.16)
-    phase_inc: u32,    // Fixed-point increment
-    base_phase_inc: u32, // Starting pitch (for decay)
-    env: u16,          // 16-bit envelope
-    noise: u16,        // LFSR state
-}
-
-impl DrumSampler {
+impl SamplePlayer {
     pub fn new() -> Self {
         Self {
-            drum_type: DrumType::Kick,
-            sample_count: 0,
-            max_samples: 0,
-            phase: 0,
-            phase_inc: 0,
-            base_phase_inc: 10737000, // Default tom ~120Hz
-            env: 0,
-            noise: 0xACE1,
+            sample_data: None,
+            playback_position: 0,
+            is_playing: false,
+            volume: 1.0,
+            loop_enabled: false,
         }
     }
 
-    pub fn set_drum_type(&mut self, drum_type: DrumType) {
-        self.drum_type = drum_type;
+    /// Assign a sample to this player
+    pub fn set_sample(&mut self, data: &'static [f32]) {
+        self.sample_data = Some(data);
     }
 
-    /// Set pitch for toms (MIDI note number)  
-    pub fn set_pitch(&mut self, note: u8) {
-        // phase_inc = freq * 89478 (for 32-bit phase at 48kHz)
-        self.base_phase_inc = match note {
-            41 => 7158000,   // Low Floor Tom ~80Hz
-            43 => 8948000,   // High Floor Tom ~100Hz
-            45 => 10737000,  // Low Tom ~120Hz
-            47 => 13421000,  // Low-Mid Tom ~150Hz
-            48 => 16106000,  // Hi-Mid Tom ~180Hz
-            50 => 17895000,  // High Tom ~200Hz
-            _ => 10737000,   // Default ~120Hz
-        };
+    /// Enable/disable looping
+    pub fn set_loop(&mut self, enabled: bool) {
+        self.loop_enabled = enabled;
     }
 
+    /// Set volume (0.0 to 1.0)
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+    }
+
+    /// Trigger playback from the beginning
     pub fn trigger(&mut self) {
-        self.sample_count = 0;
-        self.phase = 0;
-        self.noise = 0xACE1;
-        self.env = 0xFFFF;
-        
-        match self.drum_type {
-            DrumType::Kick => {
-                self.max_samples = 4800;
-                // No pitch sweep - just steady low frequency
-                self.phase_inc = 900000; // ~40Hz steady
-                self.base_phase_inc = 900000;
-            }
-            DrumType::Snare => {
-                self.max_samples = 3800;
-                self.phase_inc = 273000;    // ~200Hz
-                self.base_phase_inc = 273000;
-            }
-            DrumType::HiHat => {
-                self.max_samples = 2400;
-                self.phase_inc = 0;
-                self.base_phase_inc = 0;
-            }
-            DrumType::Tom => {
-                self.max_samples = 4000;
-                // NO pitch bend for toms - just start at the target pitch
-                self.phase_inc = self.base_phase_inc;
-            }
-            DrumType::Clap => {
-                self.max_samples = 2900;
-                self.phase_inc = 0;
-                self.base_phase_inc = 0;
-            }
-            DrumType::Cymbal => {
-                self.max_samples = 7200;
-                self.phase_inc = 0;
-                self.base_phase_inc = 0;
-            }
+        if self.sample_data.is_some() {
+            self.playback_position = 0;
+            self.is_playing = true;
         }
     }
 
+    /// Stop playback
+    pub fn stop(&mut self) {
+        self.is_playing = false;
+        self.playback_position = 0;
+    }
+
+    /// Check if currently playing
+    pub fn is_playing(&self) -> bool {
+        self.is_playing
+    }
+
+    /// Get next sample value
     #[inline(always)]
     pub fn next_value(&mut self) -> f32 {
-        if self.sample_count >= self.max_samples || self.env < 100 {
+        if !self.is_playing {
             return 0.0;
         }
-        self.sample_count += 1;
 
-        // LFSR noise - always update
-        let lsb = self.noise & 1;
-        self.noise >>= 1;
-        if lsb == 1 {
-            self.noise ^= 0xB400;
-        }
-        // Noise: -1.0 to 1.0 range (as i16: -32768 to 32767)
-        let noise = ((self.noise & 0x7FFF) as i16).wrapping_sub(16384) << 1;
-
-        // Square wave from phase
-        let square: i16 = if self.phase < 0x80000000 { 32000 } else { -32000 };
-        
-        // Update phase
-        self.phase = self.phase.wrapping_add(self.phase_inc);
-
-        // Mix based on drum type
-        let raw: i32 = match self.drum_type {
-            DrumType::Kick => {
-                // Pitch decay - slower
-                if self.phase_inc > 81900 {
-                    self.phase_inc = self.phase_inc.saturating_sub(100);
-                }
-                // Env decay - slower (65530/65536 ≈ 0.9999)
-                self.env = ((self.env as u32 * 65530) >> 16) as u16;
-                square as i32
-            }
-            DrumType::Snare => {
-                self.env = ((self.env as u32 * 65500) >> 16) as u16;
-                (square as i32 / 3) + (noise as i32 * 2 / 3)
-            }
-            DrumType::HiHat => {
-                self.env = ((self.env as u32 * 65400) >> 16) as u16;
-                noise as i32
-            }
-            DrumType::Tom => {
-                // NO pitch decay - toms hold their pitch
-                // Just envelope decay
-                self.env = ((self.env as u32 * 65510) >> 16) as u16;
-                
-                // Use triangle wave instead of square for cleaner tone
-                // Triangle has fewer harmonics, sounds more like a drum head
-                let tri: i32 = if self.phase < 0x80000000 {
-                    // Rising: 0 to max
-                    ((self.phase >> 16) as i32) - 16384
-                } else {
-                    // Falling: max to 0
-                    16384 - (((self.phase - 0x80000000) >> 16) as i32)
-                };
-                tri * 2  // Scale up
-            }
-            DrumType::Clap => {
-                self.env = ((self.env as u32 * 65450) >> 16) as u16;
-                noise as i32
-            }
-            DrumType::Cymbal => {
-                self.env = ((self.env as u32 * 65510) >> 16) as u16;
-                noise as i32
-            }
+        let Some(data) = self.sample_data else {
+            return 0.0;
         };
 
-        // Apply envelope (env is 0-65535, raw is ~-32000 to 32000)
-        let out = (raw * self.env as i32) >> 16;
-        
-        // Convert to float (-1.0 to 1.0)
-        (out as f32) / 32768.0
+        if self.playback_position >= data.len() {
+            if self.loop_enabled {
+                self.playback_position = 0;
+            } else {
+                self.is_playing = false;
+                return 0.0;
+            }
+        }
+
+        let sample = data[self.playback_position];
+        self.playback_position += 1;
+
+        sample * self.volume
     }
 }
 
-impl Default for DrumSampler {
+impl Default for SamplePlayer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Map MIDI note to drum type
-pub fn midi_note_to_drum_type(note: u8) -> Option<DrumType> {
-    match note {
-        35 | 36 => Some(DrumType::Kick),
-        38 | 40 => Some(DrumType::Snare),
-        42 | 44 | 46 => Some(DrumType::HiHat),
-        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom),
-        39 => Some(DrumType::Clap),
-        49 | 55 | 57 => Some(DrumType::Cymbal),
-        _ => None,
+/// Keymap for assigning samples to specific MIDI keys
+pub struct Keymap {
+    entries: [(Option<&'static [f32]>, bool); 128], // (sample data, loop enabled)
+}
+
+impl Keymap {
+    pub fn new() -> Self {
+        Self {
+            entries: [(None, false); 128],
+        }
+    }
+
+    /// Assign a sample to a specific MIDI key
+    pub fn set_key(&mut self, midi_note: u8, sample: &'static [f32], loop_enabled: bool) {
+        if (midi_note as usize) < 128 {
+            self.entries[midi_note as usize] = (Some(sample), loop_enabled);
+        }
+    }
+
+    /// Clear a key assignment
+    pub fn clear_key(&mut self, midi_note: u8) {
+        if (midi_note as usize) < 128 {
+            self.entries[midi_note as usize] = (None, false);
+        }
+    }
+
+    /// Get sample data for a key
+    pub fn get_key(&self, midi_note: u8) -> Option<(&'static [f32], bool)> {
+        if (midi_note as usize) < 128 {
+            let (sample, loop_enabled) = self.entries[midi_note as usize];
+            sample.map(|s| (s, loop_enabled))
+        } else {
+            None
+        }
+    }
+
+    /// Check if a key has a sample assigned
+    pub fn has_key(&self, midi_note: u8) -> bool {
+        if (midi_note as usize) < 128 {
+            self.entries[midi_note as usize].0.is_some()
+        } else {
+            false
+        }
+    }
+}
+
+impl Default for Keymap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sample_player_basic() {
+        static TEST_SAMPLE: [f32; 4] = [0.1, 0.5, 0.9, 0.5];
+        
+        let mut player = SamplePlayer::new();
+        player.set_sample(&TEST_SAMPLE);
+        player.trigger();
+        
+        assert!(player.is_playing());
+        assert_eq!(player.next_value(), 0.1);
+        assert_eq!(player.next_value(), 0.5);
+        assert_eq!(player.next_value(), 0.9);
+        assert_eq!(player.next_value(), 0.5);
+        assert_eq!(player.next_value(), 0.0); // Should stop after sample ends
+        assert!(!player.is_playing());
+    }
+
+    #[test]
+    fn test_sample_player_looping() {
+        static TEST_SAMPLE: [f32; 2] = [0.5, 1.0];
+        
+        let mut player = SamplePlayer::new();
+        player.set_sample(&TEST_SAMPLE);
+        player.set_loop(true);
+        player.trigger();
+        
+        assert_eq!(player.next_value(), 0.5);
+        assert_eq!(player.next_value(), 1.0);
+        assert_eq!(player.next_value(), 0.5); // Should loop back
+        assert_eq!(player.next_value(), 1.0);
+        assert!(player.is_playing()); // Should still be playing
+    }
+
+    #[test]
+    fn test_keymap_basic() {
+        static SAMPLE1: [f32; 2] = [0.1, 0.2];
+        static SAMPLE2: [f32; 2] = [0.3, 0.4];
+        
+        let mut keymap = Keymap::new();
+        keymap.set_key(60, &SAMPLE1, false);
+        keymap.set_key(61, &SAMPLE2, true);
+        
+        assert!(keymap.has_key(60));
+        assert!(keymap.has_key(61));
+        assert!(!keymap.has_key(62));
+        
+        let (sample, looping) = keymap.get_key(60).unwrap();
+        assert_eq!(sample.len(), 2);
+        assert!(!looping);
+        
+        let (sample, looping) = keymap.get_key(61).unwrap();
+        assert_eq!(sample.len(), 2);
+        assert!(looping);
+    }
+
+    #[test]
+    fn test_keymap_clear() {
+        static SAMPLE: [f32; 2] = [0.1, 0.2];
+        
+        let mut keymap = Keymap::new();
+        keymap.set_key(60, &SAMPLE, false);
+        assert!(keymap.has_key(60));
+        
+        keymap.clear_key(60);
+        assert!(!keymap.has_key(60));
     }
 }
