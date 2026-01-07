@@ -16,7 +16,7 @@ use heapless::String;
 
 use super::sprites::{
     draw_crush, draw_effects_bg, draw_formant, draw_key_controls, draw_octave,
-    draw_process_indicator, draw_processing_bg, draw_splash, draw_waveform,
+    draw_process_indicator, draw_processing_bg, draw_splash, draw_waveform, draw_percussion,
 };
 use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
 
@@ -46,7 +46,7 @@ pub fn draw_processing_screen(
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
         ProcessingProfile::Harmony => "Harmony",
-        ProcessingProfile::Phone => "Phone",
+        ProcessingProfile::Percussion => "Phone",
     };
 
     // Create text buffers
@@ -87,6 +87,7 @@ pub fn draw_effects_screen(
     process_cycle_pressed: bool,
     key_up_pressed: bool,
     waveform: i8,
+    percussion: i8,
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
 ) {
@@ -98,6 +99,8 @@ pub fn draw_effects_screen(
     // Draw formant or waveform controls depending on processing profile
     if process == ProcessingProfile::Vocode || process == ProcessingProfile::Dry {
         draw_waveform(display, atlas, waveform);
+    } else if process == ProcessingProfile::Percussion {
+        draw_percussion(display, atlas, percussion);
     } else {
         draw_formant(display, atlas, formant);
     }
@@ -131,7 +134,7 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i8, process: ProcessingProfi
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
         ProcessingProfile::Harmony => "Harmony",
-        ProcessingProfile::Phone => "Phone",
+        ProcessingProfile::Percussion => "Phone",
     };
 
     // Draw text elements using cached styles - no more style creation!

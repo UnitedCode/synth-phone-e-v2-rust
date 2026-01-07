@@ -299,7 +299,7 @@ pub fn handle_vocal_effects(
         ProcessingProfile::Vocode => ProcessingMode::Vocode,
         ProcessingProfile::Dry => ProcessingMode::Dry,
         ProcessingProfile::Harmony => ProcessingMode::Harmony,
-        ProcessingProfile::Phone => ProcessingMode::Dry,
+        ProcessingProfile::Percussion => ProcessingMode::Dry,
     };
 
     if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {

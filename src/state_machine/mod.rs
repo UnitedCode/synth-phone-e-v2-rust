@@ -7,7 +7,7 @@ pub enum ProcessingProfile {
     Vocode,
     Dry,
     Harmony,
-    Phone,
+    Percussion,
 }
 
 /// The top-level states
@@ -220,9 +220,9 @@ impl AppState {
                 AppState::EffectsProfile(ProcessingProfile::Harmony)
             }
             AppState::EffectsProfile(ProcessingProfile::Harmony) => {
-                AppState::EffectsProfile(ProcessingProfile::Phone)
+                AppState::EffectsProfile(ProcessingProfile::Percussion)
             }
-            AppState::EffectsProfile(ProcessingProfile::Phone) => {
+            AppState::EffectsProfile(ProcessingProfile::Percussion) => {
                 AppState::EffectsProfile(ProcessingProfile::PitchControl)
             }
             AppState::Processing(ProcessingProfile::PitchControl) => {
@@ -235,9 +235,9 @@ impl AppState {
                 AppState::Processing(ProcessingProfile::Harmony)
             }
             AppState::Processing(ProcessingProfile::Harmony) => {
-                AppState::Processing(ProcessingProfile::Phone)
+                AppState::Processing(ProcessingProfile::Percussion)
             }
-            AppState::Processing(ProcessingProfile::Phone) => {
+            AppState::Processing(ProcessingProfile::Percussion) => {
                 AppState::Processing(ProcessingProfile::PitchControl)
             }
             // For any other state, don't change
@@ -294,6 +294,7 @@ pub struct AppStateMachine {
     current_bitcrush: i8,
     current_formant: i8,
     current_waveform: i8,
+    current_percussion: i8,
     sample_reduction: i8,
     bit_rate: i8,
     pub volume: i8,
@@ -322,6 +323,7 @@ pub struct AppStateMachineSnapshot {
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
     pub waveform: i8,
+    pub percussion: i8,
 }
 
 // Add a MenuContext struct for menu display
@@ -348,6 +350,7 @@ impl AppStateMachine {
             current_bitcrush: 0,
             current_formant: 0,
             current_waveform: 0,
+            current_percussion: 1,
             sample_reduction: 1,
             bit_rate: 32,
             volume: 10,
@@ -382,6 +385,7 @@ impl AppStateMachine {
             process_cycle_pressed: self.process_cycle_pressed,
             key_up_pressed: self.key_up_pressed,
             waveform: self.current_waveform,
+            percussion: self.current_percussion,
         }
     }
 
@@ -439,13 +443,21 @@ impl AppStateMachine {
                                 };
                             }
                             ProcessingProfile::Vocode
-                            | ProcessingProfile::Dry
-                            | ProcessingProfile::Phone => {
+                            | ProcessingProfile::Dry => {
                                 // map 7/8/9 -> waveforms 0/1/2 (example)
                                 self.current_waveform = match key {
                                     7 => 0, // triangle
                                     8 => 1, // square
                                     9 => 2, // saw
+                                    _ => 0,
+                                }
+                            }
+                            ProcessingProfile::Percussion => {
+                                // map 7/8/9 -> percussion types 1/2/3 (example)
+                                self.current_percussion = match key {
+                                    7 => 0, // dial tones
+                                    8 => 1, // ringer
+                                    9 => 2, // drums
                                     _ => 0,
                                 }
                             }

@@ -44,6 +44,14 @@ pub struct SpriteData {
     pub saw_on: SpriteInfo,
     pub saw_off: SpriteInfo,
 
+    // Waveform controls (row 3, alternative 2)
+    pub dial_tones_on: SpriteInfo,
+    pub dial_tones_off: SpriteInfo,
+    pub ringer_on: SpriteInfo,
+    pub ringer_off: SpriteInfo,
+    pub drums_on: SpriteInfo,
+    pub drums_off: SpriteInfo,
+
     // Key controls (row 4)
     pub key_down: SpriteInfo,
     pub key_up: SpriteInfo,
@@ -144,6 +152,32 @@ impl SpriteData {
             },
             saw_off: SpriteInfo {
                 source_rect: Rectangle::new(Point::new(77, 64), Size::new(13, 8)),
+                draw_position: Point::new(25, 16),
+            },
+
+            // Percussion controls (same positions as formant)
+            dial_tones_on: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(77, 88), Size::new(13, 8)),
+                draw_position: Point::new(0, 16),
+            },
+            dial_tones_off: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(77, 80), Size::new(13, 8)),
+                draw_position: Point::new(0, 16),
+            },
+            ringer_on: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(103, 72), Size::new(13, 8)),
+                draw_position: Point::new(13, 16),
+            },
+            ringer_off: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(103, 64), Size::new(13, 8)),
+                draw_position: Point::new(13, 16),
+            },
+            drums_on: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(115, 72), Size::new(13, 8)),
+                draw_position: Point::new(25, 16),
+            },
+            drums_off: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(115, 64), Size::new(13, 8)),
                 draw_position: Point::new(25, 16),
             },
 
@@ -268,6 +302,40 @@ pub fn draw_formant(
     draw_sprite(display, atlas, sprite);
 }
 
+pub fn draw_percussion(
+    display: &mut crate::types::LcdDisplay,
+    atlas: &ImageRawBE<BinaryColor>,
+    percussion: i8,
+) {
+    for i in 0..3 {
+        let sprite = match i {
+            0 => {
+                if percussion == 0 {
+                    &SPRITE_DATA.dial_tones_on
+                } else {
+                    &SPRITE_DATA.dial_tones_off
+                }
+            }
+            1 => {
+                if percussion == 1 {
+                    &SPRITE_DATA.ringer_on
+                } else {
+                    &SPRITE_DATA.ringer_off
+                }
+            }
+            2 => {
+                if percussion == 2 {
+                    &SPRITE_DATA.drums_on
+                } else {
+                    &SPRITE_DATA.drums_off
+                }
+            }
+            _ => continue,
+        };
+        draw_sprite(display, atlas, sprite);
+    }
+}
+
 pub fn draw_waveform(
     display: &mut crate::types::LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
@@ -318,8 +386,8 @@ pub fn draw_process_indicator(
         (ProcessingProfile::Dry, false) => &SPRITE_DATA.voice_off,
         (ProcessingProfile::Harmony, true) => &SPRITE_DATA.harmony_on,
         (ProcessingProfile::Harmony, false) => &SPRITE_DATA.harmony_off,
-        (ProcessingProfile::Phone, true) => &SPRITE_DATA.phone_on,
-        (ProcessingProfile::Phone, false) => &SPRITE_DATA.phone_off,
+        (ProcessingProfile::Percussion, true) => &SPRITE_DATA.phone_on,
+        (ProcessingProfile::Percussion, false) => &SPRITE_DATA.phone_off,
     };
     draw_sprite(display, atlas, sprite);
 }

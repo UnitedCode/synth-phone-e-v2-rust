@@ -540,6 +540,7 @@ mod rtic_app {
                             snapshot.process_cycle_pressed,
                             snapshot.key_up_pressed,
                             snapshot.waveform,
+                            snapshot.percussion,
                             ctx.local.display,
                             ctx.local.sprite_atlas,
                         );
