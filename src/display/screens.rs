@@ -42,9 +42,11 @@ pub fn draw_processing_screen(
 
     // Process profile name
     let process_profile = match process {
-        ProcessingProfile::Autotune => "Pitch Ctrl",
+        ProcessingProfile::PitchControl => "Pitch Ctrl",
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
+        ProcessingProfile::Harmony => "Harmony",
+        ProcessingProfile::Phone => "Phone",
     };
 
     // Create text buffers
@@ -125,9 +127,11 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i8, process: ProcessingProfi
     write!(&mut vol_buffer, "{volume}").expect("Failed converting volume to string");
 
     let process_profile = match process {
-        ProcessingProfile::Autotune => "Pitch Ctrl",
+        ProcessingProfile::PitchControl => "Pitch Ctrl",
         ProcessingProfile::Vocode => "Vocode",
-        ProcessingProfile::Dry => "Dry Vox",
+        ProcessingProfile::Dry => "Synth+Vox",
+        ProcessingProfile::Harmony => "Harmony",
+        ProcessingProfile::Phone => "Phone",
     };
 
     // Draw text elements using cached styles - no more style creation!

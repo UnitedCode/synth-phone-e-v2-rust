@@ -3,9 +3,11 @@
 // New state machine structure only
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ProcessingProfile {
-    Autotune,
+    PitchControl,
     Vocode,
     Dry,
+    Harmony,
+    Phone,
 }
 
 /// The top-level states
@@ -164,7 +166,10 @@ impl AppState {
         match (self, event) {
             // From Splash screen
             (AppState::Splash, AppEvent::SplashComplete) => {
-                AppState::EffectsProfile(ProcessingProfile::Autotune)
+                AppState::EffectsProfile(ProcessingProfile::PitchControl)
+            }
+            (AppState::Splash, AppEvent::EncoderPress) => {
+                AppState::EffectsProfile(ProcessingProfile::PitchControl)
             }
 
             // Encoder press to toggle between Processing and Effects
@@ -205,23 +210,35 @@ impl AppState {
     /// Helper function to cycle through processing profiles
     pub fn cycle_profile(&self) -> Self {
         match self {
-            AppState::EffectsProfile(ProcessingProfile::Autotune) => {
+            AppState::EffectsProfile(ProcessingProfile::PitchControl) => {
                 AppState::EffectsProfile(ProcessingProfile::Vocode)
             }
             AppState::EffectsProfile(ProcessingProfile::Vocode) => {
                 AppState::EffectsProfile(ProcessingProfile::Dry)
             }
             AppState::EffectsProfile(ProcessingProfile::Dry) => {
-                AppState::EffectsProfile(ProcessingProfile::Autotune)
+                AppState::EffectsProfile(ProcessingProfile::Harmony)
             }
-            AppState::Processing(ProcessingProfile::Autotune) => {
+            AppState::EffectsProfile(ProcessingProfile::Harmony) => {
+                AppState::EffectsProfile(ProcessingProfile::Phone)
+            }
+            AppState::EffectsProfile(ProcessingProfile::Phone) => {
+                AppState::EffectsProfile(ProcessingProfile::PitchControl)
+            }
+            AppState::Processing(ProcessingProfile::PitchControl) => {
                 AppState::Processing(ProcessingProfile::Vocode)
             }
             AppState::Processing(ProcessingProfile::Vocode) => {
                 AppState::Processing(ProcessingProfile::Dry)
             }
             AppState::Processing(ProcessingProfile::Dry) => {
-                AppState::Processing(ProcessingProfile::Autotune)
+                AppState::Processing(ProcessingProfile::Harmony)
+            }
+            AppState::Processing(ProcessingProfile::Harmony) => {
+                AppState::Processing(ProcessingProfile::Phone)
+            }
+            AppState::Processing(ProcessingProfile::Phone) => {
+                AppState::Processing(ProcessingProfile::PitchControl)
             }
             // For any other state, don't change
             _ => *self,
@@ -380,14 +397,8 @@ impl AppStateMachine {
 
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
-                match key {
-                    1..=12 => {
-                        // First 9 buttons are notes
-                        self.play_note(key);
-                        self.note = key as i8;
-                    }
-                    _ => {}
-                }
+                self.play_note(key);
+                self.note = key as i8;
             }
 
             // Handle keypad presses in Effects profile
@@ -418,7 +429,7 @@ impl AppStateMachine {
                     // Row 3: Formant controls or waveform
                     7..=9 => {
                         match profile {
-                            ProcessingProfile::Autotune => {
+                            ProcessingProfile::PitchControl | ProcessingProfile::Harmony => {
                                 // map 7/8/9 -> male/none/female (or whatever mapping you want)
                                 self.current_formant = match key {
                                     7 => 1, // male
@@ -427,7 +438,9 @@ impl AppStateMachine {
                                     _ => 0,
                                 };
                             }
-                            ProcessingProfile::Vocode | ProcessingProfile::Dry => {
+                            ProcessingProfile::Vocode
+                            | ProcessingProfile::Dry
+                            | ProcessingProfile::Phone => {
                                 // map 7/8/9 -> waveforms 0/1/2 (example)
                                 self.current_waveform = match key {
                                     7 => 0, // triangle
@@ -438,6 +451,8 @@ impl AppStateMachine {
                             }
                         }
                     }
+
+                    //TODO: add an if phone profile and have tone vs drum options
 
                     // Row 4: Key and profile controls (keys 10-12)
                     10 => {
@@ -469,12 +484,7 @@ impl AppStateMachine {
             },
 
             (AppState::Processing(profile), AppEvent::KeypadRelease(_key)) => {
-                if matches!(
-                    profile,
-                    ProcessingProfile::Autotune | ProcessingProfile::Dry
-                ) {
-                    self.play_note(0); // stop tone for those modes
-                }
+                self.play_note(0); // stop tone for those modes
             }
 
             // Handle encoder rotation in Menu profile

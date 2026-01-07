@@ -55,6 +55,10 @@ pub struct SpriteData {
     pub vocode_off: SpriteInfo,
     pub voice_on: SpriteInfo,
     pub voice_off: SpriteInfo,
+    pub harmony_on: SpriteInfo,
+    pub harmony_off: SpriteInfo,
+    pub phone_on: SpriteInfo,
+    pub phone_off: SpriteInfo,
 }
 
 impl SpriteData {
@@ -178,6 +182,22 @@ impl SpriteData {
                 source_rect: Rectangle::new(Point::new(39, 72), Size::new(13, 8)),
                 draw_position: Point::new(13, 24),
             },
+            harmony_on: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(52, 80), Size::new(13, 8)),
+                draw_position: Point::new(13, 24),
+            },
+            harmony_off: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(52, 88), Size::new(13, 8)),
+                draw_position: Point::new(13, 24),
+            },
+            phone_on: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(65, 80), Size::new(13, 8)),
+                draw_position: Point::new(13, 24),
+            },
+            phone_off: SpriteInfo {
+                source_rect: Rectangle::new(Point::new(65, 88), Size::new(13, 8)),
+                draw_position: Point::new(13, 24),
+            },
         }
     }
 }
@@ -290,12 +310,16 @@ pub fn draw_process_indicator(
 ) {
     use crate::state_machine::ProcessingProfile;
     let sprite = match (process, is_pressed) {
-        (ProcessingProfile::Autotune, true) => &SPRITE_DATA.pitchctrl_on,
-        (ProcessingProfile::Autotune, false) => &SPRITE_DATA.pitchctrl_off,
+        (ProcessingProfile::PitchControl, true) => &SPRITE_DATA.pitchctrl_on,
+        (ProcessingProfile::PitchControl, false) => &SPRITE_DATA.pitchctrl_off,
         (ProcessingProfile::Vocode, true) => &SPRITE_DATA.vocode_on,
         (ProcessingProfile::Vocode, false) => &SPRITE_DATA.vocode_off,
         (ProcessingProfile::Dry, true) => &SPRITE_DATA.voice_on,
         (ProcessingProfile::Dry, false) => &SPRITE_DATA.voice_off,
+        (ProcessingProfile::Harmony, true) => &SPRITE_DATA.harmony_on,
+        (ProcessingProfile::Harmony, false) => &SPRITE_DATA.harmony_off,
+        (ProcessingProfile::Phone, true) => &SPRITE_DATA.phone_on,
+        (ProcessingProfile::Phone, false) => &SPRITE_DATA.phone_off,
     };
     draw_sprite(display, atlas, sprite);
 }

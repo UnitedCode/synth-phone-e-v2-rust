@@ -254,7 +254,7 @@ pub fn handle_vocal_effects(
     carrier_buffer: &mut RingBuffer<FFT_SIZE>,
     osc: &mut Oscillator,
 ) {
-    let mut current_process = ProcessingProfile::Autotune;
+    let mut current_process = ProcessingProfile::PitchControl;
     ctx.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
         match snapshot.current_state {
@@ -295,9 +295,11 @@ pub fn handle_vocal_effects(
     });
 
     let mode = match current_process {
-        ProcessingProfile::Autotune => ProcessingMode::Autotune,
+        ProcessingProfile::PitchControl => ProcessingMode::PitchControl,
         ProcessingProfile::Vocode => ProcessingMode::Vocode,
         ProcessingProfile::Dry => ProcessingMode::Dry,
+        ProcessingProfile::Harmony => ProcessingMode::Harmony,
+        ProcessingProfile::Phone => ProcessingMode::Dry,
     };
 
     if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
@@ -312,12 +314,15 @@ pub fn handle_vocal_effects(
         }
     }
 
+    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
+
     let musical_settings = MusicalSettings {
-        formant: formant,
-        note: note,
-        key: key,
-        octave: octave,
-        mode: mode,
+        formant,
+        note,
+        midi_frequencies,
+        key,
+        octave,
+        mode,
     };
     let config = VocalEffectsConfig::default();
     let mut input_buffer = [0.0; FFT_SIZE];

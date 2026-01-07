@@ -1,36 +1,36 @@
-// src/midi/midi_voice.rs
-// Combined voice manager with hybrid synth/drum voices
+// voice_generator.rs - Optimized for real-time audio
 
-use crate::audio::drum_synth::{DrumSampler, DrumType};
+use crate::audio::sample_player::{DrumSampler, DrumType};
 use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
 
 /// Map MIDI note to drum type (General MIDI standard)
 fn note_to_drum_type(note: u8) -> Option<DrumType> {
     match note {
-        35 | 36 => Some(DrumType::Kick),       // Acoustic/Electric Bass Drum
-        37 | 38 | 40 => Some(DrumType::Snare), // Side Stick, Snare, Electric Snare
-        39 => Some(DrumType::Clap),            // Hand Clap
-        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom),  // Toms
-        42 | 44 | 46 => Some(DrumType::HiHat), // Hi-Hats (closed, pedal, open)
-        49 | 51 | 52 | 55 | 57 | 59 => Some(DrumType::Cymbal), // Crashes & Rides
+        35 | 36 => Some(DrumType::Kick),
+        38 | 40 => Some(DrumType::Snare),
+        42 | 44 | 46 => Some(DrumType::HiHat),
+        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom),
+        39 => Some(DrumType::Clap),
+        49 | 55 | 57 => Some(DrumType::Cymbal),
         _ => None,
     }
+}
+
+/// Voice that holds BOTH generators, only one active at a time
+/// This avoids dynamic dispatch and runtime allocation
+pub struct HybridVoice {
+    synth: Oscillator,
+    drum: DrumSampler,
+    active_type: VoiceTypeId,
+    note: Option<u8>,
+    velocity: u8,
+    channel: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceTypeId {
     Synth,
     Drum,
-}
-
-/// Voice that holds BOTH generators, only one active at a time
-pub struct HybridVoice {
-    synth: Oscillator,
-    drum: DrumSampler,
-    active_type: VoiceTypeId,
-    pub note: Option<u8>,
-    velocity: u8,
-    pub channel: u8,
 }
 
 impl HybridVoice {
@@ -64,9 +64,9 @@ impl HybridVoice {
         self.synth.set_waveform(waveform);
     }
 
+    /// Note on with automatic type selection based on channel
+    #[inline]
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
-        log::info!("HybridVoice::note_on note={} vel={} ch={}", note, velocity, channel);
-        
         self.note = Some(note);
         self.velocity = velocity;
         self.channel = channel;
@@ -76,12 +76,8 @@ impl HybridVoice {
             self.active_type = VoiceTypeId::Drum;
             if let Some(drum_type) = note_to_drum_type(note) {
                 self.drum.set_drum_type(drum_type);
-                // Set pitch for toms based on MIDI note
-                self.drum.set_pitch(note);
                 self.drum.trigger();
-                
             }
-            // Unknown drum notes are ignored
         } else {
             self.active_type = VoiceTypeId::Synth;
             let freq = crate::midi::MidiEvent::note_to_frequency(note);
@@ -89,11 +85,15 @@ impl HybridVoice {
         }
     }
 
+    #[inline]
     pub fn note_off(&mut self) {
         self.note = None;
         self.velocity = 0;
+        // Synth will just stop producing sound when we stop calling it
+        // Drum will finish its envelope naturally
     }
 
+    /// Get next sample - NO dynamic dispatch, just a match
     #[inline(always)]
     pub fn get_sample(&mut self) -> f32 {
         if self.velocity == 0 {
@@ -112,6 +112,7 @@ impl HybridVoice {
             }
             VoiceTypeId::Drum => {
                 let sample = self.drum.next_value();
+                // Drums auto-release when sample returns 0 consistently
                 if sample == 0.0 && self.note.is_some() {
                     self.note = None;
                     self.velocity = 0;
@@ -121,6 +122,7 @@ impl HybridVoice {
         }
     }
 
+    #[inline]
     pub fn apply_pitch_bend(&mut self, bend_ratio: f32) {
         if let Some(note) = self.note {
             if self.active_type == VoiceTypeId::Synth {
@@ -128,6 +130,7 @@ impl HybridVoice {
                 let bent_freq = base_freq * (1.0 + bend_ratio * 0.1);
                 self.synth.set_freq(bent_freq);
             }
+            // Drums don't pitch bend
         }
     }
 }
@@ -154,8 +157,6 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
-        log::info!("VoiceManager::note_on note={} vel={} ch={}", note, velocity, channel);
-        
         let frequency = crate::midi::MidiEvent::note_to_frequency(note);
         let needed_type = if channel == 9 {
             VoiceTypeId::Drum
@@ -167,9 +168,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_playing(note, channel) {
                 self.voices[i].note_on(note, velocity, channel);
-                if(channel == 0){
-                    self.update_frequency_cache(i, frequency);
-                }
+                self.update_frequency_cache(i, frequency);
                 return;
             }
         }
@@ -178,9 +177,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_free() && self.voices[i].type_id() == needed_type {
                 self.voices[i].note_on(note, velocity, channel);
-                if(channel == 0){
-                    self.update_frequency_cache(i, frequency);
-                }
+                self.update_frequency_cache(i, frequency);
                 return;
             }
         }
@@ -189,15 +186,12 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_free() {
                 self.voices[i].note_on(note, velocity, channel);
-                if(channel == 0){
-                    self.update_frequency_cache(i, frequency);
-                }
+                self.update_frequency_cache(i, frequency);
                 return;
             }
         }
 
-        // 4. Voice stealing
-        log::info!("Voice stealing for note {}", note);
+        // 4. Voice stealing - steal voice 0
         self.voices[0].note_on(note, velocity, channel);
         self.update_frequency_cache(0, frequency);
     }
@@ -217,6 +211,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
     }
 
+    /// Optimized mixing - avoid branch in hot loop
     #[inline(always)]
     pub fn get_mixed_sample(&mut self) -> f32 {
         let mut sum = 0.0f32;
@@ -224,6 +219,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
         for voice in &mut self.voices {
             let s = voice.get_sample();
+            // Branchless: only count if sample != 0
             let active = (s != 0.0) as u8;
             sum += s;
             count += active;

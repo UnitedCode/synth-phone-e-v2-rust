@@ -1,4 +1,5 @@
 pub mod midi_voice;
+pub mod voice_generator;
 
 use log::{info, warn};
 use stm32h7xx_hal::{nb, prelude::*, serial::Rx, stm32};
