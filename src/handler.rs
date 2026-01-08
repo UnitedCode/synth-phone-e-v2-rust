@@ -1,3 +1,4 @@
+use crate::audio::drum_synth::{DrumSampler, DrumType};
 use crate::midi::get_midi_queue_status;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
@@ -272,11 +273,13 @@ pub fn handle_vocal_effects(
     let mut note = 0;
     let key = 0;
     let mut octave = 2;
+    let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
         formant = asm.snapshot().formant;
         // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
         octave = asm.snapshot().octave;
+        percussion = asm.snapshot().percussion;
         let octave_factor = octave as f32 * 0.5;
         pitch_shift_ratio = if octave_factor <= 0.4 {
             1.0
@@ -312,6 +315,35 @@ pub fn handle_vocal_effects(
             let sample = osc.next_value();
             carrier_buffer.push(sample);
         }
+    }
+
+    if current_process == ProcessingProfile::Percussion{
+
+        match percussion {
+            0 => {
+                //dial tones
+
+            }
+            1 => {
+                //ringer
+
+            }
+            2 => {
+                //drums
+                //rech out to the voice manager and trigger drums
+                //or get the drum sampler directly
+                
+                //let mut drum = DrumSampler::new();
+                //drum.set_drum_type(DrumType::Cymbal);
+                //drum.trigger();
+                //carrier_buffer.push(drum.next_value());
+
+            }
+            _ => {
+                //dial tone
+            }
+
+        }        
     }
 
     let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
