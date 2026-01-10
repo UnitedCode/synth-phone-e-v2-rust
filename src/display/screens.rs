@@ -37,21 +37,31 @@ pub fn draw_processing_screen(
 ) {
     // Check what changed
     let changes = dirty.update_processing(key, octave, note, volume, process);
-    
+
     // If this is a full redraw, draw the background
     if force_full {
         draw_processing_bg(display, atlas);
     }
-    
+
     // Update cache (only updates strings that changed)
     cache.update_processing(key, octave, note, volume, process);
 
     // Only redraw elements that changed (or all if force_full)
     if force_full || changes.key_changed || changes.mode_changed {
-        draw_text(display, &cache.key_buffer, Point::new(26, 3), &INVERTED_TEXT);
-        draw_text(display, &cache.mode_buffer, Point::new(80, 3), &INVERTED_TEXT);
+        draw_text(
+            display,
+            &cache.key_buffer,
+            Point::new(26, 3),
+            &INVERTED_TEXT,
+        );
+        draw_text(
+            display,
+            &cache.mode_buffer,
+            Point::new(80, 3),
+            &INVERTED_TEXT,
+        );
     }
-    
+
     if force_full || changes.note_changed {
         // Clear the note area first (approximate bounds)
         Rectangle::new(Point::new(50, 5), Size::new(24, 20))
@@ -60,22 +70,37 @@ pub fn draw_processing_screen(
             .ok();
         draw_centered_text(display, &cache.note_buffer, Point::new(62, 15), HEADER_TEXT);
     }
-    
+
     if force_full || changes.octave_changed {
-        draw_text(display, &cache.oct_buffer, Point::new(14, 28), &INVERTED_TEXT);
+        draw_text(
+            display,
+            &cache.oct_buffer,
+            Point::new(14, 28),
+            &INVERTED_TEXT,
+        );
     }
-    
+
     if force_full || changes.volume_changed {
-        draw_centered_text(display, &cache.vol_buffer, Point::new(120, 28), INVERTED_TEXT);
+        draw_centered_text(
+            display,
+            &cache.vol_buffer,
+            Point::new(120, 28),
+            INVERTED_TEXT,
+        );
     }
-    
+
     if force_full || changes.process_changed {
         // Clear the process profile area first
         Rectangle::new(Point::new(40, 20), Size::new(48, 10))
             .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
             .draw(display)
             .ok();
-        draw_centered_text(display, cache.process_profile, Point::new(62, 28), SMALL_TEXT);
+        draw_centered_text(
+            display,
+            cache.process_profile,
+            Point::new(62, 28),
+            SMALL_TEXT,
+        );
     }
 }
 
@@ -99,26 +124,35 @@ pub fn draw_effects_screen(
 ) {
     // Check what changed
     let changes = dirty.update_effects(
-        key, octave, formant, crush, volume, process, waveform,
-        key_down_pressed, key_up_pressed, process_cycle_pressed
+        key,
+        octave,
+        formant,
+        crush,
+        volume,
+        process,
+        waveform,
+        key_down_pressed,
+        key_up_pressed,
+        process_cycle_pressed,
     );
-    
+
     // If this is a full redraw, draw the background
     if force_full {
         draw_effects_bg(display, atlas);
     }
-    
+
     // Only redraw sprites that changed
     if force_full || changes.octave_changed {
         draw_octave(display, atlas, octave);
     }
-    
+
     if force_full || changes.crush_changed {
         draw_crush(display, atlas, crush);
     }
 
     // Draw formant or waveform controls depending on processing profile
-    if force_full || changes.formant_changed || changes.waveform_changed || changes.process_changed {
+    if force_full || changes.formant_changed || changes.waveform_changed || changes.process_changed
+    {
         if process == ProcessingProfile::Vocode || process == ProcessingProfile::Dry {
             draw_waveform(display, atlas, waveform);
         } else {
@@ -129,20 +163,34 @@ pub fn draw_effects_screen(
     if force_full || changes.key_down_changed || changes.key_up_changed {
         draw_key_controls(display, atlas, key_down_pressed, key_up_pressed);
     }
-    
+
     if force_full || changes.process_changed || changes.process_cycle_changed {
         draw_process_indicator(display, atlas, process, process_cycle_pressed);
     }
 
     // Draw text elements (only if changed)
-    draw_effects_text(display, key, process, volume, cache, force_full || changes.key_changed || changes.volume_changed || changes.process_changed);
+    draw_effects_text(
+        display,
+        key,
+        process,
+        volume,
+        cache,
+        force_full || changes.key_changed || changes.volume_changed || changes.process_changed,
+    );
 }
 
-fn draw_effects_text(display: &mut LcdDisplay, key: i8, process: ProcessingProfile, volume: i8, cache: &mut DisplayCache, needs_draw: bool) {
+fn draw_effects_text(
+    display: &mut LcdDisplay,
+    key: i8,
+    process: ProcessingProfile,
+    volume: i8,
+    cache: &mut DisplayCache,
+    needs_draw: bool,
+) {
     if !needs_draw {
         return; // Skip if nothing changed
     }
-    
+
     // Update cache only if values changed
     cache.update_effects(key, volume, process);
 
@@ -165,7 +213,12 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i8, process: ProcessingProfi
     .draw(display)
     .expect("Draw process text");
 
-    draw_centered_text(display, &cache.effects_vol_buffer, Point::new(120, 28), INVERTED_TEXT);
+    draw_centered_text(
+        display,
+        &cache.effects_vol_buffer,
+        Point::new(120, 28),
+        INVERTED_TEXT,
+    );
 }
 
 pub fn draw_menu_screen(

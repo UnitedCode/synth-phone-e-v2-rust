@@ -19,7 +19,7 @@ pub struct DirtyRegions {
     prev_process_cycle: bool,
     prev_menu_index: usize,
     prev_menu_editing: bool,
-    
+
     // Force full redraw on next update
     force_full_redraw: bool,
 }
@@ -53,29 +53,29 @@ impl DirtyRegions {
             force_full_redraw: true, // Always redraw first time
         }
     }
-    
+
     /// Check if we need a full redraw (state changed or first draw)
     pub fn needs_full_redraw(&mut self, current_state: &AppState) -> bool {
         if self.force_full_redraw {
             self.force_full_redraw = false;
             return true;
         }
-        
+
         let current_type = match current_state {
             AppState::Splash => StateType::Splash,
             AppState::Processing(_) => StateType::Processing,
             AppState::EffectsProfile(_) => StateType::Effects,
             AppState::Menu(_, _) => StateType::Menu,
         };
-        
+
         if current_type != self.prev_state_type {
             self.prev_state_type = current_type;
             return true;
         }
-        
+
         false
     }
-    
+
     /// Update dirty state for processing screen
     /// Returns true if anything changed
     pub fn update_processing(
@@ -95,7 +95,7 @@ impl DirtyRegions {
             process_changed: self.update_if_changed_generic(&mut self.prev_process, process),
         }
     }
-    
+
     /// Update dirty state for effects screen
     /// Returns true if anything changed
     pub fn update_effects(
@@ -121,10 +121,11 @@ impl DirtyRegions {
             waveform_changed: self.update_if_changed(&mut self.prev_waveform, waveform),
             key_down_changed: self.update_if_changed_generic(&mut self.prev_key_down, key_down),
             key_up_changed: self.update_if_changed_generic(&mut self.prev_key_up, key_up),
-            process_cycle_changed: self.update_if_changed_generic(&mut self.prev_process_cycle, process_cycle),
+            process_cycle_changed: self
+                .update_if_changed_generic(&mut self.prev_process_cycle, process_cycle),
         }
     }
-    
+
     /// Update dirty state for menu screen
     pub fn update_menu(&mut self, index: usize, editing: bool) -> MenuDirty {
         MenuDirty {
@@ -132,7 +133,7 @@ impl DirtyRegions {
             editing_changed: self.update_if_changed_generic(&mut self.prev_menu_editing, editing),
         }
     }
-    
+
     /// Helper to update a value and return if it changed
     fn update_if_changed(&mut self, prev: &mut i8, current: i8) -> bool {
         if *prev != current {
@@ -142,7 +143,7 @@ impl DirtyRegions {
             false
         }
     }
-    
+
     /// Generic helper for any type that implements PartialEq and Copy
     fn update_if_changed_generic<T: PartialEq + Copy>(&mut self, prev: &mut T, current: T) -> bool {
         if *prev != current {
@@ -210,7 +211,7 @@ impl EffectsDirty {
             || self.key_up_changed
             || self.process_cycle_changed
     }
-    
+
     pub fn sprites_changed(&self) -> bool {
         self.octave_changed
             || self.formant_changed

@@ -147,11 +147,11 @@ mod tests {
     #[test]
     fn test_sample_player_basic() {
         static TEST_SAMPLE: [f32; 4] = [0.1, 0.5, 0.9, 0.5];
-        
+
         let mut player = SamplePlayer::new();
         player.set_sample(&TEST_SAMPLE);
         player.trigger();
-        
+
         assert!(player.is_playing());
         assert_eq!(player.next_value(), 0.1);
         assert_eq!(player.next_value(), 0.5);
@@ -164,12 +164,12 @@ mod tests {
     #[test]
     fn test_sample_player_looping() {
         static TEST_SAMPLE: [f32; 2] = [0.5, 1.0];
-        
+
         let mut player = SamplePlayer::new();
         player.set_sample(&TEST_SAMPLE);
         player.set_loop(true);
         player.trigger();
-        
+
         assert_eq!(player.next_value(), 0.5);
         assert_eq!(player.next_value(), 1.0);
         assert_eq!(player.next_value(), 0.5); // Should loop back
@@ -181,19 +181,19 @@ mod tests {
     fn test_keymap_basic() {
         static SAMPLE1: [f32; 2] = [0.1, 0.2];
         static SAMPLE2: [f32; 2] = [0.3, 0.4];
-        
+
         let mut keymap = Keymap::new();
         keymap.set_key(60, &SAMPLE1, false);
         keymap.set_key(61, &SAMPLE2, true);
-        
+
         assert!(keymap.has_key(60));
         assert!(keymap.has_key(61));
         assert!(!keymap.has_key(62));
-        
+
         let (sample, looping) = keymap.get_key(60).unwrap();
         assert_eq!(sample.len(), 2);
         assert!(!looping);
-        
+
         let (sample, looping) = keymap.get_key(61).unwrap();
         assert_eq!(sample.len(), 2);
         assert!(looping);
@@ -202,11 +202,11 @@ mod tests {
     #[test]
     fn test_keymap_clear() {
         static SAMPLE: [f32; 2] = [0.1, 0.2];
-        
+
         let mut keymap = Keymap::new();
         keymap.set_key(60, &SAMPLE, false);
         assert!(keymap.has_key(60));
-        
+
         keymap.clear_key(60);
         assert!(!keymap.has_key(60));
     }

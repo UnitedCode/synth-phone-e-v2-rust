@@ -34,7 +34,9 @@ mod rtic_app {
     mod app {
         use crate::{
             constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
-            midi::{voice_generator::VoiceManager, try_enqueue_midi_event, MidiEvent, MidiReceiver},
+            midi::{
+                try_enqueue_midi_event, voice_generator::VoiceManager, MidiEvent, MidiReceiver,
+            },
             state_machine::{AppState, AppStateMachine, MenuState},
         };
         use embedded_graphics::{image::ImageRawBE, pixelcolor::BinaryColor};
@@ -514,7 +516,10 @@ mod rtic_app {
                 let snapshot = ctx.shared.app_state_machine.lock(|msm| msm.snapshot());
 
                 // Check if we need a full redraw (state change)
-                let force_full = ctx.local.dirty_regions.needs_full_redraw(&snapshot.current_state);
+                let force_full = ctx
+                    .local
+                    .dirty_regions
+                    .needs_full_redraw(&snapshot.current_state);
 
                 // Draw based on current state
                 match snapshot.current_state {
