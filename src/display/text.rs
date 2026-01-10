@@ -11,54 +11,42 @@ use embedded_graphics::{
     Drawable,
 };
 
-// Style creation functions - called once and reused
-pub fn normal_text() -> MonoTextStyle<'static, BinaryColor> {
-    MonoTextStyleBuilder::new()
-        .font(&FONT_6X9)
-        .text_color(BinaryColor::On)
-        .background_color(BinaryColor::Off)
-        .build()
-}
+// Cached text styles as constants - created once and reused
+pub const NORMAL_TEXT: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&FONT_6X9)
+    .text_color(BinaryColor::On)
+    .background_color(BinaryColor::Off)
+    .build();
 
-pub fn inverted_text() -> MonoTextStyle<'static, BinaryColor> {
-    MonoTextStyleBuilder::new()
-        .font(&FONT_6X9)
-        .text_color(BinaryColor::Off)
-        .background_color(BinaryColor::On)
-        .build()
-}
+pub const INVERTED_TEXT: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&FONT_6X9)
+    .text_color(BinaryColor::Off)
+    .background_color(BinaryColor::On)
+    .build();
 
-pub fn small_text() -> MonoTextStyle<'static, BinaryColor> {
-    MonoTextStyleBuilder::new()
-        .font(&FONT_5X7)
-        .text_color(BinaryColor::On)
-        .background_color(BinaryColor::Off)
-        .build()
-}
+pub const SMALL_TEXT: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&FONT_5X7)
+    .text_color(BinaryColor::On)
+    .background_color(BinaryColor::Off)
+    .build();
 
-pub fn header_text() -> MonoTextStyle<'static, BinaryColor> {
-    MonoTextStyleBuilder::new()
-        .font(&FONT_10X20)
-        .text_color(BinaryColor::Off)
-        .background_color(BinaryColor::On)
-        .build()
-}
+pub const HEADER_TEXT: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&FONT_10X20)
+    .text_color(BinaryColor::Off)
+    .background_color(BinaryColor::On)
+    .build();
 
-pub fn menu_normal() -> MonoTextStyle<'static, BinaryColor> {
-    MonoTextStyleBuilder::new()
-        .font(&FONT_6X9)
-        .text_color(BinaryColor::On)
-        .background_color(BinaryColor::Off)
-        .build()
-}
+pub const MENU_NORMAL: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&FONT_6X9)
+    .text_color(BinaryColor::On)
+    .background_color(BinaryColor::Off)
+    .build();
 
-pub fn menu_highlight() -> MonoTextStyle<'static, BinaryColor> {
-    MonoTextStyleBuilder::new()
-        .font(&FONT_6X13)
-        .text_color(BinaryColor::On)
-        .background_color(BinaryColor::Off)
-        .build()
-}
+pub const MENU_HIGHLIGHT: MonoTextStyle<'static, BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&FONT_6X13)
+    .text_color(BinaryColor::On)
+    .background_color(BinaryColor::Off)
+    .build();
 
 // Text drawing functions
 pub fn draw_text<D>(

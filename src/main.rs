@@ -127,6 +127,8 @@ mod rtic_app {
             previous_pitch_shift_ratio: f32,
             midi_receiver: MidiReceiver,
             sprite_atlas: ImageRawBE<'static, BinaryColor>,
+            display_cache: crate::display::cache::DisplayCache,
+            dirty_regions: crate::display::dirty::DirtyRegions,
         }
 
         #[init]
@@ -354,6 +356,8 @@ mod rtic_app {
                     osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Triangle),
                     midi_receiver,
                     sprite_atlas,
+                    display_cache: crate::display::cache::DisplayCache::new(),
+                    dirty_regions: crate::display::dirty::DirtyRegions::new(),
                 },
                 init::Monotonics(),
             )
@@ -491,7 +495,7 @@ mod rtic_app {
         }
 
         #[task(
-            local = [display, sprite_atlas],
+            local = [display, sprite_atlas, display_cache, dirty_regions],
             shared = [display_needs_update, app_state_machine],
             priority = 2
         )]
@@ -508,6 +512,9 @@ mod rtic_app {
             if needs_update {
                 // Get the current state snapshot
                 let snapshot = ctx.shared.app_state_machine.lock(|msm| msm.snapshot());
+
+                // Check if we need a full redraw (state change)
+                let force_full = ctx.local.dirty_regions.needs_full_redraw(&snapshot.current_state);
 
                 // Draw based on current state
                 match snapshot.current_state {
@@ -526,6 +533,9 @@ mod rtic_app {
                             snapshot.volume,
                             ctx.local.display,
                             ctx.local.sprite_atlas,
+                            ctx.local.display_cache,
+                            ctx.local.dirty_regions,
+                            force_full,
                         );
                     }
                     AppState::EffectsProfile(process) => {
@@ -542,6 +552,9 @@ mod rtic_app {
                             snapshot.waveform,
                             ctx.local.display,
                             ctx.local.sprite_atlas,
+                            ctx.local.display_cache,
+                            ctx.local.dirty_regions,
+                            force_full,
                         );
                     }
                     AppState::Menu(nav_state, _) => {
@@ -554,6 +567,7 @@ mod rtic_app {
                             menu_context.next_item,
                             is_editing,
                             ctx.local.display,
+                            ctx.local.display_cache,
                         );
                     }
                 }
