@@ -17,7 +17,7 @@ pub struct DirtyRegions {
     prev_key_down: bool,
     prev_key_up: bool,
     prev_process_cycle: bool,
-    prev_menu_index: usize,
+    prev_menu_index: i8,
     prev_menu_editing: bool,
 
     // Force full redraw on next update
@@ -86,13 +86,43 @@ impl DirtyRegions {
         volume: i8,
         process: ProcessingProfile,
     ) -> ProcessingDirty {
+        let key_changed = self.prev_key != key;
+        if key_changed {
+            self.prev_key = key;
+        }
+
+        let mode_changed = self.prev_mode != key;
+        if mode_changed {
+            self.prev_mode = key;
+        }
+
+        let note_changed = self.prev_note != note;
+        if note_changed {
+            self.prev_note = note;
+        }
+
+        let octave_changed = self.prev_octave != octave;
+        if octave_changed {
+            self.prev_octave = octave;
+        }
+
+        let volume_changed = self.prev_volume != volume;
+        if volume_changed {
+            self.prev_volume = volume;
+        }
+
+        let process_changed = self.prev_process != process;
+        if process_changed {
+            self.prev_process = process;
+        }
+
         ProcessingDirty {
-            key_changed: self.update_if_changed(&mut self.prev_key, key),
-            mode_changed: self.update_if_changed(&mut self.prev_mode, key),
-            note_changed: self.update_if_changed(&mut self.prev_note, note),
-            octave_changed: self.update_if_changed(&mut self.prev_octave, octave),
-            volume_changed: self.update_if_changed(&mut self.prev_volume, volume),
-            process_changed: self.update_if_changed_generic(&mut self.prev_process, process),
+            key_changed,
+            mode_changed,
+            note_changed,
+            octave_changed,
+            volume_changed,
+            process_changed,
         }
     }
 
@@ -111,46 +141,85 @@ impl DirtyRegions {
         key_up: bool,
         process_cycle: bool,
     ) -> EffectsDirty {
+        let key_changed = self.prev_key != key;
+        if key_changed {
+            self.prev_key = key;
+        }
+
+        let octave_changed = self.prev_octave != octave;
+        if octave_changed {
+            self.prev_octave = octave;
+        }
+
+        let formant_changed = self.prev_formant != formant;
+        if formant_changed {
+            self.prev_formant = formant;
+        }
+
+        let crush_changed = self.prev_crush != crush;
+        if crush_changed {
+            self.prev_crush = crush;
+        }
+
+        let volume_changed = self.prev_volume != volume;
+        if volume_changed {
+            self.prev_volume = volume;
+        }
+
+        let process_changed = self.prev_process != process;
+        if process_changed {
+            self.prev_process = process;
+        }
+
+        let waveform_changed = self.prev_waveform != waveform;
+        if waveform_changed {
+            self.prev_waveform = waveform;
+        }
+
+        let key_down_changed = self.prev_key_down != key_down;
+        if key_down_changed {
+            self.prev_key_down = key_down;
+        }
+
+        let key_up_changed = self.prev_key_up != key_up;
+        if key_up_changed {
+            self.prev_key_up = key_up;
+        }
+
+        let process_cycle_changed = self.prev_process_cycle != process_cycle;
+        if process_cycle_changed {
+            self.prev_process_cycle = process_cycle;
+        }
+
         EffectsDirty {
-            key_changed: self.update_if_changed(&mut self.prev_key, key),
-            octave_changed: self.update_if_changed(&mut self.prev_octave, octave),
-            formant_changed: self.update_if_changed(&mut self.prev_formant, formant),
-            crush_changed: self.update_if_changed(&mut self.prev_crush, crush),
-            volume_changed: self.update_if_changed(&mut self.prev_volume, volume),
-            process_changed: self.update_if_changed_generic(&mut self.prev_process, process),
-            waveform_changed: self.update_if_changed(&mut self.prev_waveform, waveform),
-            key_down_changed: self.update_if_changed_generic(&mut self.prev_key_down, key_down),
-            key_up_changed: self.update_if_changed_generic(&mut self.prev_key_up, key_up),
-            process_cycle_changed: self
-                .update_if_changed_generic(&mut self.prev_process_cycle, process_cycle),
+            key_changed,
+            octave_changed,
+            formant_changed,
+            crush_changed,
+            volume_changed,
+            process_changed,
+            waveform_changed,
+            key_down_changed,
+            key_up_changed,
+            process_cycle_changed,
         }
     }
 
     /// Update dirty state for menu screen
-    pub fn update_menu(&mut self, index: usize, editing: bool) -> MenuDirty {
+    pub fn update_menu(&mut self, index: i8, editing: bool) -> MenuDirty {
+        let index_changed = self.prev_menu_index != index;
+        if index_changed {
+            self.prev_menu_index = index;
+        }
+
+        let editing_changed = self.prev_menu_editing != editing;
+        if editing_changed {
+            self.prev_menu_editing = editing;
+        }
+
         MenuDirty {
-            index_changed: self.update_if_changed(&mut self.prev_menu_index, index),
-            editing_changed: self.update_if_changed_generic(&mut self.prev_menu_editing, editing),
-        }
-    }
-
-    /// Helper to update a value and return if it changed
-    fn update_if_changed(&mut self, prev: &mut i8, current: i8) -> bool {
-        if *prev != current {
-            *prev = current;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Generic helper for any type that implements PartialEq and Copy
-    fn update_if_changed_generic<T: PartialEq + Copy>(&mut self, prev: &mut T, current: T) -> bool {
-        if *prev != current {
-            *prev = current;
-            true
-        } else {
-            false
+            index_changed,
+            editing_changed,
         }
     }
 }

@@ -1,6 +1,6 @@
 // voice_generator.rs - Optimized for real-time audio
 
-use crate::audio::sample_player::{DrumSampler, DrumType};
+use crate::audio::drum_synth::{DrumSampler, DrumType};
 use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
 
 /// Map MIDI note to drum type (General MIDI standard)

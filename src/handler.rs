@@ -295,10 +295,10 @@ pub fn handle_vocal_effects(
     });
 
     let mode = match current_process {
-        ProcessingProfile::PitchControl => ProcessingMode::PitchControl,
+        ProcessingProfile::PitchControl => ProcessingMode::Vocode,
         ProcessingProfile::Vocode => ProcessingMode::Vocode,
         ProcessingProfile::Dry => ProcessingMode::Dry,
-        ProcessingProfile::Harmony => ProcessingMode::Harmony,
+        ProcessingProfile::Harmony => ProcessingMode::Vocode,
         ProcessingProfile::Phone => ProcessingMode::Dry,
     };
 
@@ -314,12 +314,9 @@ pub fn handle_vocal_effects(
         }
     }
 
-    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
-
     let musical_settings = MusicalSettings {
         formant,
         note,
-        midi_frequencies,
         key,
         octave,
         mode,

@@ -1,8 +1,8 @@
 use crate::display::cache::DisplayCache;
 use crate::display::dirty::DirtyRegions;
 use crate::display::text::{
-    draw_centered_text, draw_text, HEADER_TEXT, INVERTED_TEXT, MENU_HIGHLIGHT, MENU_NORMAL,
-    NORMAL_TEXT, SMALL_TEXT,
+    draw_centered_text, draw_text, header_text, inverted_text, menu_highlight, menu_normal,
+    normal_text, small_text,
 };
 use crate::state_machine::ProcessingProfile;
 use crate::types::LcdDisplay;
@@ -52,13 +52,13 @@ pub fn draw_processing_screen(
             display,
             &cache.key_buffer,
             Point::new(26, 3),
-            &INVERTED_TEXT,
+            &inverted_text(),
         );
         draw_text(
             display,
             &cache.mode_buffer,
             Point::new(80, 3),
-            &INVERTED_TEXT,
+            &inverted_text(),
         );
     }
 
@@ -68,7 +68,12 @@ pub fn draw_processing_screen(
             .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
             .draw(display)
             .ok();
-        draw_centered_text(display, &cache.note_buffer, Point::new(62, 15), HEADER_TEXT);
+        draw_centered_text(
+            display,
+            &cache.note_buffer,
+            Point::new(62, 15),
+            header_text(),
+        );
     }
 
     if force_full || changes.octave_changed {
@@ -76,7 +81,7 @@ pub fn draw_processing_screen(
             display,
             &cache.oct_buffer,
             Point::new(14, 28),
-            &INVERTED_TEXT,
+            &inverted_text(),
         );
     }
 
@@ -85,7 +90,7 @@ pub fn draw_processing_screen(
             display,
             &cache.vol_buffer,
             Point::new(120, 28),
-            INVERTED_TEXT,
+            inverted_text(),
         );
     }
 
@@ -99,7 +104,7 @@ pub fn draw_processing_screen(
             display,
             cache.process_profile,
             Point::new(62, 28),
-            SMALL_TEXT,
+            small_text(),
         );
     }
 }
@@ -198,7 +203,7 @@ fn draw_effects_text(
     Text::with_alignment(
         &cache.mode_key_buffer,
         display.bounding_box().center() + Point::new(18, 3),
-        NORMAL_TEXT,
+        normal_text(),
         Alignment::Center,
     )
     .draw(display)
@@ -207,7 +212,7 @@ fn draw_effects_text(
     Text::with_alignment(
         cache.effects_process_profile,
         display.bounding_box().center() + Point::new(16, 14),
-        NORMAL_TEXT,
+        normal_text(),
         Alignment::Center,
     )
     .draw(display)
@@ -217,7 +222,7 @@ fn draw_effects_text(
         display,
         &cache.effects_vol_buffer,
         Point::new(120, 28),
-        INVERTED_TEXT,
+        inverted_text(),
     );
 }
 
@@ -251,7 +256,11 @@ pub fn draw_menu_screen(
 
     // Draw all menu items (previous, current, next)
     for (i, &option) in options.iter().enumerate() {
-        let style = if i == 1 { MENU_HIGHLIGHT } else { MENU_NORMAL };
+        let style = if i == 1 {
+            menu_highlight()
+        } else {
+            menu_normal()
+        };
         let y = 4 + (i as i32 * 12);
 
         // Draw option name
