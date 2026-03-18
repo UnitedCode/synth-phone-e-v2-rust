@@ -46,7 +46,7 @@ pub fn draw_processing_screen(
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
         ProcessingProfile::Harmony => "Harmony",
-        ProcessingProfile::Percussion => "Phone",
+        ProcessingProfile::Percussion => "Percussion",
     };
 
     // Create text buffers
@@ -134,7 +134,7 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i8, process: ProcessingProfi
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
         ProcessingProfile::Harmony => "Harmony",
-        ProcessingProfile::Percussion => "Phone",
+        ProcessingProfile::Percussion => "Percussion",
     };
 
     // Draw text elements using cached styles - no more style creation!
