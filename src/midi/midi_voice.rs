@@ -220,17 +220,18 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     #[inline(always)]
     pub fn get_mixed_sample(&mut self) -> f32 {
         let mut sum = 0.0f32;
-        let mut count = 0u8;
+        let mut count = 0u32;
 
         for voice in &mut self.voices {
             let s = voice.get_sample();
-            let active = (s != 0.0) as u8;
-            sum += s;
-            count += active;
+            if s != 0.0 {
+                sum += s;
+                count += 1;
+            }
         }
 
         if count > 0 {
-            sum / count as f32
+            sum / libm::sqrtf(count as f32)
         } else {
             0.0
         }
