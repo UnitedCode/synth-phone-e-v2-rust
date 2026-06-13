@@ -317,33 +317,28 @@ pub fn handle_vocal_effects(
         }
     }
 
-    if current_process == ProcessingProfile::Percussion{
-
+    if current_process == ProcessingProfile::Percussion {
         match percussion {
             0 => {
                 //dial tones
-
             }
             1 => {
                 //ringer
-
             }
             2 => {
                 //drums
                 //rech out to the voice manager and trigger drums
                 //or get the drum sampler directly
-                
+
                 //let mut drum = DrumSampler::new();
                 //drum.set_drum_type(DrumType::Cymbal);
                 //drum.trigger();
                 //carrier_buffer.push(drum.next_value());
-
             }
             _ => {
                 //dial tone
             }
-
-        }        
+        }
     }
 
     let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());

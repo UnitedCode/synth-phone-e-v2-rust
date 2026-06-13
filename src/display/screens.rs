@@ -15,8 +15,8 @@ use embedded_graphics::{
 use heapless::String;
 
 use super::sprites::{
-    draw_crush, draw_effects_bg, draw_formant, draw_key_controls, draw_octave,
-    draw_process_indicator, draw_processing_bg, draw_splash, draw_waveform, draw_percussion,
+    draw_crush, draw_effects_bg, draw_formant, draw_key_controls, draw_octave, draw_percussion,
+    draw_process_indicator, draw_processing_bg, draw_splash, draw_waveform,
 };
 use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
 

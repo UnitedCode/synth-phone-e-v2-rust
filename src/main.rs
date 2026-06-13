@@ -34,7 +34,9 @@ mod rtic_app {
     mod app {
         use crate::{
             constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
-            midi::{voice_generator::VoiceManager, try_enqueue_midi_event, MidiEvent, MidiReceiver},
+            midi::{
+                try_enqueue_midi_event, voice_generator::VoiceManager, MidiEvent, MidiReceiver,
+            },
             state_machine::{AppState, AppStateMachine, MenuState},
         };
         use embedded_graphics::{image::ImageRawBE, pixelcolor::BinaryColor};

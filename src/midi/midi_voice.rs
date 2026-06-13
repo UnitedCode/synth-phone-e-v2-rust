@@ -10,7 +10,7 @@ fn note_to_drum_type(note: u8) -> Option<DrumType> {
         35 | 36 => Some(DrumType::Kick),       // Acoustic/Electric Bass Drum
         37 | 38 | 40 => Some(DrumType::Snare), // Side Stick, Snare, Electric Snare
         39 => Some(DrumType::Clap),            // Hand Clap
-        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom),  // Toms
+        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom), // Toms
         42 | 44 | 46 => Some(DrumType::HiHat), // Hi-Hats (closed, pedal, open)
         49 | 51 | 52 | 55 | 57 | 59 => Some(DrumType::Cymbal), // Crashes & Rides
         _ => None,
@@ -65,8 +65,13 @@ impl HybridVoice {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
-        log::info!("HybridVoice::note_on note={} vel={} ch={}", note, velocity, channel);
-        
+        log::info!(
+            "HybridVoice::note_on note={} vel={} ch={}",
+            note,
+            velocity,
+            channel
+        );
+
         self.note = Some(note);
         self.velocity = velocity;
         self.channel = channel;
@@ -79,7 +84,6 @@ impl HybridVoice {
                 // Set pitch for toms based on MIDI note
                 self.drum.set_pitch(note);
                 self.drum.trigger();
-                
             }
             // Unknown drum notes are ignored
         } else {
@@ -154,8 +158,13 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
-        log::info!("VoiceManager::note_on note={} vel={} ch={}", note, velocity, channel);
-        
+        log::info!(
+            "VoiceManager::note_on note={} vel={} ch={}",
+            note,
+            velocity,
+            channel
+        );
+
         let frequency = crate::midi::MidiEvent::note_to_frequency(note);
         let needed_type = if channel == 9 {
             VoiceTypeId::Drum
@@ -167,7 +176,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_playing(note, channel) {
                 self.voices[i].note_on(note, velocity, channel);
-                if(channel == 0){
+                if (channel == 0) {
                     self.update_frequency_cache(i, frequency);
                 }
                 return;
@@ -178,7 +187,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_free() && self.voices[i].type_id() == needed_type {
                 self.voices[i].note_on(note, velocity, channel);
-                if(channel == 0){
+                if (channel == 0) {
                     self.update_frequency_cache(i, frequency);
                 }
                 return;
@@ -189,7 +198,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_free() {
                 self.voices[i].note_on(note, velocity, channel);
-                if(channel == 0){
+                if (channel == 0) {
                     self.update_frequency_cache(i, frequency);
                 }
                 return;

@@ -15,13 +15,13 @@ pub struct DrumSampler {
     drum_type: DrumType,
     sample_count: u32,
     max_samples: u32,
-    
+
     // State
-    phase: u32,        // Fixed-point phase (16.16)
-    phase_inc: u32,    // Fixed-point increment
+    phase: u32,          // Fixed-point phase (16.16)
+    phase_inc: u32,      // Fixed-point increment
     base_phase_inc: u32, // Starting pitch (for decay)
-    env: u16,          // 16-bit envelope
-    noise: u16,        // LFSR state
+    env: u16,            // 16-bit envelope
+    noise: u16,          // LFSR state
 }
 
 impl DrumSampler {
@@ -46,13 +46,13 @@ impl DrumSampler {
     pub fn set_pitch(&mut self, note: u8) {
         // phase_inc = freq * 89478 (for 32-bit phase at 48kHz)
         self.base_phase_inc = match note {
-            41 => 7158000,   // Low Floor Tom ~80Hz
-            43 => 8948000,   // High Floor Tom ~100Hz
-            45 => 10737000,  // Low Tom ~120Hz
-            47 => 13421000,  // Low-Mid Tom ~150Hz
-            48 => 16106000,  // Hi-Mid Tom ~180Hz
-            50 => 17895000,  // High Tom ~200Hz
-            _ => 10737000,   // Default ~120Hz
+            41 => 7158000,  // Low Floor Tom ~80Hz
+            43 => 8948000,  // High Floor Tom ~100Hz
+            45 => 10737000, // Low Tom ~120Hz
+            47 => 13421000, // Low-Mid Tom ~150Hz
+            48 => 16106000, // Hi-Mid Tom ~180Hz
+            50 => 17895000, // High Tom ~200Hz
+            _ => 10737000,  // Default ~120Hz
         };
     }
 
@@ -61,7 +61,7 @@ impl DrumSampler {
         self.phase = 0;
         self.noise = 0xACE1;
         self.env = 0xFFFF;
-        
+
         match self.drum_type {
             DrumType::Kick => {
                 self.max_samples = 4800;
@@ -71,7 +71,7 @@ impl DrumSampler {
             }
             DrumType::Snare => {
                 self.max_samples = 3800;
-                self.phase_inc = 273000;    // ~200Hz
+                self.phase_inc = 273000; // ~200Hz
                 self.base_phase_inc = 273000;
             }
             DrumType::HiHat => {
@@ -114,8 +114,12 @@ impl DrumSampler {
         let noise = ((self.noise & 0x7FFF) as i16).wrapping_sub(16384) << 1;
 
         // Square wave from phase
-        let square: i16 = if self.phase < 0x80000000 { 32000 } else { -32000 };
-        
+        let square: i16 = if self.phase < 0x80000000 {
+            32000
+        } else {
+            -32000
+        };
+
         // Update phase
         self.phase = self.phase.wrapping_add(self.phase_inc);
 
@@ -142,7 +146,7 @@ impl DrumSampler {
                 // NO pitch decay - toms hold their pitch
                 // Just envelope decay
                 self.env = ((self.env as u32 * 65510) >> 16) as u16;
-                
+
                 // Use triangle wave instead of square for cleaner tone
                 // Triangle has fewer harmonics, sounds more like a drum head
                 let tri: i32 = if self.phase < 0x80000000 {
@@ -152,7 +156,7 @@ impl DrumSampler {
                     // Falling: max to 0
                     16384 - (((self.phase - 0x80000000) >> 16) as i32)
                 };
-                tri * 2  // Scale up
+                tri * 2 // Scale up
             }
             DrumType::Clap => {
                 self.env = ((self.env as u32 * 65450) >> 16) as u16;
@@ -166,7 +170,7 @@ impl DrumSampler {
 
         // Apply envelope (env is 0-65535, raw is ~-32000 to 32000)
         let out = (raw * self.env as i32) >> 16;
-        
+
         // Convert to float (-1.0 to 1.0)
         (out as f32) / 32768.0
     }

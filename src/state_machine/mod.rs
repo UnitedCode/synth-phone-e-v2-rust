@@ -442,8 +442,7 @@ impl AppStateMachine {
                                     _ => 0,
                                 };
                             }
-                            ProcessingProfile::Vocode
-                            | ProcessingProfile::Dry => {
+                            ProcessingProfile::Vocode | ProcessingProfile::Dry => {
                                 // map 7/8/9 -> waveforms 0/1/2 (example)
                                 self.current_waveform = match key {
                                     7 => 0, // triangle
