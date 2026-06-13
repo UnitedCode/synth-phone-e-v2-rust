@@ -1,6 +1,6 @@
 on:
   push:
-    branches: [main] # Do not run on staging / trying
+    branches: [main]
   pull_request:
 
 name: Nightly rust build
@@ -9,15 +9,13 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: nightly
-          target: thumbv7em-none-eabihf
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --release --target thumbv7em-none-eabihf
+          targets: thumbv7em-none-eabihf
+
+      - run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - run: cross build --release --target thumbv7em-none-eabihf
