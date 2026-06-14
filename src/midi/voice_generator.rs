@@ -1,7 +1,18 @@
-// voice_generator.rs - Optimized for real-time audio
-
 use crate::audio::drum_synth::{DrumSampler, DrumType};
 use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
+
+// Precomputed 1/sqrt(n) for n = 1..=8, indexed by active voice count
+const INV_SQRT: [f32; 9] = [
+    0.0,        // unused (count = 0 handled separately)
+    1.0,        // 1/sqrt(1)
+    0.70710678, // 1/sqrt(2)
+    0.57735027, // 1/sqrt(3)
+    0.5,        // 1/sqrt(4)
+    0.44721360, // 1/sqrt(5)
+    0.40824829, // 1/sqrt(6)
+    0.37796447, // 1/sqrt(7)
+    0.35355339, // 1/sqrt(8)
+];
 
 /// Map MIDI note to drum type (General MIDI standard)
 fn note_to_drum_type(note: u8) -> Option<DrumType> {
@@ -64,9 +75,10 @@ impl HybridVoice {
         self.synth.set_waveform(waveform);
     }
 
-    /// Note on with automatic type selection based on channel
+    /// Note on with automatic type selection based on channel.
+    /// `freq` must be pre-computed by the caller (avoids double table lookup).
     #[inline]
-    pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
+    pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8, freq: f32) {
         self.note = Some(note);
         self.velocity = velocity;
         self.channel = channel;
@@ -80,7 +92,6 @@ impl HybridVoice {
             }
         } else {
             self.active_type = VoiceTypeId::Synth;
-            let freq = crate::midi::MidiEvent::note_to_frequency(note);
             self.synth.set_freq(freq);
         }
     }
@@ -167,7 +178,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         // 1. Check for retrigger
         for i in 0..MAX_VOICES {
             if self.voices[i].is_playing(note, channel) {
-                self.voices[i].note_on(note, velocity, channel);
+                self.voices[i].note_on(note, velocity, channel, frequency);
                 self.update_frequency_cache(i, frequency);
                 return;
             }
@@ -176,7 +187,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         // 2. Find free voice (prefer matching type)
         for i in 0..MAX_VOICES {
             if self.voices[i].is_free() && self.voices[i].type_id() == needed_type {
-                self.voices[i].note_on(note, velocity, channel);
+                self.voices[i].note_on(note, velocity, channel, frequency);
                 self.update_frequency_cache(i, frequency);
                 return;
             }
@@ -185,14 +196,14 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         // 3. Find ANY free voice
         for i in 0..MAX_VOICES {
             if self.voices[i].is_free() {
-                self.voices[i].note_on(note, velocity, channel);
+                self.voices[i].note_on(note, velocity, channel, frequency);
                 self.update_frequency_cache(i, frequency);
                 return;
             }
         }
 
         // 4. Voice stealing - steal voice 0
-        self.voices[0].note_on(note, velocity, channel);
+        self.voices[0].note_on(note, velocity, channel, frequency);
         self.update_frequency_cache(0, frequency);
     }
 
@@ -214,7 +225,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     #[inline(always)]
     pub fn get_mixed_sample(&mut self) -> f32 {
         let mut sum = 0.0f32;
-        let mut count = 0u32;
+        let mut count = 0usize;
 
         for voice in &mut self.voices {
             let s = voice.get_sample();
@@ -225,10 +236,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
 
         if count > 0 {
-            // sqrt(N) normalization: each added voice increases loudness by ~3dB,
-            // matching how real polyphonic instruments blend acoustically.
-            // No clamp needed — handler mixes this at 0.1 gain, so max output is well within range.
-            sum / libm::sqrtf(count as f32)
+            sum * INV_SQRT[count]
         } else {
             0.0
         }

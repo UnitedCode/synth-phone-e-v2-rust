@@ -4,3 +4,4 @@
 .temp*
 *.wav
 !5_note.wav
+.DS_Store
