@@ -49,7 +49,7 @@ mod rtic_app {
             prelude::{Input, Output, PushPull},
             system,
         };
-        use log::{info, warn};
+        use log::info;
         use rotary_encoder_embedded::standard::StandardMode;
         use rotary_encoder_embedded::RotaryEncoder;
         use ssd1306::{mode::BufferedGraphicsMode, prelude::*, I2CDisplayInterface, Ssd1306};
@@ -97,9 +97,6 @@ mod rtic_app {
             previous_pitch_shift_ratio: f32,
             app_state_machine: AppStateMachine,
             old_matrix_state: [[bool; 3]; 4],
-            // For sample-rate reduction
-            sr_hold_counter: i32,
-            sr_held_value: f32,
             display_needs_update: bool,
             midi_events: heapless::spsc::Queue<MidiEvent, 128>,
             voice_manager: VoiceManager<8>,
@@ -122,6 +119,8 @@ mod rtic_app {
             encoder_button: hid::Switch<Daisy2<Input>>,
             hangup_button: hid::Switch<Daisy1<Input>>,
             hop_counter: u32,
+            sr_hold_counter: i32,
+            sr_held_value: f32,
             last_input_phases: [f32; FFT_SIZE],
             last_output_phases: [f32; FFT_SIZE],
             carrier_ring: RingBuffer<FFT_SIZE>,
@@ -327,8 +326,6 @@ mod rtic_app {
                     in_pointer_cached: 0,
                     app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
-                    sr_hold_counter: 0,
-                    sr_held_value: 0.0,
                     display_needs_update: true,
                     midi_events: heapless::spsc::Queue::new(),
                     voice_manager: VoiceManager::new(SAMPLE_RATE),
@@ -349,6 +346,8 @@ mod rtic_app {
                     encoder_button,
                     hangup_button,
                     hop_counter: 0,
+                    sr_hold_counter: 0,
+                    sr_held_value: 0.0,
                     previous_pitch_shift_ratio: 1.0,
                     last_input_phases: [0.0; FFT_SIZE],
                     last_output_phases: [0.0; FFT_SIZE],
@@ -394,7 +393,8 @@ mod rtic_app {
                 buffer,
                 hangup_button,
                 hop_counter,
-
+                sr_hold_counter,
+                sr_held_value,
             ],
             shared = [
                 in_ring,
@@ -402,20 +402,19 @@ mod rtic_app {
                 in_pointer_cached,
                 previous_pitch_shift_ratio,
                 app_state_machine,
-                sr_hold_counter,
-                sr_held_value,
                 midi_events,
                 voice_manager
             ],
             priority = 8)
         ]
         fn update_handler(mut ctx: update_handler::Context) {
-            // Audio processing only - MIDI is handled separately
             crate::handler::audio_handler(
                 ctx.local.audio,
                 ctx.local.buffer,
                 ctx.local.hangup_button,
                 ctx.local.hop_counter,
+                ctx.local.sr_hold_counter,
+                ctx.local.sr_held_value,
                 &mut ctx.shared,
             );
         }
@@ -448,44 +447,25 @@ mod rtic_app {
                                 velocity,
                             } => {
                                 voice_manager.note_on(key, velocity, channel);
-                                let frequency = crate::midi::MidiEvent::note_to_frequency(key);
-                                info!(
-                                    "Note on: ch={}, key={}, vel={} (freq: {:.2} Hz)",
-                                    channel, key, velocity, frequency
-                                );
                             }
                             crate::midi::MidiEvent::NoteOff { channel, key, .. } => {
                                 voice_manager.note_off(key, channel);
-                                info!("Note off: ch={}, key={}", channel, key);
                             }
                             crate::midi::MidiEvent::ControlChange {
                                 channel,
                                 controller,
-                                value,
+                                value: _,
                             } => match controller {
-                                1 => info!("Modulation wheel: ch={}, val={}", channel, value),
-                                7 => info!("Volume: ch={}, val={}", channel, value),
-                                64 => info!("Sustain pedal: ch={}, val={}", channel, value),
                                 123 => {
                                     voice_manager.all_notes_off(Some(channel));
-                                    info!("All notes off: ch={}", channel);
                                 }
-                                _ => info!(
-                                    "Unhandled CC: ch={}, cc={} = {}",
-                                    channel, controller, value
-                                ),
+                                _ => {}
                             },
-                            crate::midi::MidiEvent::PitchBend { channel, value } => {
+                            crate::midi::MidiEvent::PitchBend { channel: _, value } => {
                                 let bend_ratio = (value as f32 - 8192.0) / 8192.0;
                                 voice_manager.apply_pitch_bend(bend_ratio);
-                                info!(
-                                    "Pitch bend: ch={}, val={} (ratio: {:.3})",
-                                    channel, value, bend_ratio
-                                );
                             }
-                            crate::midi::MidiEvent::Other => {
-                                warn!("Unknown MIDI event");
-                            }
+                            crate::midi::MidiEvent::Other => {}
                         }
                     }
                 });

@@ -1,4 +1,3 @@
-use crate::audio::drum_synth::{DrumSampler, DrumType};
 use crate::midi::get_midi_queue_status;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
@@ -20,6 +19,8 @@ pub fn audio_handler(
     buffer: &mut audio::AudioBuffer,
     hangup_button: &mut hid::Switch<Daisy1<Input>>,
     hop_counter: &mut u32,
+    sr_hold_counter: &mut i32,
+    sr_held_value: &mut f32,
     shared: &mut crate::rtic_app::app::update_handler::SharedResources,
 ) {
     hangup_button.update();
@@ -51,12 +52,7 @@ pub fn audio_handler(
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
             // ************** SAMPLE-RATE REDUCE **************
-            // Apply the effect
-            shared.sr_hold_counter.lock(|hold_ctr| {
-                shared.sr_held_value.lock(|held_val| {
-                    out_sample = sample_rate_reduce(out_sample, sr_factor, hold_ctr, held_val);
-                });
-            });
+            out_sample = sample_rate_reduce(out_sample, sr_factor, sr_hold_counter, sr_held_value);
 
             // ************** BIT DEPTH REDUCE **************
             out_sample = bitcrush(out_sample, bit_depth as i8);
@@ -256,18 +252,6 @@ pub fn handle_vocal_effects(
     osc: &mut Oscillator,
 ) {
     let mut current_process = ProcessingProfile::PitchControl;
-    ctx.app_state_machine.lock(|msm| {
-        let snapshot = msm.snapshot();
-        match snapshot.current_state {
-            AppState::Processing(process)
-            | AppState::EffectsProfile(process)
-            | AppState::Menu(_, process) => {
-                current_process = process;
-            }
-            AppState::Splash => {}
-        }
-    });
-    // process_vocal_effects_config!(process_vocal_effects, 1024, 48_014.312);
     let mut formant = 0;
     let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
@@ -276,25 +260,31 @@ pub fn handle_vocal_effects(
     let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
-        formant = asm.snapshot().formant;
-        // Use octave as pitch control (0.5 = down octave, 2.0 = up octave)
-        octave = asm.snapshot().octave;
-        percussion = asm.snapshot().percussion;
+        let snapshot = asm.snapshot();
+        match snapshot.current_state {
+            AppState::Processing(process)
+            | AppState::EffectsProfile(process)
+            | AppState::Menu(_, process) => {
+                current_process = process;
+            }
+            AppState::Splash => {}
+        }
+        formant = snapshot.formant;
+        octave = snapshot.octave;
+        percussion = snapshot.percussion;
         let octave_factor = octave as f32 * 0.5;
         pitch_shift_ratio = if octave_factor <= 0.4 {
             1.0
         } else {
             octave_factor
         };
-        note = asm.snapshot().note;
-        //formant_ratio = asm.snapshot().formant_factor;
-        //
-        wave_type = match asm.snapshot().waveform {
+        note = snapshot.note;
+        wave_type = match snapshot.waveform {
             0 => Waveform::Triangle,
             1 => Waveform::Square,
             2 => Waveform::Saw,
             _ => Waveform::Sine,
-        }
+        };
     });
 
     let mode = match current_process {
