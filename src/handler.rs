@@ -273,7 +273,11 @@ pub fn handle_vocal_effects(
         octave = snapshot.octave;
         percussion = snapshot.percussion;
         let octave_factor = octave as f32 * 0.5;
-        pitch_shift_ratio = if octave_factor <= 0.4 { 1.0 } else { octave_factor };
+        pitch_shift_ratio = if octave_factor <= 0.4 {
+            1.0
+        } else {
+            octave_factor
+        };
         note = snapshot.note;
         wave_type = match snapshot.waveform {
             0 => Waveform::Triangle,
