@@ -295,8 +295,19 @@ pub fn handle_vocal_effects(
         ProcessingProfile::Percussion => ProcessingMode::Dry,
     };
 
+    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
+
     if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
-        let carrier_hz = get_frequency(key, note, octave, true);
+        let carrier_hz = if mode == ProcessingMode::Vocode {
+            // Use the first active MIDI note as the vocoder carrier; fall back to knob-based pitch
+            midi_frequencies
+                .iter()
+                .copied()
+                .find(|&f| f > 0.0)
+                .unwrap_or_else(|| get_frequency(key, note, octave, true))
+        } else {
+            get_frequency(key, note, octave, true)
+        };
 
         osc.set_waveform(wave_type);
 
@@ -330,8 +341,6 @@ pub fn handle_vocal_effects(
             }
         }
     }
-
-    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
 
     let musical_settings = MusicalSettings {
         formant,
