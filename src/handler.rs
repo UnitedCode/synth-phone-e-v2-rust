@@ -250,6 +250,7 @@ pub fn handle_vocal_effects(
     previous_pitch_shift_ratio: &mut f32,
     carrier_buffer: &mut RingBuffer<FFT_SIZE>,
     osc: &mut Oscillator,
+    carrier_oscs: &mut [Oscillator; 8],
 ) {
     let mut current_process = ProcessingProfile::PitchControl;
     let mut formant = 0;
@@ -295,15 +296,44 @@ pub fn handle_vocal_effects(
         ProcessingProfile::Percussion => ProcessingMode::Dry,
     };
 
+    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
+
     if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
-        let carrier_hz = get_frequency(key, note, octave, true);
-
-        osc.set_waveform(wave_type);
-
-        osc.set_freq(carrier_hz);
-        for _ in 0..FFT_SIZE {
-            let sample = osc.next_value();
-            carrier_buffer.push(sample);
+        if mode == ProcessingMode::Vocode {
+            let active_count = midi_frequencies.iter().filter(|&&f| f > 0.0).count();
+            if active_count > 0 {
+                let scale = 1.0 / active_count as f32;
+                for (i, &freq) in midi_frequencies.iter().enumerate() {
+                    if freq > 0.0 {
+                        carrier_oscs[i].set_waveform(wave_type);
+                        carrier_oscs[i].set_freq(freq);
+                    }
+                }
+                for _ in 0..FFT_SIZE {
+                    let mut sample = 0.0f32;
+                    for (i, &freq) in midi_frequencies.iter().enumerate() {
+                        if freq > 0.0 {
+                            sample += carrier_oscs[i].next_value();
+                        }
+                    }
+                    carrier_buffer.push(sample * scale);
+                }
+            } else {
+                // No MIDI notes held — fall back to knob-driven pitch
+                let carrier_hz = get_frequency(key, note, octave, true);
+                osc.set_waveform(wave_type);
+                osc.set_freq(carrier_hz);
+                for _ in 0..FFT_SIZE {
+                    carrier_buffer.push(osc.next_value());
+                }
+            }
+        } else {
+            let carrier_hz = get_frequency(key, note, octave, true);
+            osc.set_waveform(wave_type);
+            osc.set_freq(carrier_hz);
+            for _ in 0..FFT_SIZE {
+                carrier_buffer.push(osc.next_value());
+            }
         }
     }
 
@@ -330,8 +360,6 @@ pub fn handle_vocal_effects(
             }
         }
     }
-
-    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
 
     let musical_settings = MusicalSettings {
         formant,
