@@ -10,9 +10,13 @@ fn bhaskara_sine(phase: u32) -> i32 {
         (false, phase.wrapping_sub(0x8000_0000))
     };
     let t = p as f32 * (1.0 / 2_147_483_648.0); // 0.0 ..= 1.0 over the half period
-    let s = t * (1.0 - t);                        // 0.0 ..= 0.25
+    let s = t * (1.0 - t); // 0.0 ..= 0.25
     let v = (16.0 * s / (5.0 - 4.0 * s) * 32767.0) as i32;
-    if positive { v } else { -v }
+    if positive {
+        v
+    } else {
+        -v
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -108,14 +112,14 @@ pub struct DrumSampler {
     phase: u32,
     phase_inc: u32,
     target_phase_inc: u32,
-    pitch_decay: u16,  // exponential pitch-sweep multiplier  (Kick, Tom)
-    phase2: u32,       // second oscillator / LFO
-    phase2_inc: u32,   // second osc freq, LFO rate, or cuica linear step
+    pitch_decay: u16, // exponential pitch-sweep multiplier  (Kick, Tom)
+    phase2: u32,      // second oscillator / LFO
+    phase2_inc: u32,  // second osc freq, LFO rate, or cuica linear step
     env: u16,
     env_decay: u16,
-    noise: u16,        // 15-bit LFSR state
-    noise_hp: i16,     // previous noise sample — used for HP difference filter
-    noise_mix: u8,     // 0 = all tone, 16 = all noise
+    noise: u16,    // 15-bit LFSR state
+    noise_hp: i16, // previous noise sample — used for HP difference filter
+    noise_mix: u8, // 0 = all tone, 16 = all noise
 }
 
 impl DrumSampler {
@@ -156,21 +160,21 @@ impl DrumSampler {
             // 35: 808-style – deep sub-bass bloom, long tail
             DrumType::AcousticBassDrum => {
                 self.engine = SynthEngine::Kick;
-                self.max_samples = 19_200;     // 400 ms safety cap; env fades first
-                self.phase_inc = 8_944_300;    // 100 Hz start
+                self.max_samples = 19_200; // 400 ms safety cap; env fades first
+                self.phase_inc = 8_944_300; // 100 Hz start
                 self.target_phase_inc = 2_504_404; // 28 Hz sub-bass end
                 self.pitch_decay = 65_470;
-                self.env_decay = 65_524;       // very slow – the 808 "bloom"
+                self.env_decay = 65_524; // very slow – the 808 "bloom"
                 self.noise_mix = 0;
                 self.phase2_inc = 0;
             }
             // 36: 909-style – higher start, faster sweep, punch + thump
             DrumType::BassDrum1 => {
                 self.engine = SynthEngine::Kick;
-                self.max_samples = 9_600;      // 200 ms
-                self.phase_inc = 13_416_450;   // 150 Hz start
+                self.max_samples = 9_600; // 200 ms
+                self.phase_inc = 13_416_450; // 150 Hz start
                 self.target_phase_inc = 3_130_505; // 35 Hz end
-                self.pitch_decay = 65_430;     // fast sweep – characteristic 909
+                self.pitch_decay = 65_430; // fast sweep – characteristic 909
                 self.env_decay = 65_509;
                 self.noise_mix = 0;
                 self.phase2_inc = 0;
@@ -180,29 +184,29 @@ impl DrumSampler {
             // 37: Side stick – sharp high-freq click
             DrumType::SideStick => {
                 self.engine = SynthEngine::Click;
-                self.max_samples = 480;        // 10 ms
-                self.phase_inc = 134_164_500;  // 1500 Hz
+                self.max_samples = 480; // 10 ms
+                self.phase_inc = 134_164_500; // 1500 Hz
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_000;
-                self.noise_mix = 4;            // 75 % square + 25 % noise
+                self.noise_mix = 4; // 75 % square + 25 % noise
                 self.phase2_inc = 0;
             }
             // 38: 808 snare – tonal crack + noise tail
             DrumType::AcousticSnare => {
                 self.engine = SynthEngine::Snare;
-                self.max_samples = 4_320;      // 90 ms
-                self.phase_inc = 17_888_600;   // 200 Hz body
+                self.max_samples = 4_320; // 90 ms
+                self.phase_inc = 17_888_600; // 200 Hz body
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_494;
-                self.noise_mix = 11;           // 69 % noise
+                self.noise_mix = 11; // 69 % noise
                 self.phase2_inc = 0;
             }
             // 39: 808 clap – four rapid bursts then decaying tail
             DrumType::HandClap => {
                 self.engine = SynthEngine::Clap;
-                self.max_samples = 4_800;      // 100 ms
+                self.max_samples = 4_800; // 100 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -213,12 +217,12 @@ impl DrumSampler {
             // 40: 909 snare – tight, mostly noise, very snappy
             DrumType::ElectricSnare => {
                 self.engine = SynthEngine::Snare;
-                self.max_samples = 2_400;      // 50 ms
-                self.phase_inc = 22_360_750;   // 250 Hz body
+                self.max_samples = 2_400; // 50 ms
+                self.phase_inc = 22_360_750; // 250 Hz body
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_435;
-                self.noise_mix = 13;           // 81 % noise
+                self.noise_mix = 13; // 81 % noise
                 self.phase2_inc = 0;
             }
 
@@ -226,7 +230,7 @@ impl DrumSampler {
             DrumType::LowFloorTom => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 8_640;
-                self.phase_inc = 7_155_440;    // 80 Hz
+                self.phase_inc = 7_155_440; // 80 Hz
                 self.target_phase_inc = 6_500_000;
                 self.pitch_decay = 65_530;
                 self.env_decay = 65_513;
@@ -236,7 +240,7 @@ impl DrumSampler {
             DrumType::HighFloorTom => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 8_640;
-                self.phase_inc = 8_497_085;    // 95 Hz
+                self.phase_inc = 8_497_085; // 95 Hz
                 self.target_phase_inc = 7_800_000;
                 self.pitch_decay = 65_530;
                 self.env_decay = 65_513;
@@ -246,7 +250,7 @@ impl DrumSampler {
             DrumType::LowTom => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 9_600;
-                self.phase_inc = 9_838_730;    // 110 Hz
+                self.phase_inc = 9_838_730; // 110 Hz
                 self.target_phase_inc = 9_000_000;
                 self.pitch_decay = 65_530;
                 self.env_decay = 65_515;
@@ -256,7 +260,7 @@ impl DrumSampler {
             DrumType::LowMidTom => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 9_600;
-                self.phase_inc = 11_627_590;   // 130 Hz
+                self.phase_inc = 11_627_590; // 130 Hz
                 self.target_phase_inc = 10_600_000;
                 self.pitch_decay = 65_530;
                 self.env_decay = 65_515;
@@ -266,7 +270,7 @@ impl DrumSampler {
             DrumType::HiMidTom => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 8_160;
-                self.phase_inc = 13_863_665;   // 155 Hz
+                self.phase_inc = 13_863_665; // 155 Hz
                 self.target_phase_inc = 12_600_000;
                 self.pitch_decay = 65_530;
                 self.env_decay = 65_511;
@@ -276,7 +280,7 @@ impl DrumSampler {
             DrumType::HighTom => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 7_200;
-                self.phase_inc = 16_546_955;   // 185 Hz
+                self.phase_inc = 16_546_955; // 185 Hz
                 self.target_phase_inc = 15_000_000;
                 self.pitch_decay = 65_530;
                 self.env_decay = 65_507;
@@ -287,17 +291,17 @@ impl DrumSampler {
             // ── HI-HATS (HP-filtered metallic noise) ─────────────────────────────
             DrumType::ClosedHiHat => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 768;        // 16 ms – very tight 909-style
+                self.max_samples = 768; // 16 ms – very tight 909-style
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
-                self.env_decay = 64_256;       // extremely fast snap
+                self.env_decay = 64_256; // extremely fast snap
                 self.noise_mix = 16;
                 self.phase2_inc = 0;
             }
             DrumType::PedalHiHat => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 1_152;      // 24 ms
+                self.max_samples = 1_152; // 24 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -307,7 +311,7 @@ impl DrumSampler {
             }
             DrumType::OpenHiHat => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 10_560;     // 220 ms
+                self.max_samples = 10_560; // 220 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -319,7 +323,7 @@ impl DrumSampler {
             // ── CYMBALS (HP-filtered noise, long decays) ──────────────────────────
             DrumType::CrashCymbal1 => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 28_800;     // 600 ms
+                self.max_samples = 28_800; // 600 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -329,7 +333,7 @@ impl DrumSampler {
             }
             DrumType::RideCymbal1 => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 14_400;     // 300 ms
+                self.max_samples = 14_400; // 300 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -339,7 +343,7 @@ impl DrumSampler {
             }
             DrumType::ChineseCymbal => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 12_000;     // 250 ms
+                self.max_samples = 12_000; // 250 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -349,8 +353,8 @@ impl DrumSampler {
             }
             DrumType::RideBell => {
                 self.engine = SynthEngine::PureTone;
-                self.max_samples = 7_200;      // 150 ms
-                self.phase_inc = 62_610_100;   // 700 Hz
+                self.max_samples = 7_200; // 150 ms
+                self.phase_inc = 62_610_100; // 700 Hz
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_507;
@@ -359,7 +363,7 @@ impl DrumSampler {
             }
             DrumType::Tambourine => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 2_400;      // 50 ms
+                self.max_samples = 2_400; // 50 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -369,7 +373,7 @@ impl DrumSampler {
             }
             DrumType::SplashCymbal => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 6_000;      // 125 ms
+                self.max_samples = 6_000; // 125 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -380,17 +384,17 @@ impl DrumSampler {
             // ── 808 COWBELL ───────────────────────────────────────────────────────
             DrumType::Cowbell => {
                 self.engine = SynthEngine::Cowbell;
-                self.max_samples = 2_880;      // 60 ms – snappy 808 bonk
-                self.phase_inc = 50_267_006;   // 562 Hz osc 1
+                self.max_samples = 2_880; // 60 ms – snappy 808 bonk
+                self.phase_inc = 50_267_006; // 562 Hz osc 1
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_350;
                 self.noise_mix = 0;
-                self.phase2_inc = 75_579_335;  // 845 Hz osc 2
+                self.phase2_inc = 75_579_335; // 845 Hz osc 2
             }
             DrumType::CrashCymbal2 => {
                 self.engine = SynthEngine::MetallicNoise;
-                self.max_samples = 24_000;     // 500 ms
+                self.max_samples = 24_000; // 500 ms
                 self.phase_inc = 0;
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
@@ -402,12 +406,12 @@ impl DrumSampler {
             DrumType::Vibraslap => {
                 self.engine = SynthEngine::Vibraslap;
                 self.max_samples = 8_000;
-                self.phase_inc = 134_164_500;  // 1500 Hz click
+                self.phase_inc = 134_164_500; // 1500 Hz click
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_510;
                 self.noise_mix = 0;
-                self.phase2_inc = 4_472_150;   // ~50 Hz rattle gate
+                self.phase2_inc = 4_472_150; // ~50 Hz rattle gate
             }
             DrumType::RideCymbal2 => {
                 self.engine = SynthEngine::MetallicNoise;
@@ -425,7 +429,7 @@ impl DrumSampler {
             DrumType::HiBongo => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 2_400;
-                self.phase_inc = 35_777_200;   // 400 Hz
+                self.phase_inc = 35_777_200; // 400 Hz
                 self.target_phase_inc = 32_000_000;
                 self.pitch_decay = 65_520;
                 self.env_decay = 65_360;
@@ -435,7 +439,7 @@ impl DrumSampler {
             DrumType::LowBongo => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 3_600;
-                self.phase_inc = 23_255_180;   // 260 Hz
+                self.phase_inc = 23_255_180; // 260 Hz
                 self.target_phase_inc = 20_800_000;
                 self.pitch_decay = 65_522;
                 self.env_decay = 65_475;
@@ -445,7 +449,7 @@ impl DrumSampler {
             DrumType::MuteHiConga => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 1_200;
-                self.phase_inc = 28_174_545;   // 315 Hz
+                self.phase_inc = 28_174_545; // 315 Hz
                 self.target_phase_inc = 26_000_000;
                 self.pitch_decay = 65_510;
                 self.env_decay = 65_200;
@@ -455,7 +459,7 @@ impl DrumSampler {
             DrumType::OpenHiConga => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 2_976;
-                self.phase_inc = 28_174_545;   // 315 Hz
+                self.phase_inc = 28_174_545; // 315 Hz
                 self.target_phase_inc = 26_000_000;
                 self.pitch_decay = 65_520;
                 self.env_decay = 65_450;
@@ -465,7 +469,7 @@ impl DrumSampler {
             DrumType::LowConga => {
                 self.engine = SynthEngine::Tom;
                 self.max_samples = 3_600;
-                self.phase_inc = 17_888_600;   // 200 Hz
+                self.phase_inc = 17_888_600; // 200 Hz
                 self.target_phase_inc = 16_000_000;
                 self.pitch_decay = 65_522;
                 self.env_decay = 65_475;
@@ -475,7 +479,7 @@ impl DrumSampler {
             DrumType::HighTimbale => {
                 self.engine = SynthEngine::TomNoise;
                 self.max_samples = 2_400;
-                self.phase_inc = 50_088_080;   // 560 Hz
+                self.phase_inc = 50_088_080; // 560 Hz
                 self.target_phase_inc = 44_000_000;
                 self.pitch_decay = 65_510;
                 self.env_decay = 65_360;
@@ -485,7 +489,7 @@ impl DrumSampler {
             DrumType::LowTimbale => {
                 self.engine = SynthEngine::TomNoise;
                 self.max_samples = 3_000;
-                self.phase_inc = 33_093_910;   // 370 Hz
+                self.phase_inc = 33_093_910; // 370 Hz
                 self.target_phase_inc = 29_000_000;
                 self.pitch_decay = 65_515;
                 self.env_decay = 65_448;
@@ -497,7 +501,7 @@ impl DrumSampler {
             DrumType::HighAgogo => {
                 self.engine = SynthEngine::PureTone;
                 self.max_samples = 2_400;
-                self.phase_inc = 78_709_840;   // 880 Hz
+                self.phase_inc = 78_709_840; // 880 Hz
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_360;
@@ -507,7 +511,7 @@ impl DrumSampler {
             DrumType::LowAgogo => {
                 self.engine = SynthEngine::PureTone;
                 self.max_samples = 3_000;
-                self.phase_inc = 59_032_380;   // 660 Hz
+                self.phase_inc = 59_032_380; // 660 Hz
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_448;
@@ -517,7 +521,7 @@ impl DrumSampler {
             DrumType::ShortWhistle => {
                 self.engine = SynthEngine::PureTone;
                 self.max_samples = 4_800;
-                self.phase_inc = 187_184_099;  // 2093 Hz (C7)
+                self.phase_inc = 187_184_099; // 2093 Hz (C7)
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_500;
@@ -527,7 +531,7 @@ impl DrumSampler {
             DrumType::LongWhistle => {
                 self.engine = SynthEngine::PureTone;
                 self.max_samples = 12_000;
-                self.phase_inc = 187_184_099;  // 2093 Hz
+                self.phase_inc = 187_184_099; // 2093 Hz
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_521;
@@ -537,7 +541,7 @@ impl DrumSampler {
             DrumType::MuteTriangle => {
                 self.engine = SynthEngine::PureTone;
                 self.max_samples = 1_200;
-                self.phase_inc = 314_839_360;  // 3520 Hz (A7)
+                self.phase_inc = 314_839_360; // 3520 Hz (A7)
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_200;
@@ -546,8 +550,8 @@ impl DrumSampler {
             }
             DrumType::OpenTriangle => {
                 self.engine = SynthEngine::PureTone;
-                self.max_samples = 28_800;     // 600 ms ring
-                self.phase_inc = 314_839_360;  // 3520 Hz (A7)
+                self.max_samples = 28_800; // 600 ms ring
+                self.phase_inc = 314_839_360; // 3520 Hz (A7)
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_530;
@@ -571,7 +575,7 @@ impl DrumSampler {
             DrumType::Claves => {
                 self.engine = SynthEngine::Click;
                 self.max_samples = 240;
-                self.phase_inc = 178_886_000;  // 2000 Hz
+                self.phase_inc = 178_886_000; // 2000 Hz
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 64_800;
@@ -581,7 +585,7 @@ impl DrumSampler {
             DrumType::HiWoodBlock => {
                 self.engine = SynthEngine::Click;
                 self.max_samples = 1_200;
-                self.phase_inc = 67_082_250;   // 750 Hz
+                self.phase_inc = 67_082_250; // 750 Hz
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_200;
@@ -591,7 +595,7 @@ impl DrumSampler {
             DrumType::LowWoodBlock => {
                 self.engine = SynthEngine::Click;
                 self.max_samples = 1_200;
-                self.phase_inc = 53_665_800;   // 600 Hz
+                self.phase_inc = 53_665_800; // 600 Hz
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_200;
@@ -608,7 +612,7 @@ impl DrumSampler {
                 self.pitch_decay = 0;
                 self.env_decay = 65_450;
                 self.noise_mix = 0;
-                self.phase2_inc = 14_311_040;  // 160 Hz gate → ~8 scrapes
+                self.phase2_inc = 14_311_040; // 160 Hz gate → ~8 scrapes
             }
             DrumType::LongGuiro => {
                 self.engine = SynthEngine::Guiro;
@@ -618,7 +622,7 @@ impl DrumSampler {
                 self.pitch_decay = 0;
                 self.env_decay = 65_505;
                 self.noise_mix = 0;
-                self.phase2_inc = 7_155_440;   // 80 Hz gate → ~10 scrapes
+                self.phase2_inc = 7_155_440; // 80 Hz gate → ~10 scrapes
             }
 
             // ── CABASA ────────────────────────────────────────────────────────────
@@ -630,14 +634,14 @@ impl DrumSampler {
                 self.pitch_decay = 0;
                 self.env_decay = 65_500;
                 self.noise_mix = 0;
-                self.phase2_inc = 1_788_860;   // ~20 Hz AM triangle LFO
+                self.phase2_inc = 1_788_860; // ~20 Hz AM triangle LFO
             }
 
             // ── CUICA ─────────────────────────────────────────────────────────────
             DrumType::MuteCuica => {
                 self.engine = SynthEngine::Cuica;
                 self.max_samples = 2_400;
-                self.phase_inc = 26_832_900;   // 300 Hz start
+                self.phase_inc = 26_832_900; // 300 Hz start
                 self.target_phase_inc = 62_610_100; // 700 Hz end
                 self.pitch_decay = 0;
                 self.env_decay = 65_360;
@@ -648,7 +652,7 @@ impl DrumSampler {
             DrumType::OpenCuica => {
                 self.engine = SynthEngine::Cuica;
                 self.max_samples = 6_000;
-                self.phase_inc = 26_832_900;   // 300 Hz start
+                self.phase_inc = 26_832_900; // 300 Hz start
                 self.target_phase_inc = 62_610_100; // 700 Hz end
                 self.pitch_decay = 0;
                 self.env_decay = 65_505;
@@ -677,7 +681,11 @@ impl DrumSampler {
 
         // ── Primary oscillator ───────────────────────────────────────────────────
         self.phase = self.phase.wrapping_add(self.phase_inc);
-        let square: i32 = if self.phase < 0x8000_0000 { 32000 } else { -32000 };
+        let square: i32 = if self.phase < 0x8000_0000 {
+            32000
+        } else {
+            -32000
+        };
 
         // ── Envelope ─────────────────────────────────────────────────────────────
         self.env = ((self.env as u32 * self.env_decay as u32) >> 16) as u16;
@@ -687,8 +695,7 @@ impl DrumSampler {
             SynthEngine::Kick => {
                 // Exponential pitch sweep downward
                 if self.phase_inc > self.target_phase_inc {
-                    let swept =
-                        ((self.phase_inc as u64 * self.pitch_decay as u64) >> 16) as u32;
+                    let swept = ((self.phase_inc as u64 * self.pitch_decay as u64) >> 16) as u32;
                     self.phase_inc = swept.max(self.target_phase_inc);
                 }
                 // Sine body – clean, punchy, no triangle buzz
@@ -732,8 +739,7 @@ impl DrumSampler {
             SynthEngine::PureNoise => noise_i as i32,
             SynthEngine::Tom => {
                 if self.phase_inc > self.target_phase_inc {
-                    let swept =
-                        ((self.phase_inc as u64 * self.pitch_decay as u64) >> 16) as u32;
+                    let swept = ((self.phase_inc as u64 * self.pitch_decay as u64) >> 16) as u32;
                     self.phase_inc = swept.max(self.target_phase_inc);
                 }
                 let tone = bhaskara_sine(self.phase);
@@ -746,8 +752,7 @@ impl DrumSampler {
             }
             SynthEngine::TomNoise => {
                 if self.phase_inc > self.target_phase_inc {
-                    let swept =
-                        ((self.phase_inc as u64 * self.pitch_decay as u64) >> 16) as u32;
+                    let swept = ((self.phase_inc as u64 * self.pitch_decay as u64) >> 16) as u32;
                     self.phase_inc = swept.max(self.target_phase_inc);
                 }
                 let mix = self.noise_mix as i32;
@@ -760,7 +765,11 @@ impl DrumSampler {
             }
             SynthEngine::Cowbell => {
                 self.phase2 = self.phase2.wrapping_add(self.phase2_inc);
-                let sq2: i32 = if self.phase2 < 0x8000_0000 { 16000 } else { -16000 };
+                let sq2: i32 = if self.phase2 < 0x8000_0000 {
+                    16000
+                } else {
+                    -16000
+                };
                 square / 2 + sq2
             }
             SynthEngine::Vibraslap => {
@@ -775,7 +784,11 @@ impl DrumSampler {
             }
             SynthEngine::Guiro => {
                 self.phase2 = self.phase2.wrapping_add(self.phase2_inc);
-                if self.phase2 < 0x8000_0000 { noise_i as i32 } else { 0 }
+                if self.phase2 < 0x8000_0000 {
+                    noise_i as i32
+                } else {
+                    0
+                }
             }
             SynthEngine::Cabasa => {
                 self.phase2 = self.phase2.wrapping_add(self.phase2_inc);
@@ -788,8 +801,7 @@ impl DrumSampler {
             }
             SynthEngine::Cuica => {
                 if self.phase_inc < self.target_phase_inc {
-                    self.phase_inc =
-                        (self.phase_inc + self.phase2_inc).min(self.target_phase_inc);
+                    self.phase_inc = (self.phase_inc + self.phase2_inc).min(self.target_phase_inc);
                 }
                 bhaskara_sine(self.phase)
             }
