@@ -40,6 +40,21 @@ pub fn audio_handler(
         bit_depth = msm.snapshot().bit_rate;
     });
 
+    // Consume any drum note triggered by the phone keypad and inject as MIDI ch9
+    let drum_note = shared.app_state_machine.lock(|msm| msm.consume_drum_on());
+    if let Some(note) = drum_note {
+        shared.midi_events.lock(|events| {
+            let _ = crate::midi::try_enqueue_midi_event(
+                events,
+                crate::midi::MidiEvent::NoteOn {
+                    channel: 9,
+                    key: note,
+                    velocity: 100,
+                },
+            );
+        });
+    }
+
     if audio.get_stereo(buffer) {
         for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
             let sample = match is_hangup_button_pressed {

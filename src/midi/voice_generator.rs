@@ -1,4 +1,4 @@
-use crate::audio::drum_synth::{DrumSampler, DrumType};
+use crate::audio::drum_synth::{midi_note_to_drum_type, DrumSampler};
 use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
 
 // Precomputed 1/sqrt(n) for n = 1..=8, indexed by active voice count
@@ -13,19 +13,6 @@ const INV_SQRT: [f32; 9] = [
     0.37796447, // 1/sqrt(7)
     0.35355339, // 1/sqrt(8)
 ];
-
-/// Map MIDI note to drum type (General MIDI standard)
-fn note_to_drum_type(note: u8) -> Option<DrumType> {
-    match note {
-        35 | 36 => Some(DrumType::Kick),
-        38 | 40 => Some(DrumType::Snare),
-        42 | 44 | 46 => Some(DrumType::HiHat),
-        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom),
-        39 => Some(DrumType::Clap),
-        49 | 55 | 57 => Some(DrumType::Cymbal),
-        _ => None,
-    }
-}
 
 /// Voice that holds BOTH generators, only one active at a time
 /// This avoids dynamic dispatch and runtime allocation
@@ -86,7 +73,7 @@ impl HybridVoice {
         // Channel 9 (0-indexed) = MIDI channel 10 = drums
         if channel == 9 {
             self.active_type = VoiceTypeId::Drum;
-            if let Some(drum_type) = note_to_drum_type(note) {
+            if let Some(drum_type) = midi_note_to_drum_type(note) {
                 self.drum.set_drum_type(drum_type);
                 self.drum.trigger();
             }
@@ -128,7 +115,8 @@ impl HybridVoice {
                     self.note = None;
                     self.velocity = 0;
                 }
-                sample * vel_scale
+                // 0.5 compensates for bhaskara_sine peaking at 2× the old triangle wave
+                sample * vel_scale * 0.75
             }
         }
     }
