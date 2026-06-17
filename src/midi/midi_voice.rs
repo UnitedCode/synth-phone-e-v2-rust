@@ -203,6 +203,11 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn note_off(&mut self, note: u8, channel: u8) {
+        // GM spec: drum channel ignores NoteOff — voices self-release via envelope
+        if channel == 9 {
+            return;
+        }
+
         for i in 0..MAX_VOICES {
             if self.voices[i].is_playing(note, channel) {
                 self.voices[i].note_off();
