@@ -110,12 +110,10 @@ impl HybridVoice {
             }
             VoiceTypeId::Drum => {
                 let sample = self.drum.next_value();
-                // Drums auto-release when sample returns 0 consistently
-                if sample == 0.0 && self.note.is_some() {
+                if self.drum.is_finished() {
                     self.note = None;
                     self.velocity = 0;
                 }
-                // 0.5 compensates for bhaskara_sine peaking at 2× the old triangle wave
                 sample * vel_scale * 0.75
             }
         }

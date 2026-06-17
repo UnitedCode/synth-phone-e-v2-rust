@@ -40,19 +40,25 @@ pub fn audio_handler(
         bit_depth = msm.snapshot().bit_rate;
     });
 
-    // Consume any drum note triggered by the phone keypad and inject as MIDI ch9
-    let drum_note = shared.app_state_machine.lock(|msm| msm.consume_drum_on());
-    if let Some(note) = drum_note {
-        shared.midi_events.lock(|events| {
-            let _ = crate::midi::try_enqueue_midi_event(
-                events,
-                crate::midi::MidiEvent::NoteOn {
-                    channel: 9,
-                    key: note,
-                    velocity: 100,
-                },
-            );
-        });
+    // Drain all drum notes queued by the phone keypad (up to 4 simultaneous)
+    // and inject each as a MIDI NoteOn on ch9.
+    loop {
+        let drum_note = shared.app_state_machine.lock(|msm| msm.consume_drum_on());
+        match drum_note {
+            Some(note) => {
+                shared.midi_events.lock(|events| {
+                    let _ = crate::midi::try_enqueue_midi_event(
+                        events,
+                        crate::midi::MidiEvent::NoteOn {
+                            channel: 9,
+                            key: note,
+                            velocity: 100,
+                        },
+                    );
+                });
+            }
+            None => break,
+        }
     }
 
     if audio.get_stereo(buffer) {
@@ -271,7 +277,7 @@ pub fn handle_vocal_effects(
     let mut formant = 0;
     let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
-    let key = 0;
+    let mut key = 0i8;
     let mut octave = 2;
     let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
@@ -287,6 +293,7 @@ pub fn handle_vocal_effects(
         }
         formant = snapshot.formant;
         octave = snapshot.octave;
+        key = snapshot.key;
         percussion = snapshot.percussion;
         let octave_factor = octave as f32 * 0.5;
         pitch_shift_ratio = if octave_factor <= 0.4 {
@@ -334,20 +341,33 @@ pub fn handle_vocal_effects(
                     carrier_buffer.push(sample * scale);
                 }
             } else {
-                // No MIDI notes held — fall back to knob-driven pitch
+                // No MIDI notes held — fall back to keypad-driven pitch
+                if note > 0 {
+                    let carrier_hz = get_frequency(key, note, octave, true);
+                    osc.set_waveform(wave_type);
+                    osc.set_freq(carrier_hz);
+                    for _ in 0..FFT_SIZE {
+                        carrier_buffer.push(osc.next_value());
+                    }
+                } else {
+                    for _ in 0..FFT_SIZE {
+                        carrier_buffer.push(0.0);
+                    }
+                }
+            }
+        } else {
+            // Dry mode
+            if note > 0 {
                 let carrier_hz = get_frequency(key, note, octave, true);
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
                 for _ in 0..FFT_SIZE {
                     carrier_buffer.push(osc.next_value());
                 }
-            }
-        } else {
-            let carrier_hz = get_frequency(key, note, octave, true);
-            osc.set_waveform(wave_type);
-            osc.set_freq(carrier_hz);
-            for _ in 0..FFT_SIZE {
-                carrier_buffer.push(osc.next_value());
+            } else {
+                for _ in 0..FFT_SIZE {
+                    carrier_buffer.push(0.0);
+                }
             }
         }
     }
@@ -391,7 +411,7 @@ pub fn handle_vocal_effects(
         .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut input_buffer));
 
     let mut carrier_unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let write_idx = 0;
+    let write_idx = carrier_buffer.write_index();
     carrier_buffer.block_from(write_idx, &mut carrier_unwrapped_buffer);
 
     let synthesis_output = process_vocal_effects_1024(

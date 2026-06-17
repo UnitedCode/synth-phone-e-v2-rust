@@ -302,7 +302,7 @@ pub struct AppStateMachine {
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
-    pending_drum_on: Option<u8>,
+    pending_drum_ons: [Option<u8>; 4],
 }
 
 // Add a snapshot struct to hold all the state information
@@ -360,7 +360,7 @@ impl AppStateMachine {
             key_down_pressed: false,
             process_cycle_pressed: false,
             key_up_pressed: false,
-            pending_drum_on: None,
+            pending_drum_ons: [None; 4],
         }
     }
 
@@ -389,12 +389,17 @@ impl AppStateMachine {
             key_up_pressed: self.key_up_pressed,
             waveform: self.current_waveform,
             percussion: self.current_percussion,
-            drum_on: self.pending_drum_on,
+            drum_on: self.pending_drum_ons[0],
         }
     }
 
     pub fn consume_drum_on(&mut self) -> Option<u8> {
-        self.pending_drum_on.take()
+        for slot in &mut self.pending_drum_ons {
+            if let Some(note) = slot.take() {
+                return Some(note);
+            }
+        }
+        None
     }
 
     /// Handle incoming events
@@ -410,7 +415,12 @@ impl AppStateMachine {
             // Percussion mode: map phone keypad → GM drum notes on channel 9
             (AppState::Processing(ProcessingProfile::Percussion), AppEvent::KeypadPress(key)) => {
                 if let Some(note) = keypad_to_drum_note(key) {
-                    self.pending_drum_on = Some(note);
+                    for slot in &mut self.pending_drum_ons {
+                        if slot.is_none() {
+                            *slot = Some(note);
+                            break;
+                        }
+                    }
                 }
             }
 

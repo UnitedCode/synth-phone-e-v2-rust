@@ -664,6 +664,11 @@ impl DrumSampler {
     }
 
     #[inline(always)]
+    pub fn is_finished(&self) -> bool {
+        self.max_samples == 0 || self.sample_count >= self.max_samples || self.env < 100
+    }
+
+    #[inline(always)]
     pub fn next_value(&mut self) -> f32 {
         if self.sample_count >= self.max_samples || self.env < 100 {
             return 0.0;
