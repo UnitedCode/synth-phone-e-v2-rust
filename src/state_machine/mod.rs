@@ -302,7 +302,6 @@ pub struct AppStateMachine {
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
-    pending_drum_ons: [Option<u8>; 4],
 }
 
 // Add a snapshot struct to hold all the state information
@@ -325,7 +324,6 @@ pub struct AppStateMachineSnapshot {
     pub key_up_pressed: bool,
     pub waveform: i8,
     pub percussion: i8,
-    pub drum_on: Option<u8>,
 }
 
 // Add a MenuContext struct for menu display
@@ -360,7 +358,6 @@ impl AppStateMachine {
             key_down_pressed: false,
             process_cycle_pressed: false,
             key_up_pressed: false,
-            pending_drum_ons: [None; 4],
         }
     }
 
@@ -389,17 +386,7 @@ impl AppStateMachine {
             key_up_pressed: self.key_up_pressed,
             waveform: self.current_waveform,
             percussion: self.current_percussion,
-            drum_on: self.pending_drum_ons[0],
         }
-    }
-
-    pub fn consume_drum_on(&mut self) -> Option<u8> {
-        for slot in &mut self.pending_drum_ons {
-            if let Some(note) = slot.take() {
-                return Some(note);
-            }
-        }
-        None
     }
 
     /// Handle incoming events
@@ -410,18 +397,6 @@ impl AppStateMachine {
             (AppState::Processing(_), AppEvent::EncoderRotate(delta))
             | (AppState::EffectsProfile(_), AppEvent::EncoderRotate(delta)) => {
                 self.volume = clamp_value(self.volume, delta, 0, 10);
-            }
-
-            // Percussion mode: map phone keypad → GM drum notes on channel 9
-            (AppState::Processing(ProcessingProfile::Percussion), AppEvent::KeypadPress(key)) => {
-                if let Some(note) = keypad_to_drum_note(key) {
-                    for slot in &mut self.pending_drum_ons {
-                        if slot.is_none() {
-                            *slot = Some(note);
-                            break;
-                        }
-                    }
-                }
             }
 
             // Handle keypad presses in Processing profile (for notes)
@@ -625,28 +600,6 @@ impl AppStateMachine {
 /// Layout prioritises kick/snare/hat in the top row for ergonomic live playing.
 ///
 /// Physical layout (col order is reversed in scan; key_num = row*3 + (2-col) + 1):
-///   Key 3 | Key 2 | Key 1   row 0
-///   Key 6 | Key 5 | Key 4   row 1
-///   Key 9 | Key 8 | Key 7   row 2
-///   Key 12| Key 11| Key 10  row 3
-pub fn keypad_to_drum_note(key: usize) -> Option<u8> {
-    match key {
-        1 => Some(36),  // Bass Drum 1
-        2 => Some(38),  // Acoustic Snare
-        3 => Some(42),  // Closed Hi-Hat
-        4 => Some(35),  // Acoustic Bass Drum
-        5 => Some(39),  // Hand Clap
-        6 => Some(46),  // Open Hi-Hat
-        7 => Some(41),  // Low Floor Tom
-        8 => Some(45),  // Low Tom
-        9 => Some(49),  // Crash Cymbal 1
-        10 => Some(47), // Low-Mid Tom
-        11 => Some(50), // High Tom
-        12 => Some(51), // Ride Cymbal 1
-        _ => None,
-    }
-}
-
 /// A small helper function to clamp an i8.
 fn clamp_value(current: i8, delta: i8, min: i8, max: i8) -> i8 {
     (current + delta).clamp(min, max)

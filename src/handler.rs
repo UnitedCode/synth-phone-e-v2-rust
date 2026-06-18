@@ -40,27 +40,6 @@ pub fn audio_handler(
         bit_depth = msm.snapshot().bit_rate;
     });
 
-    // Drain all drum notes queued by the phone keypad (up to 4 simultaneous)
-    // and inject each as a MIDI NoteOn on ch9.
-    loop {
-        let drum_note = shared.app_state_machine.lock(|msm| msm.consume_drum_on());
-        match drum_note {
-            Some(note) => {
-                shared.midi_events.lock(|events| {
-                    let _ = crate::midi::try_enqueue_midi_event(
-                        events,
-                        crate::midi::MidiEvent::NoteOn {
-                            channel: 9,
-                            key: note,
-                            velocity: 100,
-                        },
-                    );
-                });
-            }
-            None => break,
-        }
-    }
-
     if audio.get_stereo(buffer) {
         for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
             let sample = match is_hangup_button_pressed {
@@ -191,14 +170,31 @@ pub fn interface_handler(
 
                 if is_pressed {
                     update_state = true;
-                    // Button has just been pressed
-                    shared.app_state_machine.lock(|msm| {
-                        msm.handle_event(handle_button_press(
-                            row,
-                            col,
-                            msm.snapshot().current_state,
-                        ));
-                    });
+                    let current_state =
+                        shared.app_state_machine.lock(|msm| msm.snapshot().current_state);
+
+                    if let AppState::Processing(ProcessingProfile::Percussion) = current_state {
+                        // In Percussion mode keypad presses are drum notes — inject directly
+                        // into the MIDI queue rather than routing through the state machine.
+                        let actual_col = 2 - col;
+                        let key_num = row * 3 + actual_col + 1;
+                        if let Some(note) = keypad_to_drum_note(key_num) {
+                            shared.midi_events.lock(|events| {
+                                let _ = crate::midi::try_enqueue_midi_event(
+                                    events,
+                                    crate::midi::MidiEvent::NoteOn {
+                                        channel: 9,
+                                        key: note,
+                                        velocity: 100,
+                                    },
+                                );
+                            });
+                        }
+                    } else {
+                        shared.app_state_machine.lock(|msm| {
+                            msm.handle_event(handle_button_press(row, col, current_state));
+                        });
+                    }
                 } else {
                     update_state = true;
                     // Button has just been released
