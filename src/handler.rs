@@ -170,8 +170,9 @@ pub fn interface_handler(
 
                 if is_pressed {
                     update_state = true;
-                    let current_state =
-                        shared.app_state_machine.lock(|msm| msm.snapshot().current_state);
+                    let current_state = shared
+                        .app_state_machine
+                        .lock(|msm| msm.snapshot().current_state);
 
                     if let AppState::Processing(ProcessingProfile::Percussion) = current_state {
                         // In Percussion mode keypad presses are drum notes — inject directly
