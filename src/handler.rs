@@ -170,14 +170,32 @@ pub fn interface_handler(
 
                 if is_pressed {
                     update_state = true;
-                    // Button has just been pressed
-                    shared.app_state_machine.lock(|msm| {
-                        msm.handle_event(handle_button_press(
-                            row,
-                            col,
-                            msm.snapshot().current_state,
-                        ));
-                    });
+                    let current_state = shared
+                        .app_state_machine
+                        .lock(|msm| msm.snapshot().current_state);
+
+                    if let AppState::Processing(ProcessingProfile::Percussion) = current_state {
+                        // In Percussion mode keypad presses are drum notes — inject directly
+                        // into the MIDI queue rather than routing through the state machine.
+                        let actual_col = 2 - col;
+                        let key_num = row * 3 + actual_col + 1;
+                        if let Some(note) = keypad_to_drum_note(key_num) {
+                            shared.midi_events.lock(|events| {
+                                let _ = crate::midi::try_enqueue_midi_event(
+                                    events,
+                                    crate::midi::MidiEvent::NoteOn {
+                                        channel: 9,
+                                        key: note,
+                                        velocity: 100,
+                                    },
+                                );
+                            });
+                        }
+                    } else {
+                        shared.app_state_machine.lock(|msm| {
+                            msm.handle_event(handle_button_press(row, col, current_state));
+                        });
+                    }
                 } else {
                     update_state = true;
                     // Button has just been released
@@ -256,7 +274,7 @@ pub fn handle_vocal_effects(
     let mut formant = 0;
     let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
-    let key = 0;
+    let mut key = 0i8;
     let mut octave = 2;
     let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
@@ -272,6 +290,7 @@ pub fn handle_vocal_effects(
         }
         formant = snapshot.formant;
         octave = snapshot.octave;
+        key = snapshot.key;
         percussion = snapshot.percussion;
         let octave_factor = octave as f32 * 0.5;
         pitch_shift_ratio = if octave_factor <= 0.4 {
@@ -319,20 +338,33 @@ pub fn handle_vocal_effects(
                     carrier_buffer.push(sample * scale);
                 }
             } else {
-                // No MIDI notes held — fall back to knob-driven pitch
+                // No MIDI notes held — fall back to keypad-driven pitch
+                if note > 0 {
+                    let carrier_hz = get_frequency(key, note, octave, true);
+                    osc.set_waveform(wave_type);
+                    osc.set_freq(carrier_hz);
+                    for _ in 0..FFT_SIZE {
+                        carrier_buffer.push(osc.next_value());
+                    }
+                } else {
+                    for _ in 0..FFT_SIZE {
+                        carrier_buffer.push(0.0);
+                    }
+                }
+            }
+        } else {
+            // Dry mode
+            if note > 0 {
                 let carrier_hz = get_frequency(key, note, octave, true);
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
                 for _ in 0..FFT_SIZE {
                     carrier_buffer.push(osc.next_value());
                 }
-            }
-        } else {
-            let carrier_hz = get_frequency(key, note, octave, true);
-            osc.set_waveform(wave_type);
-            osc.set_freq(carrier_hz);
-            for _ in 0..FFT_SIZE {
-                carrier_buffer.push(osc.next_value());
+            } else {
+                for _ in 0..FFT_SIZE {
+                    carrier_buffer.push(0.0);
+                }
             }
         }
     }
@@ -376,7 +408,7 @@ pub fn handle_vocal_effects(
         .lock(|rb| rb.block_from::<FFT_SIZE>(write_idx, &mut input_buffer));
 
     let mut carrier_unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let write_idx = 0;
+    let write_idx = carrier_buffer.write_index();
     carrier_buffer.block_from(write_idx, &mut carrier_unwrapped_buffer);
 
     let synthesis_output = process_vocal_effects_1024(

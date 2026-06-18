@@ -596,6 +596,10 @@ impl AppStateMachine {
     // }
 }
 
+/// Maps the 12-key phone keypad to GM1 drum note numbers.
+/// Layout prioritises kick/snare/hat in the top row for ergonomic live playing.
+///
+/// Physical layout (col order is reversed in scan; key_num = row*3 + (2-col) + 1):
 /// A small helper function to clamp an i8.
 fn clamp_value(current: i8, delta: i8, min: i8, max: i8) -> i8 {
     (current + delta).clamp(min, max)

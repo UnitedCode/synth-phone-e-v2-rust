@@ -90,6 +90,30 @@ pub fn handle_button_press(row: usize, col: usize, current_state: AppState) -> A
     }
 }
 
+/// Maps a 4×3 keypad key number (1–12) to a GM drum note on channel 10.
+/// Layout (column order is reversed by the scan hardware):
+///   Key 3 | Key 2 | Key 1   row 0
+///   Key 6 | Key 5 | Key 4   row 1
+///   Key 9 | Key 8 | Key 7   row 2
+///   Key 12| Key 11| Key 10  row 3
+pub fn keypad_to_drum_note(key: usize) -> Option<u8> {
+    match key {
+        1 => Some(36),  // Bass Drum 1
+        2 => Some(38),  // Acoustic Snare
+        3 => Some(42),  // Closed Hi-Hat
+        4 => Some(35),  // Acoustic Bass Drum
+        5 => Some(39),  // Hand Clap
+        6 => Some(46),  // Open Hi-Hat
+        7 => Some(41),  // Low Floor Tom
+        8 => Some(45),  // Low Tom
+        9 => Some(49),  // Crash Cymbal 1
+        10 => Some(47), // Low-Mid Tom
+        11 => Some(50), // High Tom
+        12 => Some(51), // Ride Cymbal 1
+        _ => None,
+    }
+}
+
 pub fn handle_button_release(row: usize, col: usize, current_state: AppState) -> AppEvent {
     // Use the same mapping as press
     let actual_col = 2 - col;

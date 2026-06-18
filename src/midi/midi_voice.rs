@@ -1,21 +1,8 @@
 // src/midi/midi_voice.rs
 // Combined voice manager with hybrid synth/drum voices
 
-use crate::audio::drum_synth::{DrumSampler, DrumType};
+use crate::audio::drum_synth::{midi_note_to_drum_type, DrumSampler};
 use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
-
-/// Map MIDI note to drum type (General MIDI standard)
-fn note_to_drum_type(note: u8) -> Option<DrumType> {
-    match note {
-        35 | 36 => Some(DrumType::Kick),       // Acoustic/Electric Bass Drum
-        37 | 38 | 40 => Some(DrumType::Snare), // Side Stick, Snare, Electric Snare
-        39 => Some(DrumType::Clap),            // Hand Clap
-        41 | 43 | 45 | 47 | 48 | 50 => Some(DrumType::Tom), // Toms
-        42 | 44 | 46 => Some(DrumType::HiHat), // Hi-Hats (closed, pedal, open)
-        49 | 51 | 52 | 55 | 57 | 59 => Some(DrumType::Cymbal), // Crashes & Rides
-        _ => None,
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceTypeId {
@@ -79,10 +66,8 @@ impl HybridVoice {
         // Channel 9 (0-indexed) = MIDI channel 10 = drums
         if channel == 9 {
             self.active_type = VoiceTypeId::Drum;
-            if let Some(drum_type) = note_to_drum_type(note) {
+            if let Some(drum_type) = midi_note_to_drum_type(note) {
                 self.drum.set_drum_type(drum_type);
-                // Set pitch for toms based on MIDI note
-                self.drum.set_pitch(note);
                 self.drum.trigger();
             }
             // Unknown drum notes are ignored
@@ -120,7 +105,8 @@ impl HybridVoice {
                     self.note = None;
                     self.velocity = 0;
                 }
-                sample * vel_scale
+                // 0.5 compensates for bhaskara_sine peaking at 2× the old triangle wave
+                sample * vel_scale * 0.75
             }
         }
     }
@@ -217,6 +203,11 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn note_off(&mut self, note: u8, channel: u8) {
+        // GM spec: drum channel ignores NoteOff — voices self-release via envelope
+        if channel == 9 {
+            return;
+        }
+
         for i in 0..MAX_VOICES {
             if self.voices[i].is_playing(note, channel) {
                 self.voices[i].note_off();

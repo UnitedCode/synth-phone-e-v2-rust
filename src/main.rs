@@ -568,6 +568,7 @@ mod rtic_app {
                 app_state_machine,
                 old_matrix_state,
                 display_needs_update,
+                midi_events,
             ],
             priority = 3
         )]
