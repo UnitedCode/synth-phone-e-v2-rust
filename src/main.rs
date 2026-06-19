@@ -123,7 +123,7 @@ mod rtic_app {
             sr_held_value: f32,
             last_input_phases: [f32; FFT_SIZE],
             last_output_phases: [f32; FFT_SIZE],
-            carrier_ring: RingBuffer<FFT_SIZE>,
+            carrier_ring: RingBuffer<BUFFER_SIZE>,
             osc: Oscillator,
             carrier_oscs: [Oscillator; 8],
             previous_pitch_shift_ratio: f32,

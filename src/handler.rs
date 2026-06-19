@@ -266,7 +266,7 @@ pub fn handle_vocal_effects(
     last_input_phases: &mut [f32; FFT_SIZE],
     last_output_phases: &mut [f32; FFT_SIZE],
     previous_pitch_shift_ratio: &mut f32,
-    carrier_buffer: &mut RingBuffer<FFT_SIZE>,
+    carrier_buffer: &mut RingBuffer<BUFFER_SIZE>,
     osc: &mut Oscillator,
     carrier_oscs: &mut [Oscillator; 8],
 ) {
@@ -328,7 +328,7 @@ pub fn handle_vocal_effects(
                         carrier_oscs[i].set_freq(freq);
                     }
                 }
-                for _ in 0..FFT_SIZE {
+                for _ in 0..HOP_SIZE {
                     let mut sample = 0.0f32;
                     for (i, &freq) in midi_frequencies.iter().enumerate() {
                         if freq > 0.0 {
@@ -343,11 +343,11 @@ pub fn handle_vocal_effects(
                     let carrier_hz = get_frequency(key, note, octave, true);
                     osc.set_waveform(wave_type);
                     osc.set_freq(carrier_hz);
-                    for _ in 0..FFT_SIZE {
+                    for _ in 0..HOP_SIZE {
                         carrier_buffer.push(osc.next_value());
                     }
                 } else {
-                    for _ in 0..FFT_SIZE {
+                    for _ in 0..HOP_SIZE {
                         carrier_buffer.push(0.0);
                     }
                 }
@@ -358,11 +358,11 @@ pub fn handle_vocal_effects(
                 let carrier_hz = get_frequency(key, note, octave, true);
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
-                for _ in 0..FFT_SIZE {
+                for _ in 0..HOP_SIZE {
                     carrier_buffer.push(osc.next_value());
                 }
             } else {
-                for _ in 0..FFT_SIZE {
+                for _ in 0..HOP_SIZE {
                     carrier_buffer.push(0.0);
                 }
             }
