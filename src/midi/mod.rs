@@ -44,7 +44,15 @@ impl MidiReceiver {
                             return Ok(Some(MidiEvent::Other));
                         }
                         if byte & 0x80 != 0 {
-                            // This is a status byte
+                            // System real-time messages (0xF8–0xFF) are single-byte and
+                            // transparent — they must NOT update status_byte so they don't
+                            // corrupt the running-status register (e.g. MIDI Clock 0xF8
+                            // arriving between two drum notes).
+                            if byte >= 0xF8 {
+                                return Ok(Some(MidiEvent::Other));
+                            }
+
+                            // This is a channel/system-common status byte
                             self.status_byte = byte;
                             self.data_count = 0;
 
@@ -63,18 +71,21 @@ impl MidiReceiver {
                                 // No data bytes expected, process immediately
                                 return Ok(Some(self.create_midi_event()));
                             }
-                        } else if self.status_byte != 0 && self.expected_data_bytes > 0 {
-                            // Running status: reuse the previous status byte
-                            self.data_count = 0;
+                        } else if self.status_byte != 0
+                            && self.status_byte < 0xF0
+                            && self.expected_data_bytes > 0
+                        {
+                            // Running status: reuse the previous channel status byte.
+                            // Most MIDI controllers omit the repeated status byte for
+                            // consecutive messages on the same channel (e.g. drum chords).
+                            // Only valid for channel messages (status < 0xF0).
                             self.data_bytes[0] = byte;
                             self.data_count = 1;
-                            if self.data_count >= self.expected_data_bytes {
-                                let event = self.create_midi_event();
-                                return Ok(Some(event));
+                            if self.expected_data_bytes == 1 {
+                                return Ok(Some(self.create_midi_event()));
+                            } else {
+                                self.state = MidiParserState::CollectingData;
                             }
-                            self.state = MidiParserState::CollectingData;
-                        } else {
-                            warn!("MIDI stray data byte={:#04x} (no active status)", byte);
                         }
                     }
 
@@ -84,7 +95,12 @@ impl MidiReceiver {
                             return Ok(Some(MidiEvent::Other));
                         }
                         if byte & 0x80 != 0 {
-                            // New status byte received while collecting data - reset
+                            // System real-time bytes are transparent — ignore them without
+                            // aborting the message currently being collected.
+                            if byte >= 0xF8 {
+                                return Ok(Some(MidiEvent::Other));
+                            }
+                            // New channel/system-common status byte while collecting data
                             self.status_byte = byte;
                             self.data_count = 0;
                             self.expected_data_bytes = match byte & 0xF0 {

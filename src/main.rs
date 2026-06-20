@@ -125,8 +125,9 @@ mod rtic_app {
             last_output_phases: [f32; FFT_SIZE],
             cached_harmony_envelope: [f32; FFT_SIZE / 2],
             cached_harmony_inv_envelope: [f32; FFT_SIZE / 2],
-            carrier_ring: RingBuffer<FFT_SIZE>,
+            carrier_ring: RingBuffer<BUFFER_SIZE>,
             osc: Oscillator,
+            carrier_oscs: [Oscillator; 8],
             previous_pitch_shift_ratio: f32,
             midi_receiver: MidiReceiver,
             sprite_atlas: ImageRawBE<'static, BinaryColor>,
@@ -357,6 +358,9 @@ mod rtic_app {
                     cached_harmony_inv_envelope: [1.0; FFT_SIZE / 2],
                     carrier_ring: RingBuffer::new(),
                     osc: Oscillator::new(440.0, SAMPLE_RATE, Waveform::Triangle),
+                    carrier_oscs: core::array::from_fn(|_| {
+                        Oscillator::new(440.0, SAMPLE_RATE, Waveform::Triangle)
+                    }),
                     midi_receiver,
                     sprite_atlas,
                 },
@@ -568,6 +572,7 @@ mod rtic_app {
                 app_state_machine,
                 old_matrix_state,
                 display_needs_update,
+                midi_events,
             ],
             priority = 3
         )]
@@ -593,6 +598,7 @@ mod rtic_app {
                 previous_pitch_shift_ratio,
                 carrier_ring,
                 osc,
+                carrier_oscs,
             ],
             priority = 7,
         )]
@@ -606,6 +612,7 @@ mod rtic_app {
                 ctx.local.previous_pitch_shift_ratio,
                 ctx.local.carrier_ring,
                 ctx.local.osc,
+                ctx.local.carrier_oscs,
             );
         }
 
