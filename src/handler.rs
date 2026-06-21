@@ -79,8 +79,13 @@ pub fn audio_handler(
                                     crate::midi::MidiEvent::NoteOff { channel, key, .. } => {
                                         voice_manager.note_off(key, channel);
                                     }
+                                    crate::midi::MidiEvent::Other => {
+                                        // MIDI clock / active-sense / reset: discard.
+                                        // Re-queuing these flooded the queue and blocked
+                                        // NoteOff delivery.
+                                    }
                                     _ => {
-                                        // Re-queue non-critical events for batch processing
+                                        // CC / PitchBend: re-queue for batch processing.
                                         let _ = events.enqueue(event);
                                         break;
                                     }
@@ -96,7 +101,7 @@ pub fn audio_handler(
             // ************** ADD MIDI OUTPUT **************
             // Get MIDI sample and mix it with the processed audio
             let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-            out_sample = out_sample + midi_sample * 0.1; // Mix at 10% volume
+            out_sample = out_sample + midi_sample * 0.1;
 
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8);
@@ -265,6 +270,8 @@ pub fn handle_vocal_effects(
     ctx: &mut crate::rtic_app::app::dma1_stream0_fft_task::SharedResources,
     last_input_phases: &mut [f32; FFT_SIZE],
     last_output_phases: &mut [f32; FFT_SIZE],
+    cached_harmony_envelope: &mut [f32; FFT_SIZE / 2],
+    cached_harmony_inv_envelope: &mut [f32; FFT_SIZE / 2],
     previous_pitch_shift_ratio: &mut f32,
     carrier_buffer: &mut RingBuffer<BUFFER_SIZE>,
     osc: &mut Oscillator,
@@ -416,6 +423,8 @@ pub fn handle_vocal_effects(
         Some(&mut carrier_unwrapped_buffer),
         last_input_phases,
         last_output_phases,
+        cached_harmony_envelope,
+        cached_harmony_inv_envelope,
         *previous_pitch_shift_ratio,
         &config,
         &musical_settings,

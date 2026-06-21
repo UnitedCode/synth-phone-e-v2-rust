@@ -38,6 +38,11 @@ impl MidiReceiver {
             Ok(byte) => {
                 match self.state {
                     MidiParserState::WaitingForStatus => {
+                        if byte >= 0xF8 {
+                            // Real-Time message (clock, active sense, reset): single byte,
+                            // must not alter running-status context — process and discard.
+                            return Ok(Some(MidiEvent::Other));
+                        }
                         if byte & 0x80 != 0 {
                             // System real-time messages (0xF8–0xFF) are single-byte and
                             // transparent — they must NOT update status_byte so they don't
@@ -85,6 +90,10 @@ impl MidiReceiver {
                     }
 
                     MidiParserState::CollectingData => {
+                        if byte >= 0xF8 {
+                            // Real-Time message mid-stream: discard without touching state.
+                            return Ok(Some(MidiEvent::Other));
+                        }
                         if byte & 0x80 != 0 {
                             // System real-time bytes are transparent — ignore them without
                             // aborting the message currently being collected.
@@ -121,7 +130,16 @@ impl MidiReceiver {
                 Ok(None)
             }
             Err(nb::Error::WouldBlock) => Ok(None),
-            Err(e) => Err(e),
+            Err(nb::Error::Other(_)) => {
+                // UART hardware error (framing, noise, overrun) — typically caused by
+                // a MIDI device being disconnected.  Reset parser state so the next
+                // device can start fresh without misinterpreting stale context.
+                self.state = MidiParserState::WaitingForStatus;
+                self.status_byte = 0;
+                self.data_count = 0;
+                self.expected_data_bytes = 0;
+                Ok(None)
+            }
         }
     }
 
