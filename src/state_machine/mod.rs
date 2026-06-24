@@ -79,20 +79,24 @@ macro_rules! menu_items {
 
 // Define all menu items with their metadata in one place
 menu_items! {
-    BitRate1 => { field: bit_rate_soft, name: "Bit Rate 1", min: 4, max: 32 },
-    BitRate2 => { field: bit_rate_harsh, name: "Bit Rate 2", min: 4, max: 32 },
-    SampleRate1 => { field: sample_reduction_soft, name: "Sample Rate 1", min: 1, max: 32 },
-    SampleRate2 => { field: sample_reduction_harsh, name: "Sample Rate 2", min: 1, max: 32 },
-    FormantMale => { field: formant_male, name: "Formant Male", min: 1, max: 10 },
-    FormantFemale => { field: formant_female, name: "Formant Female", min: 1, max: 10 },
-    AutotuneSpeed => { field: autotune_speed, name: "Autotune Speed", min: 1, max: 10 },
-    Magnitude => { field: magnitude, name: "Magnitude", min: 1, max: 10 },
-    PadMatrix => { field: pad_matrix, name: "Pad Matrix", min: 0, max: 1 },
+    OctaveLow    => { field: octave_low,              name: "Octave Low",    min: 1, max: 4  },
+    OctaveHigh   => { field: octave_high,             name: "Octave High",   min: 2, max: 8  },
+    BitRate1     => { field: bit_rate_soft,           name: "Bit Rate 1",    min: 4, max: 32 },
+    BitRate2     => { field: bit_rate_harsh,          name: "Bit Rate 2",    min: 4, max: 32 },
+    SampleRate1  => { field: sample_reduction_soft,   name: "Sample Rate 1", min: 1, max: 32 },
+    SampleRate2  => { field: sample_reduction_harsh,  name: "Sample Rate 2", min: 1, max: 32 },
+    FormantMale  => { field: formant_male,            name: "Formant Male",  min: 1, max: 10 },
+    FormantFemale => { field: formant_female,         name: "Formant Female", min: 1, max: 10 },
+    AutotuneSpeed => { field: autotune_speed,         name: "Autotune Speed", min: 1, max: 10 },
+    Magnitude    => { field: magnitude,               name: "Magnitude",     min: 1, max: 10 },
+    PadMatrix    => { field: pad_matrix,              name: "Pad Matrix",    min: 0, max: 1  },
 }
 
 /// Storage for all adjustable menu values
 #[derive(Debug, Clone, Copy)]
 pub struct MenuValues {
+    pub octave_low: i8,
+    pub octave_high: i8,
     pub bit_rate_soft: i8,
     pub bit_rate_harsh: i8,
     pub sample_reduction_soft: i8,
@@ -107,6 +111,8 @@ pub struct MenuValues {
 impl Default for MenuValues {
     fn default() -> Self {
         Self {
+            octave_low: 1,
+            octave_high: 4,
             bit_rate_soft: 32,
             bit_rate_harsh: 10,
             sample_reduction_soft: 5,
@@ -290,13 +296,12 @@ pub struct AppStateMachine {
     state: AppState,
     values: MenuValues,
     current_key: i8,
-    current_octave: i8,
+    /// 0 = low, 1 = normal, 2 = high — actual value derived from menu in snapshot()
+    current_octave_preset: i8,
     current_bitcrush: i8,
     current_formant: i8,
     current_waveform: i8,
     current_percussion: i8,
-    sample_reduction: i8,
-    bit_rate: i8,
     pub volume: i8,
     pub note: i8,
     pub key_down_pressed: bool,
@@ -310,6 +315,8 @@ pub struct AppStateMachineSnapshot {
     pub current_state: AppState,
     pub key: i8,
     pub octave: i8,
+    /// 0=low, 1=normal, 2=high — for display sprite selection only
+    pub octave_preset: i8,
     pub note: i8,
     pub volume: i8,
     pub crush: i8,
@@ -346,13 +353,11 @@ impl AppStateMachine {
             state: AppState::new(),
             values: MenuValues::default(),
             current_key: 0,
-            current_octave: 2,
+            current_octave_preset: 1, // normal
             current_bitcrush: 0,
             current_formant: 0,
             current_waveform: 0,
             current_percussion: 1,
-            sample_reduction: 1,
-            bit_rate: 32,
             volume: 10,
             note: 0,
             key_down_pressed: false,
@@ -368,15 +373,29 @@ impl AppStateMachine {
 
     // Add a snapshot method to provide current state info
     pub fn snapshot(&self) -> AppStateMachineSnapshot {
+        let octave = match self.current_octave_preset {
+            0 => self.values.octave_low,
+            2 => self.values.octave_high,
+            _ => 2,
+        };
+        let (sample_reduction, bit_rate) = match self.current_bitcrush {
+            1 => (self.values.sample_reduction_soft, self.values.bit_rate_soft),
+            2 => (
+                self.values.sample_reduction_harsh,
+                self.values.bit_rate_harsh,
+            ),
+            _ => (1, 32),
+        };
         AppStateMachineSnapshot {
             current_state: self.state,
             key: self.current_key,
-            octave: self.current_octave,
+            octave,
+            octave_preset: self.current_octave_preset,
             note: self.note,
             volume: self.volume,
             crush: self.current_bitcrush,
-            sample_reduction: self.sample_reduction,
-            bit_rate: self.bit_rate,
+            sample_reduction,
+            bit_rate,
             formant: self.current_formant,
             autotune_speed: self.values.autotune_speed,
             magnitude: self.values.magnitude,
@@ -408,27 +427,15 @@ impl AppStateMachine {
             // Handle keypad presses in Effects profile
             (AppState::EffectsProfile(profile), AppEvent::KeypadPress(key)) => {
                 match key {
-                    // Row 1: Octave controls
-                    1 => self.current_octave = 1, // Low
-                    2 => self.current_octave = 2, // Normal
-                    3 => self.current_octave = 4, // High
+                    // Row 1: Octave
+                    1 => self.current_octave_preset = 0,
+                    2 => self.current_octave_preset = 1,
+                    3 => self.current_octave_preset = 2,
 
-                    // Row 2: Bit crush controls
-                    4 => {
-                        self.current_bitcrush = 1;
-                        self.bit_rate = self.values.bit_rate_soft;
-                        self.sample_reduction = self.values.sample_reduction_soft;
-                    }
-                    5 => {
-                        self.current_bitcrush = 0;
-                        self.bit_rate = 32;
-                        self.sample_reduction = 1;
-                    }
-                    6 => {
-                        self.current_bitcrush = 2;
-                        self.bit_rate = self.values.bit_rate_harsh;
-                        self.sample_reduction = self.values.sample_reduction_harsh;
-                    }
+                    // Row 2: Bit crush
+                    4 => self.current_bitcrush = 1,
+                    5 => self.current_bitcrush = 0,
+                    6 => self.current_bitcrush = 2,
 
                     // Row 3: Formant controls or waveform
                     7..=9 => {
@@ -539,15 +546,17 @@ impl AppStateMachine {
     pub fn current(&self) -> MenuContext {
         let idx = self.active_menu_index().unwrap_or(0);
         let menu_items = [
-            ("BitRate1", self.values.bit_rate_soft),
-            ("BitRate2", self.values.bit_rate_harsh),
-            ("SampleRate1", self.values.sample_reduction_soft),
-            ("SampleRate2", self.values.sample_reduction_harsh),
-            ("FormantMale", self.values.formant_male),
-            ("FormantFemale", self.values.formant_female),
+            ("Octave Low", self.values.octave_low),
+            ("Octave High", self.values.octave_high),
+            ("Bit Rate 1", self.values.bit_rate_soft),
+            ("Bit Rate 2", self.values.bit_rate_harsh),
+            ("Sample Rate 1", self.values.sample_reduction_soft),
+            ("Sample Rate 2", self.values.sample_reduction_harsh),
+            ("Formant Male", self.values.formant_male),
+            ("Formant Female", self.values.formant_female),
             ("Speed", self.values.autotune_speed),
             ("Magnitude", self.values.magnitude),
-            ("PadMatrix", self.values.pad_matrix),
+            ("Pad Matrix", self.values.pad_matrix),
         ];
 
         let total = menu_items.len();
@@ -616,122 +625,245 @@ fn wrap_value(current: i8, delta: i8, min: i8, max: i8) -> i8 {
 mod tests {
     use super::*;
 
+    fn effects_app() -> AppStateMachine {
+        let mut app = AppStateMachine::new();
+        app.handle_event(AppEvent::SplashComplete);
+        app
+    }
+
     #[test]
-    fn test_splash_to_processing() {
+    fn test_splash_to_effects_profile() {
         let mut app = AppStateMachine::new();
         assert!(matches!(app.state(), AppState::Splash));
-
         app.handle_event(AppEvent::SplashComplete);
         assert!(matches!(
             app.state(),
-            AppState::Processing(ProcessingProfile::Autotune)
+            AppState::EffectsProfile(ProcessingProfile::PitchControl)
         ));
     }
 
     #[test]
     fn test_toggle_effects() {
-        let mut app = AppStateMachine::new();
-        app.handle_event(AppEvent::SplashComplete);
+        let mut app = effects_app();
 
-        // Toggle to Effects
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(
             app.state(),
-            AppState::EffectsProfile(ProcessingProfile::Autotune)
+            AppState::Processing(ProcessingProfile::PitchControl)
         ));
 
-        // Toggle back to Processing
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(
             app.state(),
-            AppState::Processing(ProcessingProfile::Autotune)
+            AppState::EffectsProfile(ProcessingProfile::PitchControl)
         ));
     }
 
     #[test]
-    fn test_menu_navigation() {
-        let mut app = AppStateMachine::new();
-        app.handle_event(AppEvent::SplashComplete);
+    fn test_menu_enter_and_exit() {
+        let mut app = effects_app();
 
-        // Enter menu
         app.handle_event(AppEvent::EncoderDoublePress);
         assert!(matches!(
             app.state(),
             AppState::Menu(MenuState::Selecting(0), _)
         ));
 
-        // Rotate encoder to next item
         app.handle_event(AppEvent::EncoderRotate(1));
         assert!(matches!(
             app.state(),
             AppState::Menu(MenuState::Selecting(1), _)
         ));
 
-        // Enter edit profile
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(
             app.state(),
             AppState::Menu(MenuState::Editing(1), _)
         ));
 
-        // Change value
-        app.handle_event(AppEvent::EncoderRotate(1));
-        let values = app.get_values();
-        assert_eq!(values.crush2, 6); // Default was 5, now 6
-
-        // Exit edit profile
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(
             app.state(),
             AppState::Menu(MenuState::Selecting(1), _)
         ));
 
-        // Exit menu
         app.handle_event(AppEvent::EncoderDoublePress);
-        assert!(matches!(
-            app.state(),
-            AppState::Processing(ProcessingProfile::Autotune)
-        ));
+        assert!(matches!(app.state(), AppState::Processing(_)));
     }
 
-    // #[test]
-    // fn test_effects_controls() {
-    //     let mut app = AppStateMachine::new();
-    //     app.handle_event(AppEvent::SplashComplete);
-    //     app.handle_event(AppEvent::EncoderPress); // Enter Effects
+    #[test]
+    fn test_octave_low_default() {
+        let app = AppStateMachine::new();
+        assert_eq!(app.get_values().octave_low, 1);
+    }
 
-    //     // Test octave controls
-    //     app.handle_event(AppEvent::KeypadPress(0)); // Low octave
-    //     let (_, octave, _, _) = app.get_processing_params();
-    //     assert_eq!(octave, -1);
+    #[test]
+    fn test_octave_high_default() {
+        let app = AppStateMachine::new();
+        assert_eq!(app.get_values().octave_high, 4);
+    }
 
-    //     // Test bit crush controls
-    //     app.handle_event(AppEvent::KeypadPress(5)); // Crush 2
-    //     let (_, _, crush, _) = app.get_processing_params();
-    //     assert_eq!(crush, 2);
+    #[test]
+    fn test_button1_uses_octave_low_value() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(1));
+        assert_eq!(app.snapshot().octave, 1);
+    }
 
-    //     // Test formant controls
-    //     app.handle_event(AppEvent::KeypadPress(6)); // Male formant
-    //     let (_, _, _, formant) = app.get_processing_params();
-    //     assert_eq!(formant, -1);
+    #[test]
+    fn test_button2_always_normal_octave() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(2));
+        assert_eq!(app.snapshot().octave, 2);
+    }
 
-    //     // Test cycle profile
-    //     app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile
-    //     assert!(matches!(
-    //         app.state(),
-    //         AppState::EffectsProfile(ProcessingProfile::Vocode)
-    //     ));
+    #[test]
+    fn test_button3_uses_octave_high_value() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(3));
+        assert_eq!(app.snapshot().octave, 4);
+    }
 
-    //     app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile again
-    //     assert!(matches!(
-    //         app.state(),
-    //         AppState::EffectsProfile(ProcessingProfile::Dry)
-    //     ));
+    #[test]
+    fn test_octave_preset_index_low() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(1));
+        assert_eq!(app.snapshot().octave_preset, 0);
+    }
 
-    //     app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile again
-    //     assert!(matches!(
-    //         app.state(),
-    //         AppState::EffectsProfile(ProcessingProfile::Autotune)
-    //     ));
-    // }
+    #[test]
+    fn test_octave_preset_index_normal() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(2));
+        assert_eq!(app.snapshot().octave_preset, 1);
+    }
+
+    #[test]
+    fn test_octave_preset_index_high() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(3));
+        assert_eq!(app.snapshot().octave_preset, 2);
+    }
+
+    #[test]
+    fn test_octave_low_live_update() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(1));
+        assert_eq!(app.snapshot().octave, 1);
+
+        // OctaveLow is index 0 — edit without re-pressing the button
+        app.handle_event(AppEvent::EncoderDoublePress);
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(1)); // 1 → 2
+        app.handle_event(AppEvent::EncoderDoublePress);
+
+        assert_eq!(app.snapshot().octave, 2);
+    }
+
+    #[test]
+    fn test_octave_high_live_update() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(3));
+        assert_eq!(app.snapshot().octave, 4);
+
+        // OctaveHigh is index 1
+        app.handle_event(AppEvent::EncoderDoublePress);
+        app.handle_event(AppEvent::EncoderRotate(1));
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(1)); // 4 → 5
+        app.handle_event(AppEvent::EncoderRotate(1)); // 5 → 6
+        app.handle_event(AppEvent::EncoderDoublePress);
+
+        assert_eq!(app.snapshot().octave, 6);
+    }
+
+    #[test]
+    fn test_crush1_live_update_bit_rate() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(4));
+        assert_eq!(app.snapshot().bit_rate, 32);
+
+        // BitRate1 is index 2 (after OctaveLow, OctaveHigh)
+        app.handle_event(AppEvent::EncoderDoublePress);
+        app.handle_event(AppEvent::EncoderRotate(1));
+        app.handle_event(AppEvent::EncoderRotate(1));
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(-1)); // 32 → 31
+        app.handle_event(AppEvent::EncoderDoublePress);
+
+        assert_eq!(app.snapshot().bit_rate, 31);
+        assert_eq!(app.snapshot().crush, 1);
+    }
+
+    #[test]
+    fn test_crush2_live_update_sample_reduction() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(6));
+        assert_eq!(app.snapshot().sample_reduction, 16);
+
+        // SampleRate2 is index 5
+        app.handle_event(AppEvent::EncoderDoublePress);
+        for _ in 0..5 {
+            app.handle_event(AppEvent::EncoderRotate(1));
+        }
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(-1)); // 16 → 15
+        app.handle_event(AppEvent::EncoderDoublePress);
+
+        assert_eq!(app.snapshot().sample_reduction, 15);
+        assert_eq!(app.snapshot().crush, 2);
+    }
+
+    #[test]
+    fn test_crush_none_always_hardcoded() {
+        let mut app = effects_app();
+        app.handle_event(AppEvent::KeypadPress(5));
+        assert_eq!(app.snapshot().bit_rate, 32);
+        assert_eq!(app.snapshot().sample_reduction, 1);
+        assert_eq!(app.snapshot().crush, 0);
+    }
+
+    #[test]
+    fn test_formant_male_default() {
+        let app = AppStateMachine::new();
+        assert_eq!(app.get_values().formant_male, 5);
+    }
+
+    #[test]
+    fn test_formant_female_default() {
+        let app = AppStateMachine::new();
+        assert_eq!(app.get_values().formant_female, 5);
+    }
+
+    #[test]
+    fn test_formant_male_can_be_changed_via_menu() {
+        let mut app = effects_app();
+
+        // FormantMale is at index 6
+        app.handle_event(AppEvent::EncoderDoublePress);
+        for _ in 0..6 {
+            app.handle_event(AppEvent::EncoderRotate(1));
+        }
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(1)); // 5 → 6
+        app.handle_event(AppEvent::EncoderDoublePress);
+
+        assert_eq!(app.get_values().formant_male, 6);
+    }
+
+    #[test]
+    fn test_formant_female_can_be_changed_via_menu() {
+        let mut app = effects_app();
+
+        // FormantFemale is at index 7
+        app.handle_event(AppEvent::EncoderDoublePress);
+        for _ in 0..7 {
+            app.handle_event(AppEvent::EncoderRotate(1));
+        }
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(1)); // 5 → 6
+        app.handle_event(AppEvent::EncoderDoublePress);
+
+        assert_eq!(app.get_values().formant_female, 6);
+    }
 }

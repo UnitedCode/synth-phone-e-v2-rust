@@ -522,7 +522,7 @@ mod rtic_app {
                         crate::display::screens::draw_effects_screen(
                             process,
                             snapshot.key,
-                            snapshot.octave,
+                            snapshot.octave_preset,
                             snapshot.formant,
                             snapshot.crush,
                             snapshot.volume,
