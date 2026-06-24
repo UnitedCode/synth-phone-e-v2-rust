@@ -410,6 +410,7 @@ mod rtic_app {
                 in_pointer_cached,
                 previous_pitch_shift_ratio,
                 app_state_machine,
+                display_needs_update,
                 midi_events,
                 voice_manager
             ],
@@ -513,6 +514,7 @@ mod rtic_app {
                             snapshot.key,
                             snapshot.octave,
                             snapshot.note,
+                            snapshot.midi_note_number,
                             snapshot.volume,
                             ctx.local.display,
                             ctx.local.sprite_atlas,

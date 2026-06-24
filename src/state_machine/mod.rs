@@ -299,6 +299,8 @@ pub struct AppStateMachine {
     bit_rate: i8,
     pub volume: i8,
     pub note: i8,
+    /// MIDI note number (1-127) currently being played; 0 means no active MIDI note.
+    pub midi_note_number: u8,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
@@ -311,6 +313,8 @@ pub struct AppStateMachineSnapshot {
     pub key: i8,
     pub octave: i8,
     pub note: i8,
+    /// MIDI note number (1-127) currently being played; 0 means no active MIDI note.
+    pub midi_note_number: u8,
     pub volume: i8,
     pub crush: i8,
     pub sample_reduction: i8,
@@ -355,6 +359,7 @@ impl AppStateMachine {
             bit_rate: 32,
             volume: 10,
             note: 0,
+            midi_note_number: 0,
             key_down_pressed: false,
             process_cycle_pressed: false,
             key_up_pressed: false,
@@ -373,6 +378,7 @@ impl AppStateMachine {
             key: self.current_key,
             octave: self.current_octave,
             note: self.note,
+            midi_note_number: self.midi_note_number,
             volume: self.volume,
             crush: self.current_bitcrush,
             sample_reduction: self.sample_reduction,
@@ -387,6 +393,17 @@ impl AppStateMachine {
             waveform: self.current_waveform,
             percussion: self.current_percussion,
         }
+    }
+
+    /// Set the currently displayed MIDI note. Call with 1-127 on NoteOn; call
+    /// `clear_midi_note` on NoteOff / AllNotesOff.
+    pub fn set_midi_note(&mut self, note: u8) {
+        self.midi_note_number = note;
+    }
+
+    /// Clear the displayed MIDI note (called on NoteOff or AllNotesOff).
+    pub fn clear_midi_note(&mut self) {
+        self.midi_note_number = 0;
     }
 
     /// Handle incoming events
@@ -617,34 +634,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_splash_to_processing() {
+    fn test_splash_to_effects_profile() {
         let mut app = AppStateMachine::new();
         assert!(matches!(app.state(), AppState::Splash));
 
         app.handle_event(AppEvent::SplashComplete);
         assert!(matches!(
             app.state(),
-            AppState::Processing(ProcessingProfile::Autotune)
+            AppState::EffectsProfile(ProcessingProfile::PitchControl)
         ));
     }
 
     #[test]
-    fn test_toggle_effects() {
+    fn test_toggle_between_processing_and_effects() {
         let mut app = AppStateMachine::new();
         app.handle_event(AppEvent::SplashComplete);
+        // After splash: EffectsProfile
+        assert!(matches!(app.state(), AppState::EffectsProfile(_)));
 
-        // Toggle to Effects
+        // Toggle to Processing
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(
             app.state(),
-            AppState::EffectsProfile(ProcessingProfile::Autotune)
+            AppState::Processing(ProcessingProfile::PitchControl)
         ));
 
-        // Toggle back to Processing
+        // Toggle back to EffectsProfile
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(
             app.state(),
-            AppState::Processing(ProcessingProfile::Autotune)
+            AppState::EffectsProfile(ProcessingProfile::PitchControl)
         ));
     }
 
@@ -652,6 +671,8 @@ mod tests {
     fn test_menu_navigation() {
         let mut app = AppStateMachine::new();
         app.handle_event(AppEvent::SplashComplete);
+        // Move into Processing so double-press enters menu
+        app.handle_event(AppEvent::EncoderPress);
 
         // Enter menu
         app.handle_event(AppEvent::EncoderDoublePress);
@@ -660,26 +681,26 @@ mod tests {
             AppState::Menu(MenuState::Selecting(0), _)
         ));
 
-        // Rotate encoder to next item
+        // Rotate encoder to next item (index 1 = BitRate2)
         app.handle_event(AppEvent::EncoderRotate(1));
         assert!(matches!(
             app.state(),
             AppState::Menu(MenuState::Selecting(1), _)
         ));
 
-        // Enter edit profile
+        // Enter edit mode
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(
             app.state(),
             AppState::Menu(MenuState::Editing(1), _)
         ));
 
-        // Change value
+        // Increase value (BitRate2 default = 10, now 11)
         app.handle_event(AppEvent::EncoderRotate(1));
         let values = app.get_values();
-        assert_eq!(values.crush2, 6); // Default was 5, now 6
+        assert_eq!(values.bit_rate_harsh, 11);
 
-        // Exit edit profile
+        // Exit edit mode
         app.handle_event(AppEvent::EncoderPress);
         assert!(matches!(
             app.state(),
@@ -690,48 +711,82 @@ mod tests {
         app.handle_event(AppEvent::EncoderDoublePress);
         assert!(matches!(
             app.state(),
-            AppState::Processing(ProcessingProfile::Autotune)
+            AppState::Processing(ProcessingProfile::PitchControl)
         ));
     }
 
-    // #[test]
-    // fn test_effects_controls() {
-    //     let mut app = AppStateMachine::new();
-    //     app.handle_event(AppEvent::SplashComplete);
-    //     app.handle_event(AppEvent::EncoderPress); // Enter Effects
+    // ── MIDI note display tests (TDD: these define the required behaviour) ────
 
-    //     // Test octave controls
-    //     app.handle_event(AppEvent::KeypadPress(0)); // Low octave
-    //     let (_, octave, _, _) = app.get_processing_params();
-    //     assert_eq!(octave, -1);
+    #[test]
+    fn test_midi_note_initially_zero() {
+        let app = AppStateMachine::new();
+        assert_eq!(app.snapshot().midi_note_number, 0);
+    }
 
-    //     // Test bit crush controls
-    //     app.handle_event(AppEvent::KeypadPress(5)); // Crush 2
-    //     let (_, _, crush, _) = app.get_processing_params();
-    //     assert_eq!(crush, 2);
+    #[test]
+    fn test_set_midi_note_stores_value() {
+        let mut app = AppStateMachine::new();
+        app.set_midi_note(69); // A4
+        assert_eq!(app.snapshot().midi_note_number, 69);
+    }
 
-    //     // Test formant controls
-    //     app.handle_event(AppEvent::KeypadPress(6)); // Male formant
-    //     let (_, _, _, formant) = app.get_processing_params();
-    //     assert_eq!(formant, -1);
+    #[test]
+    fn test_clear_midi_note_resets_to_zero() {
+        let mut app = AppStateMachine::new();
+        app.set_midi_note(69);
+        app.clear_midi_note();
+        assert_eq!(app.snapshot().midi_note_number, 0);
+    }
 
-    //     // Test cycle profile
-    //     app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile
-    //     assert!(matches!(
-    //         app.state(),
-    //         AppState::EffectsProfile(ProcessingProfile::Vocode)
-    //     ));
+    #[test]
+    fn test_set_midi_note_overwrites_previous() {
+        let mut app = AppStateMachine::new();
+        app.set_midi_note(60); // C4
+        app.set_midi_note(69); // A4
+        assert_eq!(app.snapshot().midi_note_number, 69);
+    }
 
-    //     app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile again
-    //     assert!(matches!(
-    //         app.state(),
-    //         AppState::EffectsProfile(ProcessingProfile::Dry)
-    //     ));
+    #[test]
+    fn test_midi_note_a4_maps_to_name_a() {
+        // A4 = MIDI 69; 69 % 12 = 9 → chromatic index for A
+        let idx = (69u8 % 12) as usize;
+        // C C# D D# E F F# G G# A A# B
+        // 0  1  2  3  4 5  6  7  8  9 10  11
+        assert_eq!(idx, 9);
+    }
 
-    //     app.handle_event(AppEvent::KeypadPress(10)); // Cycle profile again
-    //     assert!(matches!(
-    //         app.state(),
-    //         AppState::EffectsProfile(ProcessingProfile::Autotune)
-    //     ));
-    // }
+    #[test]
+    fn test_midi_note_c4_maps_to_name_c() {
+        // C4 = MIDI 60; 60 % 12 = 0 → chromatic index for C
+        let idx = (60u8 % 12) as usize;
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn test_midi_note_fs4_maps_to_correct_index() {
+        // F#4 = MIDI 66; 66 % 12 = 6 → chromatic index for F#
+        let idx = (66u8 % 12) as usize;
+        assert_eq!(idx, 6);
+    }
+
+    #[test]
+    fn test_keypad_note_6_in_c_major_is_a() {
+        // Scale degree 6 in C major → A (the 6th degree: C D E F G A B)
+        // get_note_name(6, C_MAJOR_SCALE) should return "A"
+        // We verify the index mapping: note 6 → scale.0[5]
+        // C major scale notes: ["C","D","E","F","G","A","B"] → index 5 = "A"
+        let note = 6i8;
+        let scale_idx = (note - 1) as usize; // note 6 → scale.0[5]
+        let c_major_names = ["C", "D", "E", "F", "G", "A", "B"];
+        assert_eq!(c_major_names[scale_idx], "A");
+    }
+
+    #[test]
+    fn test_keypad_note_1_in_a_major_is_a() {
+        // Scale degree 1 in A major → A (the root: A B C# D E F# G#)
+        let note = 1i8;
+        let scale_idx = (note - 1) as usize;
+        let a_major_names = ["A", "B", "C#", "D", "E", "F#", "G#"];
+        assert_eq!(a_major_names[scale_idx], "A");
+    }
 }

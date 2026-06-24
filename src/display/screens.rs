@@ -19,6 +19,7 @@ use super::sprites::{
     draw_process_indicator, draw_processing_bg, draw_splash, draw_waveform,
 };
 use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
+use synthphone_e_vocal_dsp::audio::frequencies::NOTE_NAMES;
 
 pub fn draw_splash_screen(display: &mut LcdDisplay, atlas: &ImageRawBE<BinaryColor>) {
     draw_splash(display, atlas);
@@ -29,6 +30,7 @@ pub fn draw_processing_screen(
     key: i8,
     octave: i8,
     note: i8,
+    midi_note_number: u8,
     volume: i8,
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
@@ -56,9 +58,15 @@ pub fn draw_processing_screen(
     let mut mode_buffer: String<5> = String::new();
     write!(&mut mode_buffer, "{}", get_mode_name(key)).expect("failed converting mode to string");
 
+    // When a MIDI note is active, show its chromatic name; otherwise fall back
+    // to the keypad scale-degree name for the current musical key.
+    let note_name = if midi_note_number > 0 {
+        NOTE_NAMES[(midi_note_number % 12) as usize]
+    } else {
+        get_note_name(note, get_key(key))
+    };
     let mut note_buffer: String<2> = String::new();
-    write!(&mut note_buffer, "{}", get_note_name(note, get_key(key)))
-        .expect("Failed converting note to string");
+    write!(&mut note_buffer, "{}", note_name).expect("Failed converting note to string");
 
     let mut oct_buffer: String<1> = String::new();
     write!(&mut oct_buffer, "{octave}").expect("Failed converting octave to string");

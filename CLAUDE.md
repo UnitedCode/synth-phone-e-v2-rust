@@ -22,8 +22,11 @@ cargo xtask embed
 
 **Run host tests:**
 ```sh
-cargo test --verbose
+cargo test --target aarch64-apple-darwin
 ```
+The `.cargo/config.toml` defaults to the embedded target, so the host target must be
+specified explicitly. Unit tests live in `src/state_machine/mod.rs` under `#[cfg(test)]`
+and are exposed via the `[lib]` target in `Cargo.toml`.
 
 **Lint / format check:**
 ```sh

@@ -60,6 +60,7 @@ pub fn audio_handler(
             // ************** PROCESS MIDI EVENTS **************
             // Process MIDI events when we have available CPU cycles
             // Only process a small batch per audio frame to prevent underruns
+            let mut midi_display_note: Option<u8> = None; // Some(note) = NoteOn; Some(0) = NoteOff
             shared.midi_events.lock(|events| {
                 if !events.is_empty() {
                     shared.voice_manager.lock(|voice_manager| {
@@ -75,9 +76,17 @@ pub fn audio_handler(
                                         velocity,
                                     } => {
                                         voice_manager.note_on(key, velocity, channel);
+                                        if channel != 9 {
+                                            // Track non-drum MIDI note for display
+                                            midi_display_note = Some(key);
+                                        }
                                     }
                                     crate::midi::MidiEvent::NoteOff { channel, key, .. } => {
                                         voice_manager.note_off(key, channel);
+                                        if channel != 9 {
+                                            // 0 is the sentinel meaning "clear the displayed note"
+                                            midi_display_note = Some(0);
+                                        }
                                     }
                                     crate::midi::MidiEvent::Other => {
                                         // MIDI clock / active-sense / reset: discard.
@@ -97,6 +106,21 @@ pub fn audio_handler(
                     });
                 }
             });
+
+            // Update the displayed MIDI note when a NoteOn or NoteOff was processed.
+            // NoteOn → set midi_note_number to the played key.
+            // NoteOff sentinel (0) → clear midi_note_number.
+            if let Some(note) = midi_display_note {
+                shared.app_state_machine.lock(|asm| {
+                    if note == 0 {
+                        asm.clear_midi_note();
+                    } else {
+                        asm.set_midi_note(note);
+                    }
+                });
+                shared.display_needs_update.lock(|f| *f = true);
+                crate::rtic_app::app::display_update_task::spawn().ok();
+            }
 
             // ************** ADD MIDI OUTPUT **************
             // Get MIDI sample and mix it with the processed audio
