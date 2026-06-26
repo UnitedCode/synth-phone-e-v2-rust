@@ -4,6 +4,10 @@ edition = "2021"
 name = "app"
 version = "0.1.0"
 
+[lib]
+name = "app_lib"
+path = "src/lib.rs"
+
 # makes `cargo check --all-targets` work
 [[bin]]
 name = "app"
@@ -29,7 +33,7 @@ cortex-m-log =  { version = "0.8.0", features = ["itm", "semihosting", "log-inte
 micromath = "2.1.0"
 microfft = "0.6"
 libdaisy = {git = "https://github.com/nathansbradshaw/libdaisy-rust.git", features = ["log-rtt"], commit = "f08c01fd8f950675c6c1051c2310c1cdf7309d8b"}
-synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", commit = "fb21a52e9a43cb60635ca80067d59f6c06dca197"} #8
+synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", commit = "2d33801e492cc3c345d8489309e2aecdb050d37a"} #9
 # synthphone-e-vocal-dsp = { path = "../synthphone_e_vocal_dsp/" }
 libm = "0.2.8"
 heapless = "0.8.0"

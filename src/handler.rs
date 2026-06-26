@@ -279,6 +279,8 @@ pub fn handle_vocal_effects(
 ) {
     let mut current_process = ProcessingProfile::PitchControl;
     let mut formant = 0;
+    let mut formant_male_ratio = 0.5f32;
+    let mut formant_female_ratio = 2.0f32;
     let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
     let mut key = 0i8;
@@ -312,6 +314,10 @@ pub fn handle_vocal_effects(
             2 => Waveform::Saw,
             _ => Waveform::Sine,
         };
+        let values = asm.get_values();
+        // value 5 → 0.5 / 2.0 to match the previous hardcoded defaults
+        formant_male_ratio = values.formant_male as f32 * 0.1;
+        formant_female_ratio = values.formant_female as f32 * 0.4;
     });
 
     let mode = match current_process {
@@ -402,6 +408,8 @@ pub fn handle_vocal_effects(
 
     let musical_settings = MusicalSettings {
         formant,
+        formant_male_ratio,
+        formant_female_ratio,
         note,
         midi_frequencies,
         key,

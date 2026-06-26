@@ -263,12 +263,12 @@ pub fn draw_splash(display: &mut crate::types::LcdDisplay, atlas: &ImageRawBE<Bi
 pub fn draw_octave(
     display: &mut crate::types::LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
-    octave: i8,
+    octave_preset: i8,
 ) {
-    let sprite = match octave {
-        1 => &SPRITE_DATA.low_oct,
-        2 => &SPRITE_DATA.med_oct,
-        4 => &SPRITE_DATA.high_oct,
+    let sprite = match octave_preset {
+        0 => &SPRITE_DATA.low_oct,
+        1 => &SPRITE_DATA.med_oct,
+        2 => &SPRITE_DATA.high_oct,
         _ => &SPRITE_DATA.med_oct,
     };
     draw_sprite(display, atlas, sprite);
