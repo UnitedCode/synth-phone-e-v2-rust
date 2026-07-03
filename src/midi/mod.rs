@@ -190,6 +190,13 @@ impl MidiReceiver {
                 let value = (msb << 7) | lsb;
                 MidiEvent::PitchBend { channel, value }
             }
+            0xC0 => {
+                // Program Change
+                MidiEvent::ProgramChange {
+                    channel,
+                    program: self.data_bytes[0],
+                }
+            }
             _ => MidiEvent::Other,
         }
     }
@@ -215,6 +222,10 @@ pub enum MidiEvent {
     PitchBend {
         channel: u8,
         value: u16,
+    },
+    ProgramChange {
+        channel: u8,
+        program: u8,
     },
     Other,
 }
@@ -366,7 +377,8 @@ impl MidiEvent {
             MidiEvent::NoteOn { channel, .. }
             | MidiEvent::NoteOff { channel, .. }
             | MidiEvent::ControlChange { channel, .. }
-            | MidiEvent::PitchBend { channel, .. } => Some(*channel),
+            | MidiEvent::PitchBend { channel, .. }
+            | MidiEvent::ProgramChange { channel, .. } => Some(*channel),
             MidiEvent::Other => None,
         }
     }

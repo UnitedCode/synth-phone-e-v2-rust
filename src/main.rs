@@ -428,59 +428,6 @@ mod rtic_app {
         }
 
         #[task(
-            shared = [midi_events, voice_manager],
-            priority = 3
-        )]
-        fn midi_batch_processing_task(mut ctx: midi_batch_processing_task::Context) {
-            // Periodic MIDI processing task for non-critical events
-            // Runs at lower priority to handle CC, pitch bend, etc.
-            ctx.shared.midi_events.lock(|events| {
-                ctx.shared.voice_manager.lock(|voice_manager| {
-                    // Process larger batches of non-critical events
-                    let mut processed_count = 0;
-                    const MAX_BATCH_EVENTS: usize = 16;
-
-                    while let Some(event) = events.dequeue() {
-                        processed_count += 1;
-                        if processed_count >= MAX_BATCH_EVENTS {
-                            // Re-queue this event for next batch
-                            let _ = events.enqueue(event);
-                            break;
-                        }
-
-                        match event {
-                            crate::midi::MidiEvent::NoteOn {
-                                channel,
-                                key,
-                                velocity,
-                            } => {
-                                voice_manager.note_on(key, velocity, channel);
-                            }
-                            crate::midi::MidiEvent::NoteOff { channel, key, .. } => {
-                                voice_manager.note_off(key, channel);
-                            }
-                            crate::midi::MidiEvent::ControlChange {
-                                channel,
-                                controller,
-                                value: _,
-                            } => match controller {
-                                123 => {
-                                    voice_manager.all_notes_off(Some(channel));
-                                }
-                                _ => {}
-                            },
-                            crate::midi::MidiEvent::PitchBend { channel: _, value } => {
-                                let bend_ratio = (value as f32 - 8192.0) / 8192.0;
-                                voice_manager.apply_pitch_bend(bend_ratio);
-                            }
-                            crate::midi::MidiEvent::Other => {}
-                        }
-                    }
-                });
-            });
-        }
-
-        #[task(
             local = [display, sprite_atlas],
             shared = [display_needs_update, app_state_machine],
             priority = 2
@@ -625,18 +572,16 @@ mod rtic_app {
             for _ in 0..8 {
                 match midi_receiver.try_read() {
                     Ok(Some(event)) => {
-                        // Handle MIDI event - use smart enqueue with overflow protection
+                        // Handle MIDI event - use smart enqueue with overflow protection.
+                        // No batch task to spawn here: audio_handler drains this queue
+                        // inline on its own DMA-driven cadence (every BLOCK_SIZE samples),
+                        // which is far more frequent than MIDI bytes can arrive.
                         midi_events.lock(|queue| {
                             if let Err(dropped_event) = try_enqueue_midi_event(queue, event) {
                                 // Log dropped event for debugging - this should rarely happen now
                                 log::warn!("Dropped MIDI event: {:?}", dropped_event);
                             }
                         });
-
-                        // Spawn batch processing for all events
-                        if crate::rtic_app::app::midi_batch_processing_task::spawn().is_err() {
-                            // Task already spawned - that's ok
-                        }
                     }
                     Ok(None) | Err(nb::Error::WouldBlock) => {
                         // No more data available, exit early
