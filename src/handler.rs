@@ -41,7 +41,7 @@ pub fn audio_handler(
             _ => Waveform::Sine,
         };
         bit_depth = snapshot.bit_rate;
-        volume_gain = (snapshot.volume as f32 / 10.0) * (snapshot.expression as f32 / 127.0);
+        volume_gain = snapshot.volume as f32 / 10.0;
         // Sine and triangle are perceptually quieter than saw/square at the same
         // peak amplitude — they're spectrally pure, while saw/square spread energy
         // across many harmonics, which the ear perceives as louder. Compensate so
@@ -112,14 +112,14 @@ pub fn audio_handler(
                                                 msm.set_volume_from_midi(value);
                                             });
                                         }
-                                        11 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_expression_from_midi(value);
-                                            });
-                                        }
                                         36..=43 => {
                                             shared.app_state_machine.lock(|msm| {
-                                                msm.set_tuning_from_cc(controller, value);
+                                                msm.set_menu_value_from_cc(controller, value);
+                                            });
+                                        }
+                                        44 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.cycle_key_from_midi(value);
                                             });
                                         }
                                         _ => {}

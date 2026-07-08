@@ -310,8 +310,6 @@ pub struct AppStateMachine {
     current_waveform: i8,
     current_percussion: i8,
     pub volume: i8,
-    /// MIDI CC11 (expression), 0-127. Multiplies with `volume` for output gain.
-    pub expression: i8,
     pub note: i8,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
@@ -328,7 +326,6 @@ pub struct AppStateMachineSnapshot {
     pub octave_preset: i8,
     pub note: i8,
     pub volume: i8,
-    pub expression: i8,
     pub crush: i8,
     pub sample_reduction: i8,
     pub bit_rate: i8,
@@ -369,7 +366,6 @@ impl AppStateMachine {
             current_waveform: 0,
             current_percussion: 1,
             volume: 10,
-            expression: 127,
             note: 0,
             key_down_pressed: false,
             process_cycle_pressed: false,
@@ -404,7 +400,6 @@ impl AppStateMachine {
             octave_preset: self.current_octave_preset,
             note: self.note,
             volume: self.volume,
-            expression: self.expression,
             crush: self.current_bitcrush,
             sample_reduction,
             bit_rate,
@@ -612,30 +607,20 @@ impl AppStateMachine {
         self.volume = ((value as i16 * 10) / 127) as i8;
     }
 
-    /// Sets expression from an incoming MIDI CC11 value (0-127). Multiplies with
-    /// `volume` for final output gain — see `handler::audio_handler`.
-    pub fn set_expression_from_midi(&mut self, value: u8) {
-        self.expression = value as i8;
-    }
-
-    /// Sets waveform from an incoming MIDI Program Change value (0=Triangle,
-    /// 1=Square, 2=Saw). The keyboard also sends Program Change on the melody
-    /// channel with a generic 0-127 patch number when its settings screen
-    /// closes, and on the drum channel for its drum program — neither of
-    /// those is a waveform selection, so we ignore drum-channel messages and
-    /// any value outside 0-2 rather than let them clobber the active
-    /// waveform.
+    /// Sets waveform from an incoming MIDI Program Change value, wrapped onto
+    /// the three waveforms (0=Triangle, 1=Square, 2=Saw). Drum-channel program
+    /// changes select drum kits, not waveforms, so those are ignored.
     pub fn set_waveform_from_midi(&mut self, channel: u8, program: u8) {
-        if channel == 9 || program > 2 {
+        if channel == 9 {
             return;
         }
-        self.current_waveform = program as i8;
+        self.current_waveform = (program % 3) as i8;
     }
 
     /// Sets one of the fine-tune menu values (bit rate, sample rate, formant
     /// ratios, autotune speed, magnitude) from an incoming MIDI CC on 36-43,
     /// scaling the 0-127 CC value proportionally into that item's range.
-    pub fn set_tuning_from_cc(&mut self, controller: u8, value: u8) {
+    pub fn set_menu_value_from_cc(&mut self, controller: u8, value: u8) {
         let item = match controller {
             36 => MenuItem::BitRate1,
             37 => MenuItem::BitRate2,
@@ -651,6 +636,15 @@ impl AppStateMachine {
         let span = (max - min) as i16;
         let scaled = min as i16 + (value as i16 * span) / 127;
         self.values.set(item, scaled as i8);
+    }
+
+    /// Cycles the musical key up one step (wrapping) from an incoming MIDI
+    /// CC44. Only the press half (value >= 64) of a momentary button cycles,
+    /// so the release (value 0) doesn't step the key a second time.
+    pub fn cycle_key_from_midi(&mut self, value: u8) {
+        if value >= 64 {
+            self.current_key = (self.current_key + 1) % 24;
+        }
     }
 
     // Get processing-related parameters
