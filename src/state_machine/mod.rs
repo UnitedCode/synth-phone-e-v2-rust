@@ -86,8 +86,8 @@ macro_rules! menu_items {
 
 // Define all menu items with their metadata in one place
 menu_items! {
-    OctaveLow    => { field: octave_low,              name: "Octave Low",    min: 1, max: 4  },
-    OctaveHigh   => { field: octave_high,             name: "Octave High",   min: 2, max: 8  },
+    PitchLow     => { field: pitch_low,               name: "Pitch Low",     min: -12, max: 0 },
+    PitchHigh    => { field: pitch_high,              name: "Pitch High",    min: 0, max: 12 },
     BitRate1     => { field: bit_rate_soft,           name: "Bit Rate 1",    min: 4, max: 32 },
     BitRate2     => { field: bit_rate_harsh,          name: "Bit Rate 2",    min: 4, max: 32 },
     SampleRate1  => { field: sample_reduction_soft,   name: "Sample Rate 1", min: 1, max: 32 },
@@ -102,8 +102,10 @@ menu_items! {
 /// Storage for all adjustable menu values
 #[derive(Debug, Clone, Copy)]
 pub struct MenuValues {
-    pub octave_low: i8,
-    pub octave_high: i8,
+    /// Semitone offset of the low pitch preset (-12..0, 0 = no shift)
+    pub pitch_low: i8,
+    /// Semitone offset of the high pitch preset (0..12, 0 = no shift)
+    pub pitch_high: i8,
     pub bit_rate_soft: i8,
     pub bit_rate_harsh: i8,
     pub sample_reduction_soft: i8,
@@ -118,8 +120,8 @@ pub struct MenuValues {
 impl Default for MenuValues {
     fn default() -> Self {
         Self {
-            octave_low: 1,
-            octave_high: 4,
+            pitch_low: -12,
+            pitch_high: 12,
             bit_rate_soft: 32,
             bit_rate_harsh: 10,
             sample_reduction_soft: 5,
@@ -321,7 +323,8 @@ pub struct AppStateMachine {
 pub struct AppStateMachineSnapshot {
     pub current_state: AppState,
     pub key: i8,
-    pub octave: i8,
+    /// Active pitch offset in semitones (0 = no shift), from the selected preset
+    pub pitch_semitones: i8,
     /// 0=low, 1=normal, 2=high — for display sprite selection only
     pub octave_preset: i8,
     pub note: i8,
@@ -380,10 +383,10 @@ impl AppStateMachine {
 
     // Add a snapshot method to provide current state info
     pub fn snapshot(&self) -> AppStateMachineSnapshot {
-        let octave = match self.current_octave_preset {
-            0 => self.values.octave_low,
-            2 => self.values.octave_high,
-            _ => 2,
+        let pitch_semitones = match self.current_octave_preset {
+            0 => self.values.pitch_low,
+            2 => self.values.pitch_high,
+            _ => 0,
         };
         let (sample_reduction, bit_rate) = match self.current_bitcrush {
             1 => (self.values.sample_reduction_soft, self.values.bit_rate_soft),
@@ -396,7 +399,7 @@ impl AppStateMachine {
         AppStateMachineSnapshot {
             current_state: self.state,
             key: self.current_key,
-            octave,
+            pitch_semitones,
             octave_preset: self.current_octave_preset,
             note: self.note,
             volume: self.volume,
@@ -553,8 +556,8 @@ impl AppStateMachine {
     pub fn current(&self) -> MenuContext {
         let idx = self.active_menu_index().unwrap_or(0);
         let menu_items = [
-            ("Octave Low", self.values.octave_low),
-            ("Octave High", self.values.octave_high),
+            ("Pitch Low", self.values.pitch_low),
+            ("Pitch High", self.values.pitch_high),
             ("Bit Rate 1", self.values.bit_rate_soft),
             ("Bit Rate 2", self.values.bit_rate_harsh),
             ("Sample Rate 1", self.values.sample_reduction_soft),
@@ -617,11 +620,14 @@ impl AppStateMachine {
         self.current_waveform = (program % 3) as i8;
     }
 
-    /// Sets one of the fine-tune menu values (bit rate, sample rate, formant
-    /// ratios, magnitude) from an incoming MIDI CC on 36-42, scaling the
-    /// 0-127 CC value proportionally into that item's range.
+    /// Sets one of the fine-tune menu values (pitch presets, bit rate,
+    /// sample rate, formant ratios, magnitude) from an incoming MIDI CC on
+    /// 34-42, scaling the 0-127 CC value proportionally into that item's
+    /// range.
     pub fn set_menu_value_from_cc(&mut self, controller: u8, value: u8) {
         let item = match controller {
+            34 => MenuItem::PitchLow,
+            35 => MenuItem::PitchHigh,
             36 => MenuItem::BitRate1,
             37 => MenuItem::BitRate2,
             38 => MenuItem::SampleRate1,
@@ -744,36 +750,36 @@ mod tests {
     }
 
     #[test]
-    fn test_octave_low_default() {
+    fn test_pitch_low_default() {
         let app = AppStateMachine::new();
-        assert_eq!(app.get_values().octave_low, 1);
+        assert_eq!(app.get_values().pitch_low, -12);
     }
 
     #[test]
-    fn test_octave_high_default() {
+    fn test_pitch_high_default() {
         let app = AppStateMachine::new();
-        assert_eq!(app.get_values().octave_high, 4);
+        assert_eq!(app.get_values().pitch_high, 12);
     }
 
     #[test]
-    fn test_button1_uses_octave_low_value() {
+    fn test_button1_uses_pitch_low_value() {
         let mut app = effects_app();
         app.handle_event(AppEvent::KeypadPress(1));
-        assert_eq!(app.snapshot().octave, 1);
+        assert_eq!(app.snapshot().pitch_semitones, -12);
     }
 
     #[test]
-    fn test_button2_always_normal_octave() {
+    fn test_button2_always_no_pitch_shift() {
         let mut app = effects_app();
         app.handle_event(AppEvent::KeypadPress(2));
-        assert_eq!(app.snapshot().octave, 2);
+        assert_eq!(app.snapshot().pitch_semitones, 0);
     }
 
     #[test]
-    fn test_button3_uses_octave_high_value() {
+    fn test_button3_uses_pitch_high_value() {
         let mut app = effects_app();
         app.handle_event(AppEvent::KeypadPress(3));
-        assert_eq!(app.snapshot().octave, 4);
+        assert_eq!(app.snapshot().pitch_semitones, 12);
     }
 
     #[test]
@@ -798,35 +804,62 @@ mod tests {
     }
 
     #[test]
-    fn test_octave_low_live_update() {
+    fn test_pitch_low_live_update() {
         let mut app = effects_app();
         app.handle_event(AppEvent::KeypadPress(1));
-        assert_eq!(app.snapshot().octave, 1);
+        assert_eq!(app.snapshot().pitch_semitones, -12);
 
-        // OctaveLow is index 0 — edit without re-pressing the button
+        // PitchLow is index 0 — edit without re-pressing the button
         app.handle_event(AppEvent::EncoderDoublePress);
         app.handle_event(AppEvent::EncoderPress);
-        app.handle_event(AppEvent::EncoderRotate(1)); // 1 → 2
+        app.handle_event(AppEvent::EncoderRotate(1)); // -12 → -11
         app.handle_event(AppEvent::EncoderDoublePress);
 
-        assert_eq!(app.snapshot().octave, 2);
+        assert_eq!(app.snapshot().pitch_semitones, -11);
     }
 
     #[test]
-    fn test_octave_high_live_update() {
+    fn test_pitch_high_live_update() {
         let mut app = effects_app();
         app.handle_event(AppEvent::KeypadPress(3));
-        assert_eq!(app.snapshot().octave, 4);
+        assert_eq!(app.snapshot().pitch_semitones, 12);
 
-        // OctaveHigh is index 1
+        // PitchHigh is index 1
         app.handle_event(AppEvent::EncoderDoublePress);
         app.handle_event(AppEvent::EncoderRotate(1));
         app.handle_event(AppEvent::EncoderPress);
-        app.handle_event(AppEvent::EncoderRotate(1)); // 4 → 5
-        app.handle_event(AppEvent::EncoderRotate(1)); // 5 → 6
+        app.handle_event(AppEvent::EncoderRotate(-1)); // 12 → 11
         app.handle_event(AppEvent::EncoderDoublePress);
 
-        assert_eq!(app.snapshot().octave, 6);
+        assert_eq!(app.snapshot().pitch_semitones, 11);
+
+        // Clamped at the top of the range
+        app.handle_event(AppEvent::EncoderDoublePress);
+        app.handle_event(AppEvent::EncoderRotate(1));
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(1)); // 11 → 12
+        app.handle_event(AppEvent::EncoderRotate(1)); // clamped at 12
+        app.handle_event(AppEvent::EncoderDoublePress);
+
+        assert_eq!(app.snapshot().pitch_semitones, 12);
+    }
+
+    #[test]
+    fn test_pitch_cc_scaling() {
+        let mut app = AppStateMachine::new();
+        // CC 34 spans the full PitchLow range: -12..0
+        app.set_menu_value_from_cc(34, 0);
+        assert_eq!(app.get_values().pitch_low, -12);
+        app.set_menu_value_from_cc(34, 127);
+        assert_eq!(app.get_values().pitch_low, 0);
+        app.set_menu_value_from_cc(34, 64);
+        assert_eq!(app.get_values().pitch_low, -6);
+
+        // CC 35 spans the full PitchHigh range: 0..12
+        app.set_menu_value_from_cc(35, 0);
+        assert_eq!(app.get_values().pitch_high, 0);
+        app.set_menu_value_from_cc(35, 127);
+        assert_eq!(app.get_values().pitch_high, 12);
     }
 
     #[test]
@@ -835,7 +868,7 @@ mod tests {
         app.handle_event(AppEvent::KeypadPress(4));
         assert_eq!(app.snapshot().bit_rate, 32);
 
-        // BitRate1 is index 2 (after OctaveLow, OctaveHigh)
+        // BitRate1 is index 2 (after PitchLow, PitchHigh)
         app.handle_event(AppEvent::EncoderDoublePress);
         app.handle_event(AppEvent::EncoderRotate(1));
         app.handle_event(AppEvent::EncoderRotate(1));

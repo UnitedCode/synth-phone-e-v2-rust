@@ -27,7 +27,7 @@ pub fn draw_splash_screen(display: &mut LcdDisplay, atlas: &ImageRawBE<BinaryCol
 pub fn draw_processing_screen(
     process: ProcessingProfile,
     key: i8,
-    octave: i8,
+    pitch_semitones: i8,
     note: i8,
     volume: i8,
     display: &mut LcdDisplay,
@@ -60,8 +60,9 @@ pub fn draw_processing_screen(
     write!(&mut note_buffer, "{}", get_note_name(note, get_key(key)))
         .expect("Failed converting note to string");
 
-    let mut oct_buffer: String<1> = String::new();
-    write!(&mut oct_buffer, "{octave}").expect("Failed converting octave to string");
+    // Signed semitone offset needs up to 3 chars ("-12")
+    let mut oct_buffer: String<3> = String::new();
+    write!(&mut oct_buffer, "{pitch_semitones}").expect("Failed converting pitch to string");
 
     let mut vol_buffer: String<3> = String::new();
     write!(&mut vol_buffer, "{volume}").expect("Failed converting volume to string");
@@ -79,7 +80,7 @@ pub fn draw_processing_screen(
 pub fn draw_effects_screen(
     process: ProcessingProfile,
     key: i8,
-    octave: i8,
+    octave_preset: i8,
     formant: i8,
     crush: i8,
     volume: i8,
@@ -93,7 +94,7 @@ pub fn draw_effects_screen(
 ) {
     // Draw all sprite elements using the safe convenience functions
     draw_effects_bg(display, atlas);
-    draw_octave(display, atlas, octave);
+    draw_octave(display, atlas, octave_preset);
     draw_crush(display, atlas, crush);
 
     // Draw formant or waveform controls depending on processing profile

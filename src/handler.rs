@@ -112,7 +112,7 @@ pub fn audio_handler(
                                                 msm.set_volume_from_midi(value);
                                             });
                                         }
-                                        36..=42 => {
+                                        34..=42 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_menu_value_from_cc(controller, value);
                                             });
@@ -330,10 +330,9 @@ pub fn handle_vocal_effects(
     let mut formant = 0;
     let mut formant_male_ratio = 0.5f32;
     let mut formant_female_ratio = 2.0f32;
-    let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
     let mut key = 0i8;
-    let mut octave = 2;
+    let mut pitch_ratio = 1.0f32;
     let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
@@ -347,15 +346,11 @@ pub fn handle_vocal_effects(
             AppState::Splash => {}
         }
         formant = snapshot.formant;
-        octave = snapshot.octave;
         key = snapshot.key;
         percussion = snapshot.percussion;
-        let octave_factor = octave as f32 * 0.5;
-        pitch_shift_ratio = if octave_factor <= 0.4 {
-            1.0
-        } else {
-            octave_factor
-        };
+        // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
+        // so -12/0/+12 give 0.5×/1×/2× and everything in between is chromatic.
+        pitch_ratio = libm::exp2f(snapshot.pitch_semitones as f32 / 12.0);
         note = snapshot.note;
         wave_type = match snapshot.waveform {
             0 => Waveform::Triangle,
@@ -402,7 +397,7 @@ pub fn handle_vocal_effects(
             } else {
                 // No MIDI notes held — fall back to keypad-driven pitch
                 if note > 0 {
-                    let carrier_hz = get_frequency(key, note, octave, true);
+                    let carrier_hz = get_frequency(key, note, pitch_ratio, true);
                     osc.set_waveform(wave_type);
                     osc.set_freq(carrier_hz);
                     for _ in 0..HOP_SIZE {
@@ -417,7 +412,7 @@ pub fn handle_vocal_effects(
         } else {
             // Dry mode
             if note > 0 {
-                let carrier_hz = get_frequency(key, note, octave, true);
+                let carrier_hz = get_frequency(key, note, pitch_ratio, true);
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
                 for _ in 0..HOP_SIZE {
@@ -462,7 +457,7 @@ pub fn handle_vocal_effects(
         note,
         midi_frequencies,
         key,
-        octave,
+        octave_ratio: pitch_ratio,
         mode,
     };
     let config = VocalEffectsConfig::default();

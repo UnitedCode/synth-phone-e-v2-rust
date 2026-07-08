@@ -458,7 +458,7 @@ mod rtic_app {
                         crate::display::screens::draw_processing_screen(
                             process,
                             snapshot.key,
-                            snapshot.octave,
+                            snapshot.pitch_semitones,
                             snapshot.note,
                             snapshot.volume,
                             ctx.local.display,
