@@ -618,8 +618,8 @@ impl AppStateMachine {
     }
 
     /// Sets one of the fine-tune menu values (bit rate, sample rate, formant
-    /// ratios, autotune speed, magnitude) from an incoming MIDI CC on 36-43,
-    /// scaling the 0-127 CC value proportionally into that item's range.
+    /// ratios, magnitude) from an incoming MIDI CC on 36-42, scaling the
+    /// 0-127 CC value proportionally into that item's range.
     pub fn set_menu_value_from_cc(&mut self, controller: u8, value: u8) {
         let item = match controller {
             36 => MenuItem::BitRate1,
@@ -628,8 +628,7 @@ impl AppStateMachine {
             39 => MenuItem::SampleRate2,
             40 => MenuItem::FormantMale,
             41 => MenuItem::FormantFemale,
-            42 => MenuItem::AutotuneSpeed,
-            43 => MenuItem::Magnitude,
+            42 => MenuItem::Magnitude,
             _ => return,
         };
         let (min, max) = MenuValues::range(item);
@@ -639,7 +638,7 @@ impl AppStateMachine {
     }
 
     /// Cycles the musical key up one step (wrapping) from an incoming MIDI
-    /// CC44. Only the press half (value >= 64) of a momentary button cycles,
+    /// CC43. Only the press half (value >= 64) of a momentary button cycles,
     /// so the release (value 0) doesn't step the key a second time.
     pub fn cycle_key_from_midi(&mut self, value: u8) {
         if value >= 64 {

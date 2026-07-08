@@ -112,12 +112,12 @@ pub fn audio_handler(
                                                 msm.set_volume_from_midi(value);
                                             });
                                         }
-                                        36..=43 => {
+                                        36..=42 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_menu_value_from_cc(controller, value);
                                             });
                                         }
-                                        44 => {
+                                        43 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.cycle_key_from_midi(value);
                                             });
