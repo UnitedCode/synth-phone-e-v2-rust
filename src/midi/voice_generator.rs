@@ -133,18 +133,22 @@ impl HybridVoice {
 }
 
 /// MIDI channel routing (0-indexed):
-///   0 (MIDI ch 1) — audio + voice effects (default)
-///   1 (MIDI ch 2) — voice effects only, no audio
+///   0 (MIDI ch 1) — voice effects only, no audio
+///   1 (MIDI ch 2) — audio only, no voice effects
 ///   2 (MIDI ch 3) — audio only, no voice effects
-const VOICE_CTRL_CHANNEL: u8 = 1;
-const SOUND_ONLY_CHANNEL: u8 = 2;
+const VOICE_CTRL_CHANNEL: u8 = 0;
+
+#[inline(always)]
+fn is_sound_only_channel(channel: u8) -> bool {
+    channel == 1 || channel == 2
+}
 
 pub struct VoiceManager<const MAX_VOICES: usize> {
     voices: [HybridVoice; MAX_VOICES],
     pitch_bend_ratio: f32,
-    /// Frequencies for ch 0 voices — fed to vocal effects DSP.
+    /// Frequencies from voices whose channel isn't voice-ctrl-only or sound-only — fed to vocal effects DSP.
     cached_frequencies: [f32; MAX_VOICES],
-    /// Frequencies from ch 1 (voice-ctrl-only) — also fed to vocal effects DSP.
+    /// Frequencies from ch 0 (voice-ctrl-only) — also fed to vocal effects DSP.
     voice_ctrl_freqs: [f32; MAX_VOICES],
     voice_ctrl_notes: [Option<u8>; MAX_VOICES],
 }
@@ -169,7 +173,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
         let frequency = crate::midi::MidiEvent::note_to_frequency(note);
 
-        // Ch 1: voice effects only — track frequency, no audio voice.
+        // Ch 0: voice effects only — track frequency, no audio voice.
         if channel == VOICE_CTRL_CHANNEL {
             for i in 0..MAX_VOICES {
                 if self.voice_ctrl_notes[i] == Some(note) || self.voice_ctrl_notes[i].is_none() {
@@ -188,7 +192,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         };
 
         // Whether this channel feeds the vocal effects frequency cache.
-        let update_cache = channel != SOUND_ONLY_CHANNEL;
+        let update_cache = !is_sound_only_channel(channel);
 
         // 1. Check for retrigger
         for i in 0..MAX_VOICES {
@@ -313,7 +317,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     /// Returns all active frequencies for the vocal effects DSP —
-    /// ch 0 voice frequencies followed by ch 1 voice-ctrl frequencies.
+    /// non-sound-only voice frequencies followed by ch 0 voice-ctrl frequencies.
     pub fn get_cached_frequencies(&self) -> [f32; MAX_VOICES] {
         let mut result = [0.0f32; MAX_VOICES];
         let mut idx = 0;
