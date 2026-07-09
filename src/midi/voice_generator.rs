@@ -133,14 +133,15 @@ impl HybridVoice {
 }
 
 /// MIDI channel routing (0-indexed):
-///   0 (MIDI ch 1) — voice effects only, no audio
-///   1 (MIDI ch 2) — audio only, no voice effects
-///   2 (MIDI ch 3) — audio only, no voice effects
+///   0 (MIDI ch 1)  — voice effects only, no audio
+///   1 (MIDI ch 2)  — audio only, no voice effects
+///   2 (MIDI ch 3)  — audio only, no voice effects
+///   9 (MIDI ch 10) — drums, no voice effects
 const VOICE_CTRL_CHANNEL: u8 = 0;
 
 #[inline(always)]
 fn is_sound_only_channel(channel: u8) -> bool {
-    channel == 1 || channel == 2
+    channel == 1 || channel == 2 || channel == 9
 }
 
 pub struct VoiceManager<const MAX_VOICES: usize> {
