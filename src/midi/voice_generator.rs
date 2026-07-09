@@ -114,7 +114,7 @@ impl HybridVoice {
                     self.note = None;
                     self.velocity = 0;
                 }
-                sample * vel_scale * 0.75
+                sample * vel_scale * 0.9
             }
         }
     }

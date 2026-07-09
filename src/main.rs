@@ -411,7 +411,8 @@ mod rtic_app {
                 previous_pitch_shift_ratio,
                 app_state_machine,
                 midi_events,
-                voice_manager
+                voice_manager,
+                display_needs_update
             ],
             priority = 8)
         ]

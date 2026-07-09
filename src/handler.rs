@@ -122,6 +122,27 @@ pub fn audio_handler(
                                                 msm.cycle_key_from_midi(value);
                                             });
                                         }
+                                        80 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_octave_from_midi(value);
+                                            });
+                                            shared.display_needs_update.lock(|flag| *flag = true);
+                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        }
+                                        81 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_formant_from_midi(value);
+                                            });
+                                            shared.display_needs_update.lock(|flag| *flag = true);
+                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        }
+                                        82 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_crush_from_midi(value);
+                                            });
+                                            shared.display_needs_update.lock(|flag| *flag = true);
+                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        }
                                         _ => {}
                                     },
                                     crate::midi::MidiEvent::PitchBend { channel: _, value } => {
@@ -150,7 +171,7 @@ pub fn audio_handler(
             // compensation applies only to the synthesized note, not the live
             // audio-in signal already folded into out_sample above.
             let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-            out_sample = out_sample + (midi_sample * waveform_compensation) * 0.1;
+            out_sample = out_sample * 0.75 + (midi_sample * waveform_compensation) * 0.1;
 
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8) * volume_gain;

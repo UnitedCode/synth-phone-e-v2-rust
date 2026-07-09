@@ -620,6 +620,42 @@ impl AppStateMachine {
         self.current_waveform = (program % 3) as i8;
     }
 
+    /// Sets the octave preset from an incoming MIDI CC80 value: 0=Low,
+    /// 64=Normal, 127=High — mirrors the EffectsProfile keypad's octave row.
+    pub fn set_octave_from_midi(&mut self, value: u8) {
+        self.current_octave_preset = if value < 43 {
+            0
+        } else if value < 85 {
+            1
+        } else {
+            2
+        };
+    }
+
+    /// Sets bit-crush from an incoming MIDI CC82 value: 0=Crush1, 64=Off,
+    /// 127=Crush2 — mirrors the EffectsProfile keypad's bit-crush row.
+    pub fn set_crush_from_midi(&mut self, value: u8) {
+        self.current_bitcrush = if value < 43 {
+            1
+        } else if value < 85 {
+            0
+        } else {
+            2
+        };
+    }
+
+    /// Sets formant from an incoming MIDI CC81 value: 0=Male, 64=Off,
+    /// 127=Female — mirrors the EffectsProfile keypad's formant row.
+    pub fn set_formant_from_midi(&mut self, value: u8) {
+        self.current_formant = if value < 43 {
+            1
+        } else if value < 85 {
+            0
+        } else {
+            2
+        };
+    }
+
     /// Sets one of the fine-tune menu values (pitch presets, bit rate,
     /// sample rate, formant ratios, magnitude) from an incoming MIDI CC on
     /// 34-42, scaling the 0-127 CC value proportionally into that item's
@@ -860,6 +896,39 @@ mod tests {
         assert_eq!(app.get_values().pitch_high, 0);
         app.set_menu_value_from_cc(35, 127);
         assert_eq!(app.get_values().pitch_high, 12);
+    }
+
+    #[test]
+    fn test_octave_cc80() {
+        let mut app = AppStateMachine::new();
+        app.set_octave_from_midi(0);
+        assert_eq!(app.snapshot().octave_preset, 0); // Low
+        app.set_octave_from_midi(64);
+        assert_eq!(app.snapshot().octave_preset, 1); // Normal
+        app.set_octave_from_midi(127);
+        assert_eq!(app.snapshot().octave_preset, 2); // High
+    }
+
+    #[test]
+    fn test_formant_cc81() {
+        let mut app = AppStateMachine::new();
+        app.set_formant_from_midi(0);
+        assert_eq!(app.snapshot().formant, 1); // Male
+        app.set_formant_from_midi(64);
+        assert_eq!(app.snapshot().formant, 0); // Off
+        app.set_formant_from_midi(127);
+        assert_eq!(app.snapshot().formant, 2); // Female
+    }
+
+    #[test]
+    fn test_crush_cc82() {
+        let mut app = AppStateMachine::new();
+        app.set_crush_from_midi(0);
+        assert_eq!(app.snapshot().crush, 1); // Crush1
+        app.set_crush_from_midi(64);
+        assert_eq!(app.snapshot().crush, 0); // Off
+        app.set_crush_from_midi(127);
+        assert_eq!(app.snapshot().crush, 2); // Crush2
     }
 
     #[test]
