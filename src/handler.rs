@@ -121,6 +121,8 @@ pub fn audio_handler(
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.cycle_key_from_midi(value);
                                             });
+                                            shared.display_needs_update.lock(|flag| *flag = true);
+                                            crate::rtic_app::app::display_update_task::spawn().ok();
                                         }
                                         80 => {
                                             shared.app_state_machine.lock(|msm| {
