@@ -6,7 +6,13 @@ pub struct VolumeSettings {
     pub voice: i8,
     pub melody: i8,
     pub drums: i8,
+    /// Which vocal modes are enabled, one bit per `ProcessingProfile`
+    /// (bit 0 = PitchControl, 1 = Vocode, 2 = Dry, 3 = Harmony, 4 = Percussion).
+    pub modes: u8,
 }
+
+/// All five vocal modes enabled — the low 5 bits set.
+pub const ALL_MODES_ENABLED: u8 = 0x1F;
 
 impl Default for VolumeSettings {
     fn default() -> Self {
@@ -15,6 +21,7 @@ impl Default for VolumeSettings {
             voice: 10,
             melody: 10,
             drums: 10,
+            modes: ALL_MODES_ENABLED,
         }
     }
 }
@@ -84,23 +91,27 @@ mod flash_io {
         let mut bytes = [0xFF; RECORD_SIZE];
         bytes[..4].copy_from_slice(&MAGIC);
         bytes[4] = VERSION;
-        bytes[5] = 4;
+        bytes[5] = 5;
         bytes[8..12].copy_from_slice(&record.generation.to_le_bytes());
         bytes[12] = record.volumes.master as u8;
         bytes[13] = record.volumes.voice as u8;
         bytes[14] = record.volumes.melody as u8;
         bytes[15] = record.volumes.drums as u8;
+        bytes[16] = record.volumes.modes;
         let crc = crc32(&bytes[..28]);
         bytes[28..].copy_from_slice(&crc.to_le_bytes());
         bytes
     }
 
     fn decode(bytes: &[u8; RECORD_SIZE]) -> Option<Record> {
-        if bytes[..4] != MAGIC || bytes[4] != VERSION || bytes[5] != 4 {
+        if bytes[..4] != MAGIC || bytes[4] != VERSION || bytes[5] != 5 {
             return None;
         }
         let expected = u32::from_le_bytes(bytes[28..32].try_into().ok()?);
-        if crc32(&bytes[..28]) != expected || bytes[12..16].iter().any(|&v| v > 20) {
+        if crc32(&bytes[..28]) != expected
+            || bytes[12..16].iter().any(|&v| v > 20)
+            || bytes[16] > super::ALL_MODES_ENABLED
+        {
             return None;
         }
         Some(Record {
@@ -110,6 +121,7 @@ mod flash_io {
                 voice: bytes[13] as i8,
                 melody: bytes[14] as i8,
                 drums: bytes[15] as i8,
+                modes: bytes[16],
             },
         })
     }

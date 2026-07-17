@@ -100,6 +100,12 @@ menu_items! {
     VoiceVolume  => { field: voice_volume,            name: "Voice Volume",  min: 0, max: 20 },
     MelodyVolume => { field: melody_volume,           name: "Melody Volume", min: 0, max: 20 },
     DrumVolume   => { field: drum_volume,             name: "Drum Volume",   min: 0, max: 20 },
+    // Per-mode on/off (1 = enabled). Disabled modes are skipped when cycling.
+    ModePitch      => { field: mode_pitch,       name: "Pitch On",    min: 0, max: 1 },
+    ModeVocode     => { field: mode_vocode,      name: "Vocode On",   min: 0, max: 1 },
+    ModeDry        => { field: mode_dry,         name: "Dry On",      min: 0, max: 1 },
+    ModeHarmony    => { field: mode_harmony,     name: "Harmony On",  min: 0, max: 1 },
+    ModePercussion => { field: mode_percussion,  name: "Percuss On",  min: 0, max: 1 },
 }
 
 /// Storage for all adjustable menu values
@@ -121,6 +127,12 @@ pub struct MenuValues {
     pub voice_volume: i8,
     pub melody_volume: i8,
     pub drum_volume: i8,
+    /// Per-mode enable flags (1 = enabled, 0 = disabled).
+    pub mode_pitch: i8,
+    pub mode_vocode: i8,
+    pub mode_dry: i8,
+    pub mode_harmony: i8,
+    pub mode_percussion: i8,
 }
 
 impl Default for MenuValues {
@@ -141,6 +153,12 @@ impl Default for MenuValues {
             voice_volume: 10,
             melody_volume: 10,
             drum_volume: 10,
+            // All vocal modes enabled by default.
+            mode_pitch: 1,
+            mode_vocode: 1,
+            mode_dry: 1,
+            mode_harmony: 1,
+            mode_percussion: 1,
         }
     }
 }
@@ -395,6 +413,7 @@ impl AppStateMachine {
             voice: self.values.voice_volume,
             melody: self.values.melody_volume,
             drums: self.values.drum_volume,
+            modes: self.mode_bitmask(),
         }
     }
 
@@ -403,6 +422,52 @@ impl AppStateMachine {
         self.values.voice_volume = volumes.voice.clamp(0, 20);
         self.values.melody_volume = volumes.melody.clamp(0, 20);
         self.values.drum_volume = volumes.drums.clamp(0, 20);
+        let m = volumes.modes;
+        self.values.mode_pitch = (m & 0b0_0001 != 0) as i8;
+        self.values.mode_vocode = (m & 0b0_0010 != 0) as i8;
+        self.values.mode_dry = (m & 0b0_0100 != 0) as i8;
+        self.values.mode_harmony = (m & 0b0_1000 != 0) as i8;
+        self.values.mode_percussion = (m & 0b1_0000 != 0) as i8;
+    }
+
+    /// Packs the five per-mode enable flags into the persisted bitmask
+    /// (bit 0 = PitchControl … bit 4 = Percussion).
+    fn mode_bitmask(&self) -> u8 {
+        (self.values.mode_pitch != 0) as u8
+            | (((self.values.mode_vocode != 0) as u8) << 1)
+            | (((self.values.mode_dry != 0) as u8) << 2)
+            | (((self.values.mode_harmony != 0) as u8) << 3)
+            | (((self.values.mode_percussion != 0) as u8) << 4)
+    }
+
+    /// Whether a given vocal mode is enabled in settings.
+    fn is_mode_enabled(&self, profile: ProcessingProfile) -> bool {
+        match profile {
+            ProcessingProfile::PitchControl => self.values.mode_pitch != 0,
+            ProcessingProfile::Vocode => self.values.mode_vocode != 0,
+            ProcessingProfile::Dry => self.values.mode_dry != 0,
+            ProcessingProfile::Harmony => self.values.mode_harmony != 0,
+            ProcessingProfile::Percussion => self.values.mode_percussion != 0,
+        }
+    }
+
+    /// Advance to the next enabled profile, skipping any the user disabled. If no
+    /// other mode is enabled it leaves the current state unchanged.
+    fn cycle_to_next_enabled_profile(&mut self) {
+        let mut candidate = self.state.cycle_profile();
+        // At most one full lap around the five profiles.
+        for _ in 0..5 {
+            match candidate {
+                AppState::EffectsProfile(p) | AppState::Processing(p) => {
+                    if self.is_mode_enabled(p) {
+                        self.state = candidate;
+                        return;
+                    }
+                    candidate = candidate.cycle_profile();
+                }
+                _ => return,
+            }
+        }
     }
 
     /// Get the current state
@@ -521,7 +586,7 @@ impl AppStateMachine {
                     }
                     11 => {
                         self.process_cycle_pressed = true;
-                        self.state = self.state.cycle_profile(); // Cycle profile
+                        self.cycle_to_next_enabled_profile(); // Cycle, skipping disabled modes
                     }
                     12 => {
                         self.key_up_pressed = true;
@@ -587,29 +652,18 @@ impl AppStateMachine {
     // Add a current method to get menu context
     pub fn current(&self) -> MenuContext {
         let idx = self.active_menu_index().unwrap_or(0);
-        let menu_items = [
-            ("Pitch Low", self.values.pitch_low),
-            ("Pitch High", self.values.pitch_high),
-            ("Bit Rate 1", self.values.bit_rate_soft),
-            ("Bit Rate 2", self.values.bit_rate_harsh),
-            ("Sample Rate 1", self.values.sample_reduction_soft),
-            ("Sample Rate 2", self.values.sample_reduction_harsh),
-            ("Formant Male", self.values.formant_male),
-            ("Formant Female", self.values.formant_female),
-            ("Speed", self.values.autotune_speed),
-            ("Magnitude", self.values.magnitude),
-            ("Pad Matrix", self.values.pad_matrix),
-            ("Voice Volume", self.values.voice_volume),
-            ("Melody Volume", self.values.melody_volume),
-            ("Drum Volume", self.values.drum_volume),
-        ];
-
-        let total = menu_items.len();
+        let total = MENU_ITEMS.len();
+        // Driven straight off MENU_ITEMS so new menu entries appear automatically
+        // and can never drift out of sync with their indices.
+        let item_at = |i: usize| {
+            let item = MENU_ITEMS[i];
+            (MenuValues::get_item_name(item), self.values.get(item))
+        };
 
         MenuContext {
-            previous_item: menu_items[(idx + total - 1) % total],
-            current_item: menu_items[idx],
-            next_item: menu_items[(idx + 1) % total],
+            previous_item: item_at((idx + total - 1) % total),
+            current_item: item_at(idx),
+            next_item: item_at((idx + 1) % total),
         }
     }
 
@@ -1054,5 +1108,34 @@ mod tests {
         app.handle_event(AppEvent::EncoderDoublePress);
 
         assert_eq!(app.get_values().formant_female, 6);
+    }
+
+    #[test]
+    fn test_mode_bitmask_roundtrip() {
+        let mut app = AppStateMachine::new();
+        let mut vs = app.volume_settings();
+        vs.modes = 0b1_0101; // pitch + dry + percussion on; vocode + harmony off
+        app.apply_volume_settings(vs);
+        assert_eq!(app.volume_settings().modes, 0b1_0101);
+        assert_eq!(app.get_values().mode_pitch, 1);
+        assert_eq!(app.get_values().mode_vocode, 0);
+        assert_eq!(app.get_values().mode_harmony, 0);
+    }
+
+    #[test]
+    fn test_cycle_skips_disabled_mode() {
+        let mut app = effects_app(); // EffectsProfile(PitchControl)
+
+        // Disable Vocode; leave the rest enabled.
+        let mut vs = app.volume_settings();
+        vs.modes = crate::settings_storage::ALL_MODES_ENABLED & !0b0_0010;
+        app.apply_volume_settings(vs);
+
+        // Cycling from PitchControl should skip Vocode and land on Dry.
+        app.handle_event(AppEvent::KeypadPress(11));
+        assert!(matches!(
+            app.state(),
+            AppState::EffectsProfile(ProcessingProfile::Dry)
+        ));
     }
 }
