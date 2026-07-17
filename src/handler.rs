@@ -29,8 +29,15 @@ pub fn audio_handler(
     let mut sr_factor = 1;
     let mut wave_type = Waveform::Sine;
     let mut bit_depth = 32;
-    let mut volume_gain = 1.0f32;
     let mut waveform_compensation = 1.0f32;
+    // In Vocode / Harmony the melody channel (ch 1) drives the vocal effect only —
+    // its notes are silenced as raw synth so you hear the processed voice, not a
+    // synth playing over it. Every other mode plays the note sound normally.
+    let mut mute_melody_synth = false;
+    let mut voice_gain = 1.0f32;
+    let mut melody_gain = 1.0f32;
+    let mut drum_gain = 1.0f32;
+    let mut master_gain = 1.0f32;
     shared.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
         sr_factor = snapshot.sample_reduction;
@@ -41,7 +48,6 @@ pub fn audio_handler(
             _ => Waveform::Sine,
         };
         bit_depth = snapshot.bit_rate;
-        volume_gain = snapshot.volume as f32 / 10.0;
         // Sine and triangle are perceptually quieter than saw/square at the same
         // peak amplitude — they're spectrally pure, while saw/square spread energy
         // across many harmonics, which the ear perceives as louder. Compensate so
@@ -53,6 +59,18 @@ pub fn audio_handler(
             Waveform::Triangle => 1.2,
             Waveform::Square | Waveform::Saw => 1.0,
         };
+        let profile = match snapshot.current_state {
+            AppState::Processing(p) | AppState::EffectsProfile(p) | AppState::Menu(_, p) => p,
+            AppState::Splash => ProcessingProfile::PitchControl,
+        };
+        mute_melody_synth = matches!(
+            profile,
+            ProcessingProfile::Vocode | ProcessingProfile::Harmony
+        );
+        voice_gain = snapshot.voice_volume as f32 * 0.1;
+        melody_gain = snapshot.melody_volume as f32 * 0.1;
+        drum_gain = snapshot.drum_volume as f32 * 0.1;
+        master_gain = snapshot.volume as f32 * 0.1;
     });
 
     if audio.get_stereo(buffer) {
@@ -172,11 +190,14 @@ pub fn audio_handler(
             // Get MIDI sample and mix it with the processed audio. Waveform
             // compensation applies only to the synthesized note, not the live
             // audio-in signal already folded into out_sample above.
-            let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-            out_sample = out_sample * 0.75 + (midi_sample * waveform_compensation) * 0.1;
+            let midi_sample = shared
+                .voice_manager
+                .lock(|vm| vm.get_mixed_sample(mute_melody_synth, melody_gain, drum_gain));
+            out_sample = (out_sample * voice_gain + (midi_sample * waveform_compensation) * 0.1)
+                * master_gain;
 
             // Normalize final output
-            out_sample = normalize_sample(out_sample, 0.8) * volume_gain;
+            out_sample = normalize_sample(out_sample, 0.8);
             // **********************************************
 
             // Check and handle hop counter
@@ -218,7 +239,7 @@ pub fn audio_handler(
 }
 
 pub fn interface_handler(
-    local: crate::rtic_app::app::interface_handler::LocalResources,
+    local: &mut crate::rtic_app::app::interface_handler::LocalResources,
     shared: &mut crate::rtic_app::app::interface_handler::SharedResources,
 ) {
     local.timer2.clear_irq();
@@ -473,12 +494,23 @@ pub fn handle_vocal_effects(
         }
     }
 
+    // In Pitch Control the voice must always autotune to the musical scale, exactly
+    // as it does with no note held. MIDI notes still play the synth (that mixing
+    // happens elsewhere), but they must not become the pitch-correction target —
+    // otherwise singing while playing force-tunes your voice to the held note. Other
+    // modes keep the live frequencies (Vocode/Harmony are driven by them).
+    let effect_midi_frequencies = if mode == ProcessingMode::PitchControl {
+        [0.0; 8]
+    } else {
+        midi_frequencies
+    };
+
     let musical_settings = MusicalSettings {
         formant,
         formant_male_ratio,
         formant_female_ratio,
         note,
-        midi_frequencies,
+        midi_frequencies: effect_midi_frequencies,
         key,
         octave_ratio: pitch_ratio,
         mode,

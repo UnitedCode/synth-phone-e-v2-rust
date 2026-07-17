@@ -114,7 +114,14 @@ impl HybridVoice {
                     self.note = None;
                     self.velocity = 0;
                 }
-                sample * vel_scale * 0.9
+                // Compress velocity into 0.5..1.0 so soft hits stay audible while
+                // hard hits still accent — a linear 0..1 curve made low-velocity
+                // drums vanish under the sustained synth.
+                let drum_vel = 0.5 + 0.5 * (self.velocity as f32 * (1.0 / 127.0));
+                // Drum makeup gain > 1.0: percussion is a short transient, so it
+                // needs a higher peak than a sustained synth note to feel equally
+                // loud. (Was 0.75, then 1.4.)
+                sample * drum_vel * 2.5
             }
         }
     }
@@ -135,13 +142,18 @@ impl HybridVoice {
 /// MIDI channel routing (0-indexed):
 ///   0 (MIDI ch 1)  — voice effects only, no audio
 ///   1 (MIDI ch 2)  — audio only, no voice effects
-///   2 (MIDI ch 3)  — audio only, no voice effects
+///   2 (MIDI ch 3)  — auto-switch: plays audio normally, but in Vocode/Harmony it
+///                    goes silent-as-synth and drives the vocal effect instead
 ///   9 (MIDI ch 10) — drums, no voice effects
 const VOICE_CTRL_CHANNEL: u8 = 0;
 
+/// The auto-switch channel (MIDI ch 3). Feeds the vocal-effect frequency cache and
+/// is silenced as raw synth in Vocode/Harmony (see `get_mixed_sample`).
+const AUTO_SWITCH_CHANNEL: u8 = 2;
+
 #[inline(always)]
 fn is_sound_only_channel(channel: u8) -> bool {
-    channel == 1 || channel == 2 || channel == 9
+    channel == 1 || channel == 9
 }
 
 pub struct VoiceManager<const MAX_VOICES: usize> {
@@ -193,6 +205,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         };
 
         // Whether this channel feeds the vocal effects frequency cache.
+        // Sound-only channels and drum-map note numbers must not retune the
+        // frequency cache used by Pitch Control / Harmony / Vocode.
         let update_cache = !is_sound_only_channel(channel);
 
         // 1. Check for retrigger
@@ -266,16 +280,38 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
     }
 
+    /// Mix all active voices. When `mute_melody_synth` is set (Vocode / Harmony
+    /// profiles), pitched synth voices on the auto-switch channel (MIDI ch 3) stay
+    /// silent — they still track pitch for the vocal-effect frequency cache, so
+    /// you hear your processed voice instead of a raw synth on top. Drums and any
+    /// other channel still sound.
     #[inline(always)]
-    pub fn get_mixed_sample(&mut self) -> f32 {
+    pub fn get_mixed_sample(
+        &mut self,
+        mute_melody_synth: bool,
+        melody_gain: f32,
+        drum_gain: f32,
+    ) -> f32 {
         let mut sum = 0.0f32;
         let mut count = 0usize;
 
         for voice in &mut self.voices {
             let s = voice.get_sample();
             if s != 0.0 {
-                sum += s;
-                count += 1;
+                if mute_melody_synth
+                    && voice.channel == AUTO_SWITCH_CHANNEL
+                    && voice.type_id() == VoiceTypeId::Synth
+                {
+                    continue;
+                }
+                let scaled = match voice.type_id() {
+                    VoiceTypeId::Synth => s * melody_gain,
+                    VoiceTypeId::Drum => s * drum_gain,
+                };
+                if scaled != 0.0 {
+                    sum += scaled;
+                    count += 1;
+                }
             }
         }
 

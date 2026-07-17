@@ -22,6 +22,7 @@ mod display;
 mod handler;
 mod input;
 mod midi;
+mod settings_storage;
 mod state_machine;
 mod types;
 
@@ -105,6 +106,7 @@ mod rtic_app {
         #[local]
         struct Local {
             audio: audio::Audio,
+            flash: libdaisy::flash::Flash,
             buffer: audio::AudioBuffer,
             timer2: Timer<stm32::TIM2>,
             knob_1: Knob,
@@ -141,6 +143,7 @@ mod rtic_app {
             let device = ctx.device;
             let ccdr = system::System::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
             let mut system = libdaisy::system_init!(core, device, ccdr, BLOCK_SIZE);
+            let saved_volumes = crate::settings_storage::load(&mut system.flash);
 
             let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
 
@@ -321,13 +324,19 @@ mod rtic_app {
             info!("Startup done!! yo!");
             startup_complete_task::spawn().ok();
 
+            let mut app_state_machine = AppStateMachine::new();
+            if let Some(volumes) = saved_volumes {
+                app_state_machine.apply_volume_settings(volumes);
+                info!("restored mixer volumes");
+            }
+
             (
                 Shared {
                     in_ring: RingBuffer::new(),
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
                     previous_pitch_shift_ratio: 1.0,
                     in_pointer_cached: 0,
-                    app_state_machine: AppStateMachine::new(),
+                    app_state_machine,
                     old_matrix_state: [[false; 3]; 4],
                     display_needs_update: true,
                     midi_events: heapless::spsc::Queue::new(),
@@ -335,6 +344,7 @@ mod rtic_app {
                 },
                 Local {
                     audio: system.audio,
+                    flash: system.flash,
                     buffer,
                     timer2,
                     knob_1,
@@ -515,6 +525,8 @@ mod rtic_app {
                 row_3_pin,
                 row_4_pin,
                 encoder_button,
+                flash,
+                save_countdown: u16 = 0,
             ],
             shared = [
                 app_state_machine,
@@ -525,7 +537,28 @@ mod rtic_app {
             priority = 3
         )]
         fn interface_handler(mut ctx: interface_handler::Context) {
-            crate::handler::interface_handler(ctx.local, &mut ctx.shared);
+            let before = ctx
+                .shared
+                .app_state_machine
+                .lock(|state| state.volume_settings());
+            crate::handler::interface_handler(&mut ctx.local, &mut ctx.shared);
+            let after = ctx
+                .shared
+                .app_state_machine
+                .lock(|state| state.volume_settings());
+            if after != before {
+                *ctx.local.save_countdown = 2000;
+            } else if *ctx.local.save_countdown > 0 {
+                *ctx.local.save_countdown -= 1;
+                if *ctx.local.save_countdown == 0 {
+                    if crate::settings_storage::save(ctx.local.flash, after) {
+                        info!("mixer volumes saved");
+                    } else {
+                        log::warn!("mixer volume save failed");
+                        *ctx.local.save_countdown = 2000;
+                    }
+                }
+            }
         }
 
         /// FFT TASK
