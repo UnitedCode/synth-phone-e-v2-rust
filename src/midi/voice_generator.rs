@@ -281,7 +281,12 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     /// you hear your processed voice instead of a raw synth on top. Drums and any
     /// other channel still sound.
     #[inline(always)]
-    pub fn get_mixed_sample(&mut self, mute_melody_synth: bool) -> f32 {
+    pub fn get_mixed_sample(
+        &mut self,
+        mute_melody_synth: bool,
+        melody_gain: f32,
+        drum_gain: f32,
+    ) -> f32 {
         let mut sum = 0.0f32;
         let mut count = 0usize;
 
@@ -292,8 +297,14 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 {
                     continue;
                 }
-                sum += s;
-                count += 1;
+                let scaled = match voice.type_id() {
+                    VoiceTypeId::Synth => s * melody_gain,
+                    VoiceTypeId::Drum => s * drum_gain,
+                };
+                if scaled != 0.0 {
+                    sum += scaled;
+                    count += 1;
+                }
             }
         }
 

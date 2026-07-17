@@ -97,6 +97,9 @@ menu_items! {
     AutotuneSpeed => { field: autotune_speed,         name: "Autotune Speed", min: 1, max: 10 },
     Magnitude    => { field: magnitude,               name: "Magnitude",     min: 1, max: 10 },
     PadMatrix    => { field: pad_matrix,              name: "Pad Matrix",    min: 0, max: 1  },
+    VoiceVolume  => { field: voice_volume,            name: "Voice Volume",  min: 0, max: 20 },
+    MelodyVolume => { field: melody_volume,           name: "Melody Volume", min: 0, max: 20 },
+    DrumVolume   => { field: drum_volume,             name: "Drum Volume",   min: 0, max: 20 },
 }
 
 /// Storage for all adjustable menu values
@@ -115,6 +118,9 @@ pub struct MenuValues {
     pub autotune_speed: i8,
     pub magnitude: i8,
     pub pad_matrix: i8,
+    pub voice_volume: i8,
+    pub melody_volume: i8,
+    pub drum_volume: i8,
 }
 
 impl Default for MenuValues {
@@ -131,6 +137,10 @@ impl Default for MenuValues {
             autotune_speed: 5,
             magnitude: 5,
             pad_matrix: 0,
+            // 10 is unity gain, preserving the pre-settings mix exactly.
+            voice_volume: 10,
+            melody_volume: 10,
+            drum_volume: 10,
         }
     }
 }
@@ -329,6 +339,9 @@ pub struct AppStateMachineSnapshot {
     pub octave_preset: i8,
     pub note: i8,
     pub volume: i8,
+    pub voice_volume: i8,
+    pub melody_volume: i8,
+    pub drum_volume: i8,
     pub crush: i8,
     pub sample_reduction: i8,
     pub bit_rate: i8,
@@ -376,6 +389,22 @@ impl AppStateMachine {
         }
     }
 
+    pub fn volume_settings(&self) -> crate::settings_storage::VolumeSettings {
+        crate::settings_storage::VolumeSettings {
+            master: self.volume,
+            voice: self.values.voice_volume,
+            melody: self.values.melody_volume,
+            drums: self.values.drum_volume,
+        }
+    }
+
+    pub fn apply_volume_settings(&mut self, volumes: crate::settings_storage::VolumeSettings) {
+        self.volume = volumes.master.clamp(0, 20);
+        self.values.voice_volume = volumes.voice.clamp(0, 20);
+        self.values.melody_volume = volumes.melody.clamp(0, 20);
+        self.values.drum_volume = volumes.drums.clamp(0, 20);
+    }
+
     /// Get the current state
     pub fn state(&self) -> AppState {
         self.state
@@ -403,6 +432,9 @@ impl AppStateMachine {
             octave_preset: self.current_octave_preset,
             note: self.note,
             volume: self.volume,
+            voice_volume: self.values.voice_volume,
+            melody_volume: self.values.melody_volume,
+            drum_volume: self.values.drum_volume,
             crush: self.current_bitcrush,
             sample_reduction,
             bit_rate,
@@ -425,7 +457,7 @@ impl AppStateMachine {
             //adjust volume
             (AppState::Processing(_), AppEvent::EncoderRotate(delta))
             | (AppState::EffectsProfile(_), AppEvent::EncoderRotate(delta)) => {
-                self.volume = clamp_value(self.volume, delta, 0, 10);
+                self.volume = clamp_value(self.volume, delta, 0, 20);
             }
 
             // Handle keypad presses in Processing profile (for notes)
@@ -567,6 +599,9 @@ impl AppStateMachine {
             ("Speed", self.values.autotune_speed),
             ("Magnitude", self.values.magnitude),
             ("Pad Matrix", self.values.pad_matrix),
+            ("Voice Volume", self.values.voice_volume),
+            ("Melody Volume", self.values.melody_volume),
+            ("Drum Volume", self.values.drum_volume),
         ];
 
         let total = menu_items.len();

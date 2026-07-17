@@ -59,6 +59,11 @@ codegen-units = 1   # better optimizations
 debug = true        # symbols are nice and they don't increase the size in flash
 lto = true          # better optimizations
 opt-level = "s"     # optimize for binary size
+# This firmware is within ~1 KB of the STM32H750's 128 KB internal flash limit.
+# Keep debug symbols, but omit runtime assertion/overflow machinery just like the
+# release image so `cargo build` and the default probe-rs runner still fit.
+debug-assertions = false
+overflow-checks = false
 
 [profile.release]
 codegen-units = 1 # better optimizations
