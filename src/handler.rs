@@ -31,6 +31,10 @@ pub fn audio_handler(
     let mut bit_depth = 32;
     let mut volume_gain = 1.0f32;
     let mut waveform_compensation = 1.0f32;
+    // In Vocode / Harmony the melody channel (ch 1) drives the vocal effect only —
+    // its notes are silenced as raw synth so you hear the processed voice, not a
+    // synth playing over it. Every other mode plays the note sound normally.
+    let mut mute_melody_synth = false;
     shared.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
         sr_factor = snapshot.sample_reduction;
@@ -53,6 +57,14 @@ pub fn audio_handler(
             Waveform::Triangle => 1.2,
             Waveform::Square | Waveform::Saw => 1.0,
         };
+        let profile = match snapshot.current_state {
+            AppState::Processing(p) | AppState::EffectsProfile(p) | AppState::Menu(_, p) => p,
+            AppState::Splash => ProcessingProfile::PitchControl,
+        };
+        mute_melody_synth = matches!(
+            profile,
+            ProcessingProfile::Vocode | ProcessingProfile::Harmony
+        );
     });
 
     if audio.get_stereo(buffer) {
@@ -172,7 +184,9 @@ pub fn audio_handler(
             // Get MIDI sample and mix it with the processed audio. Waveform
             // compensation applies only to the synthesized note, not the live
             // audio-in signal already folded into out_sample above.
-            let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
+            let midi_sample = shared
+                .voice_manager
+                .lock(|vm| vm.get_mixed_sample(mute_melody_synth));
             out_sample = out_sample * 0.75 + (midi_sample * waveform_compensation) * 0.1;
 
             // Normalize final output
@@ -473,12 +487,23 @@ pub fn handle_vocal_effects(
         }
     }
 
+    // In Pitch Control the voice must always autotune to the musical scale, exactly
+    // as it does with no note held. MIDI notes still play the synth (that mixing
+    // happens elsewhere), but they must not become the pitch-correction target —
+    // otherwise singing while playing force-tunes your voice to the held note. Other
+    // modes keep the live frequencies (Vocode/Harmony are driven by them).
+    let effect_midi_frequencies = if mode == ProcessingMode::PitchControl {
+        [0.0; 8]
+    } else {
+        midi_frequencies
+    };
+
     let musical_settings = MusicalSettings {
         formant,
         formant_male_ratio,
         formant_female_ratio,
         note,
-        midi_frequencies,
+        midi_frequencies: effect_midi_frequencies,
         key,
         octave_ratio: pitch_ratio,
         mode,

@@ -114,7 +114,14 @@ impl HybridVoice {
                     self.note = None;
                     self.velocity = 0;
                 }
-                sample * vel_scale * 0.9
+                // Compress velocity into 0.5..1.0 so soft hits stay audible while
+                // hard hits still accent — a linear 0..1 curve made low-velocity
+                // drums vanish under the sustained synth.
+                let drum_vel = 0.5 + 0.5 * (self.velocity as f32 * (1.0 / 127.0));
+                // Drum makeup gain > 1.0: percussion is a short transient, so it
+                // needs a higher peak than a sustained synth note to feel equally
+                // loud. (Was 0.75, then 1.4.)
+                sample * drum_vel * 2.5
             }
         }
     }
@@ -193,6 +200,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         };
 
         // Whether this channel feeds the vocal effects frequency cache.
+        // Sound-only channels and drum-map note numbers must not retune the
+        // frequency cache used by Pitch Control / Harmony / Vocode.
         let update_cache = !is_sound_only_channel(channel);
 
         // 1. Check for retrigger
@@ -266,14 +275,23 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
     }
 
+    /// Mix all active voices. When `mute_melody_synth` is set (Vocode / Harmony
+    /// profiles), pitched synth voices on the melody channel (0 / MIDI ch 1) stay
+    /// silent — they still track pitch for the vocal-effect frequency cache, so
+    /// you hear your processed voice instead of a raw synth on top. Drums and any
+    /// other channel still sound.
     #[inline(always)]
-    pub fn get_mixed_sample(&mut self) -> f32 {
+    pub fn get_mixed_sample(&mut self, mute_melody_synth: bool) -> f32 {
         let mut sum = 0.0f32;
         let mut count = 0usize;
 
         for voice in &mut self.voices {
             let s = voice.get_sample();
             if s != 0.0 {
+                if mute_melody_synth && voice.channel == 0 && voice.type_id() == VoiceTypeId::Synth
+                {
+                    continue;
+                }
                 sum += s;
                 count += 1;
             }
