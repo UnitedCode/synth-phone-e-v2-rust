@@ -29,15 +29,30 @@ pub fn audio_handler(
     let mut sr_factor = 1;
     let mut wave_type = Waveform::Sine;
     let mut bit_depth = 32;
+    let mut volume_gain = 1.0f32;
+    let mut waveform_compensation = 1.0f32;
     shared.app_state_machine.lock(|msm| {
-        sr_factor = msm.snapshot().sample_reduction;
-        wave_type = match msm.snapshot().waveform {
+        let snapshot = msm.snapshot();
+        sr_factor = snapshot.sample_reduction;
+        wave_type = match snapshot.waveform {
             0 => Waveform::Triangle,
             1 => Waveform::Square,
             2 => Waveform::Saw,
             _ => Waveform::Sine,
         };
-        bit_depth = msm.snapshot().bit_rate;
+        bit_depth = snapshot.bit_rate;
+        volume_gain = snapshot.volume as f32 / 10.0;
+        // Sine and triangle are perceptually quieter than saw/square at the same
+        // peak amplitude — they're spectrally pure, while saw/square spread energy
+        // across many harmonics, which the ear perceives as louder. Compensate so
+        // waveform choice doesn't also change perceived volume. Applied before the
+        // peak limiter below (not after) so boosted peaks still get clamped instead
+        // of hard-clipping at the DAC.
+        waveform_compensation = match wave_type {
+            Waveform::Sine => 1.4,
+            Waveform::Triangle => 1.2,
+            Waveform::Square | Waveform::Saw => 1.0,
+        };
     });
 
     if audio.get_stereo(buffer) {
@@ -60,6 +75,12 @@ pub fn audio_handler(
             // ************** PROCESS MIDI EVENTS **************
             // Process MIDI events when we have available CPU cycles
             // Only process a small batch per audio frame to prevent underruns
+            //
+            // All variants are handled inline here rather than deferred to a lower-
+            // priority batch task. This runs far more often (every BLOCK_SIZE samples)
+            // than a byte-rate-limited MIDI message can arrive, so a deferred task can
+            // never win a fair race against it — it would just see the event
+            // dequeued-and-requeued on every pass and starve indefinitely.
             shared.midi_events.lock(|events| {
                 if !events.is_empty() {
                     shared.voice_manager.lock(|voice_manager| {
@@ -67,7 +88,6 @@ pub fn audio_handler(
                         // Process up to 2 events per audio frame to maintain real-time performance
                         for _ in 0..2 {
                             if let Some(event) = events.dequeue() {
-                                // Quick inline processing for critical events
                                 match event {
                                     crate::midi::MidiEvent::NoteOn {
                                         channel,
@@ -79,15 +99,65 @@ pub fn audio_handler(
                                     crate::midi::MidiEvent::NoteOff { channel, key, .. } => {
                                         voice_manager.note_off(key, channel);
                                     }
+                                    crate::midi::MidiEvent::ControlChange {
+                                        channel,
+                                        controller,
+                                        value,
+                                    } => match controller {
+                                        123 => {
+                                            voice_manager.all_notes_off(Some(channel));
+                                        }
+                                        7 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_volume_from_midi(value);
+                                            });
+                                        }
+                                        34..=42 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_menu_value_from_cc(controller, value);
+                                            });
+                                        }
+                                        43 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.cycle_key_from_midi(value);
+                                            });
+                                            shared.display_needs_update.lock(|flag| *flag = true);
+                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        }
+                                        80 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_octave_from_midi(value);
+                                            });
+                                            shared.display_needs_update.lock(|flag| *flag = true);
+                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        }
+                                        81 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_formant_from_midi(value);
+                                            });
+                                            shared.display_needs_update.lock(|flag| *flag = true);
+                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        }
+                                        82 => {
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_crush_from_midi(value);
+                                            });
+                                            shared.display_needs_update.lock(|flag| *flag = true);
+                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        }
+                                        _ => {}
+                                    },
+                                    crate::midi::MidiEvent::PitchBend { channel: _, value } => {
+                                        let bend_ratio = (value as f32 - 8192.0) / 8192.0;
+                                        voice_manager.apply_pitch_bend(bend_ratio);
+                                    }
+                                    crate::midi::MidiEvent::ProgramChange { channel, program } => {
+                                        shared.app_state_machine.lock(|msm| {
+                                            msm.set_waveform_from_midi(channel, program);
+                                        });
+                                    }
                                     crate::midi::MidiEvent::Other => {
                                         // MIDI clock / active-sense / reset: discard.
-                                        // Re-queuing these flooded the queue and blocked
-                                        // NoteOff delivery.
-                                    }
-                                    _ => {
-                                        // CC / PitchBend: re-queue for batch processing.
-                                        let _ = events.enqueue(event);
-                                        break;
                                     }
                                 }
                             } else {
@@ -99,12 +169,14 @@ pub fn audio_handler(
             });
 
             // ************** ADD MIDI OUTPUT **************
-            // Get MIDI sample and mix it with the processed audio
+            // Get MIDI sample and mix it with the processed audio. Waveform
+            // compensation applies only to the synthesized note, not the live
+            // audio-in signal already folded into out_sample above.
             let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-            out_sample = out_sample + midi_sample * 0.1;
+            out_sample = out_sample * 0.75 + (midi_sample * waveform_compensation) * 0.1;
 
             // Normalize final output
-            out_sample = normalize_sample(out_sample, 0.8);
+            out_sample = normalize_sample(out_sample, 0.8) * volume_gain;
             // **********************************************
 
             // Check and handle hop counter
@@ -281,10 +353,9 @@ pub fn handle_vocal_effects(
     let mut formant = 0;
     let mut formant_male_ratio = 0.5f32;
     let mut formant_female_ratio = 2.0f32;
-    let mut pitch_shift_ratio = 1.0;
     let mut note = 0;
     let mut key = 0i8;
-    let mut octave = 2;
+    let mut pitch_ratio = 1.0f32;
     let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
@@ -298,15 +369,11 @@ pub fn handle_vocal_effects(
             AppState::Splash => {}
         }
         formant = snapshot.formant;
-        octave = snapshot.octave;
         key = snapshot.key;
         percussion = snapshot.percussion;
-        let octave_factor = octave as f32 * 0.5;
-        pitch_shift_ratio = if octave_factor <= 0.4 {
-            1.0
-        } else {
-            octave_factor
-        };
+        // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
+        // so -12/0/+12 give 0.5×/1×/2× and everything in between is chromatic.
+        pitch_ratio = libm::exp2f(snapshot.pitch_semitones as f32 / 12.0);
         note = snapshot.note;
         wave_type = match snapshot.waveform {
             0 => Waveform::Triangle,
@@ -353,7 +420,7 @@ pub fn handle_vocal_effects(
             } else {
                 // No MIDI notes held — fall back to keypad-driven pitch
                 if note > 0 {
-                    let carrier_hz = get_frequency(key, note, octave, true);
+                    let carrier_hz = get_frequency(key, note, pitch_ratio, true);
                     osc.set_waveform(wave_type);
                     osc.set_freq(carrier_hz);
                     for _ in 0..HOP_SIZE {
@@ -368,7 +435,7 @@ pub fn handle_vocal_effects(
         } else {
             // Dry mode
             if note > 0 {
-                let carrier_hz = get_frequency(key, note, octave, true);
+                let carrier_hz = get_frequency(key, note, pitch_ratio, true);
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
                 for _ in 0..HOP_SIZE {
@@ -413,7 +480,7 @@ pub fn handle_vocal_effects(
         note,
         midi_frequencies,
         key,
-        octave,
+        octave_ratio: pitch_ratio,
         mode,
     };
     let config = VocalEffectsConfig::default();

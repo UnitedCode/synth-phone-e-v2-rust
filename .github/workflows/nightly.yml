@@ -16,6 +16,4 @@ jobs:
           toolchain: nightly
           targets: thumbv7em-none-eabihf
 
-      - run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - run: cross build --release --target thumbv7em-none-eabihf
+      - run: cargo build --release --target thumbv7em-none-eabihf
