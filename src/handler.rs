@@ -193,8 +193,7 @@ pub fn audio_handler(
             let midi_sample = shared
                 .voice_manager
                 .lock(|vm| vm.get_mixed_sample(mute_melody_synth, melody_gain, drum_gain));
-            out_sample = (out_sample * voice_gain
-                + (midi_sample * waveform_compensation) * 0.1)
+            out_sample = (out_sample * voice_gain + (midi_sample * waveform_compensation) * 0.1)
                 * master_gain;
 
             // Normalize final output
