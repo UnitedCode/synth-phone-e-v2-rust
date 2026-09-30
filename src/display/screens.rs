@@ -45,6 +45,7 @@ pub fn draw_processing_screen(
         ProcessingProfile::PitchControl => "Pitch Ctrl",
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
+        ProcessingProfile::Tuned => "Synth+Tune",
         ProcessingProfile::Harmony => "Harmony",
         ProcessingProfile::Percussion => "Percussion",
     };
@@ -134,6 +135,7 @@ fn draw_effects_text(display: &mut LcdDisplay, key: i8, process: ProcessingProfi
         ProcessingProfile::PitchControl => "Pitch Ctrl",
         ProcessingProfile::Vocode => "Vocode",
         ProcessingProfile::Dry => "Synth+Vox",
+        ProcessingProfile::Tuned => "Synth+Tune",
         ProcessingProfile::Harmony => "Harmony",
         ProcessingProfile::Percussion => "Percussion",
     };

@@ -384,6 +384,10 @@ pub fn draw_process_indicator(
         (ProcessingProfile::Vocode, false) => &SPRITE_DATA.vocode_off,
         (ProcessingProfile::Dry, true) => &SPRITE_DATA.voice_on,
         (ProcessingProfile::Dry, false) => &SPRITE_DATA.voice_off,
+        // No dedicated sprite yet - reuse the Pitch Ctrl icon since the vocal
+        // path is the same autotune.
+        (ProcessingProfile::Tuned, true) => &SPRITE_DATA.pitchctrl_on,
+        (ProcessingProfile::Tuned, false) => &SPRITE_DATA.pitchctrl_off,
         (ProcessingProfile::Harmony, true) => &SPRITE_DATA.harmony_on,
         (ProcessingProfile::Harmony, false) => &SPRITE_DATA.harmony_off,
         (ProcessingProfile::Percussion, true) => &SPRITE_DATA.phone_on,

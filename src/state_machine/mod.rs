@@ -6,6 +6,10 @@ pub enum ProcessingProfile {
     PitchControl,
     Vocode,
     Dry,
+    /// Autotuned vocals + keypad synth. Unlike `Dry`, keypad notes only play
+    /// the synth and never dictate the vocal pitch. Effects row 3 sets the
+    /// vocal formant, like Pitch Ctrl.
+    Tuned,
     Harmony,
     Percussion,
 }
@@ -97,6 +101,7 @@ menu_items! {
     AutotuneSpeed => { field: autotune_speed,         name: "Autotune Speed", min: 1, max: 10 },
     Magnitude    => { field: magnitude,               name: "Magnitude",     min: 1, max: 10 },
     PadMatrix    => { field: pad_matrix,              name: "Pad Matrix",    min: 0, max: 1  },
+    SynthOctave  => { field: synth_octave,            name: "Synth Octave",  min: -1, max: 1 },
 }
 
 /// Storage for all adjustable menu values
@@ -115,6 +120,8 @@ pub struct MenuValues {
     pub autotune_speed: i8,
     pub magnitude: i8,
     pub pad_matrix: i8,
+    /// Octave offset of the keypad synth note only (-1, 0, +1); vocals unaffected
+    pub synth_octave: i8,
 }
 
 impl Default for MenuValues {
@@ -131,6 +138,7 @@ impl Default for MenuValues {
             autotune_speed: 5,
             magnitude: 5,
             pad_matrix: 0,
+            synth_octave: 0,
         }
     }
 }
@@ -232,6 +240,9 @@ impl AppState {
                 AppState::EffectsProfile(ProcessingProfile::Dry)
             }
             AppState::EffectsProfile(ProcessingProfile::Dry) => {
+                AppState::EffectsProfile(ProcessingProfile::Tuned)
+            }
+            AppState::EffectsProfile(ProcessingProfile::Tuned) => {
                 AppState::EffectsProfile(ProcessingProfile::Harmony)
             }
             AppState::EffectsProfile(ProcessingProfile::Harmony) => {
@@ -247,6 +258,9 @@ impl AppState {
                 AppState::Processing(ProcessingProfile::Dry)
             }
             AppState::Processing(ProcessingProfile::Dry) => {
+                AppState::Processing(ProcessingProfile::Tuned)
+            }
+            AppState::Processing(ProcessingProfile::Tuned) => {
                 AppState::Processing(ProcessingProfile::Harmony)
             }
             AppState::Processing(ProcessingProfile::Harmony) => {
@@ -336,6 +350,7 @@ pub struct AppStateMachineSnapshot {
     pub autotune_speed: i8,
     pub magnitude: i8,
     pub pad_matrix: i8,
+    pub synth_octave: i8,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
@@ -410,6 +425,7 @@ impl AppStateMachine {
             autotune_speed: self.values.autotune_speed,
             magnitude: self.values.magnitude,
             pad_matrix: self.values.pad_matrix,
+            synth_octave: self.values.synth_octave,
             key_down_pressed: self.key_down_pressed,
             process_cycle_pressed: self.process_cycle_pressed,
             key_up_pressed: self.key_up_pressed,
@@ -450,7 +466,9 @@ impl AppStateMachine {
                     // Row 3: Formant controls or waveform
                     7..=9 => {
                         match profile {
-                            ProcessingProfile::PitchControl | ProcessingProfile::Harmony => {
+                            ProcessingProfile::PitchControl
+                            | ProcessingProfile::Harmony
+                            | ProcessingProfile::Tuned => {
                                 // map 7/8/9 -> male/none/female (or whatever mapping you want)
                                 self.current_formant = match key {
                                     7 => 1, // male
@@ -567,6 +585,7 @@ impl AppStateMachine {
             ("Speed", self.values.autotune_speed),
             ("Magnitude", self.values.magnitude),
             ("Pad Matrix", self.values.pad_matrix),
+            ("Synth Octave", self.values.synth_octave),
         ];
 
         let total = menu_items.len();
@@ -783,6 +802,44 @@ mod tests {
 
         app.handle_event(AppEvent::EncoderDoublePress);
         assert!(matches!(app.state(), AppState::Processing(_)));
+    }
+
+    #[test]
+    fn test_cycle_dry_to_tuned_to_harmony() {
+        let dry = AppState::Processing(ProcessingProfile::Dry);
+        let tuned = dry.cycle_profile();
+        assert_eq!(tuned, AppState::Processing(ProcessingProfile::Tuned));
+        assert_eq!(
+            tuned.cycle_profile(),
+            AppState::Processing(ProcessingProfile::Harmony)
+        );
+    }
+
+    #[test]
+    fn test_tuned_effects_row3_selects_formant() {
+        let mut app = AppStateMachine::new();
+        app.state = AppState::EffectsProfile(ProcessingProfile::Tuned);
+        app.handle_event(AppEvent::KeypadPress(9));
+        assert_eq!(app.snapshot().formant, 2); // female
+        assert_eq!(app.snapshot().waveform, 0); // waveform untouched
+        app.handle_event(AppEvent::KeypadPress(7));
+        assert_eq!(app.snapshot().formant, 1); // male
+    }
+
+    #[test]
+    fn test_synth_octave_menu_clamped() {
+        let mut app = effects_app();
+        assert_eq!(app.snapshot().synth_octave, 0);
+
+        // SynthOctave is the last menu item — one step back from index 0
+        app.handle_event(AppEvent::EncoderDoublePress);
+        app.handle_event(AppEvent::EncoderRotate(-1));
+        assert_eq!(app.current().current_item.0, "Synth Octave");
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(1)); // 0 → 1
+        app.handle_event(AppEvent::EncoderRotate(1)); // clamped at 1
+        app.handle_event(AppEvent::EncoderDoublePress);
+        assert_eq!(app.snapshot().synth_octave, 1);
     }
 
     #[test]

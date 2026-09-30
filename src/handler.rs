@@ -8,7 +8,9 @@ use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
 use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator, Waveform};
-use synthphone_e_vocal_dsp::dsp::{bitcrush, normalize_sample, sample_rate_reduce};
+use synthphone_e_vocal_dsp::dsp::{
+    bitcrush, normalize_sample, sample_rate_reduce, Fft1024, FftOps,
+};
 use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
 use synthphone_e_vocal_dsp::{
     process_vocal_effects_1024, MusicalSettings, ProcessingMode, VocalEffectsConfig,
@@ -354,6 +356,7 @@ pub fn handle_vocal_effects(
     let mut formant_male_ratio = 0.5f32;
     let mut formant_female_ratio = 2.0f32;
     let mut note = 0;
+    let mut synth_octave_ratio = 1.0f32;
     let mut key = 0i8;
     let mut pitch_ratio = 1.0f32;
     let mut percussion = 0;
@@ -375,6 +378,8 @@ pub fn handle_vocal_effects(
         // so -12/0/+12 give 0.5×/1×/2× and everything in between is chromatic.
         pitch_ratio = libm::exp2f(snapshot.pitch_semitones as f32 / 12.0);
         note = snapshot.note;
+        // -1/0/+1 octave → 0.5×/1×/2× on the keypad synth note only
+        synth_octave_ratio = libm::exp2f(snapshot.synth_octave as f32);
         wave_type = match snapshot.waveform {
             0 => Waveform::Triangle,
             1 => Waveform::Square,
@@ -391,13 +396,16 @@ pub fn handle_vocal_effects(
         ProcessingProfile::PitchControl => ProcessingMode::PitchControl,
         ProcessingProfile::Vocode => ProcessingMode::Vocode,
         ProcessingProfile::Dry => ProcessingMode::Dry,
+        ProcessingProfile::Tuned => ProcessingMode::PitchControl,
         ProcessingProfile::Harmony => ProcessingMode::Harmony,
         ProcessingProfile::Percussion => ProcessingMode::Dry,
     };
 
     let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
 
-    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
+    let is_tuned = current_process == ProcessingProfile::Tuned;
+
+    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry || is_tuned {
         if mode == ProcessingMode::Vocode {
             let active_count = midi_frequencies.iter().filter(|&&f| f > 0.0).count();
             if active_count > 0 {
@@ -433,9 +441,9 @@ pub fn handle_vocal_effects(
                 }
             }
         } else {
-            // Dry mode
+            // Dry / Tuned mode: keypad note drives the synth carrier
             if note > 0 {
-                let carrier_hz = get_frequency(key, note, pitch_ratio, true);
+                let carrier_hz = get_frequency(key, note, pitch_ratio, true) * synth_octave_ratio;
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
                 for _ in 0..HOP_SIZE {
@@ -473,12 +481,15 @@ pub fn handle_vocal_effects(
         }
     }
 
+    // In Tuned mode the vocal is autotuned to the key: the DSP only snaps to
+    // the nearest scale note when note == 0 and no MIDI note is held, so hide
+    // both from it. Keypad/MIDI notes still sound through the synth.
     let musical_settings = MusicalSettings {
         formant,
         formant_male_ratio,
         formant_female_ratio,
-        note,
-        midi_frequencies,
+        note: if is_tuned { 0 } else { note },
+        midi_frequencies: if is_tuned { [0.0; 8] } else { midi_frequencies },
         key,
         octave_ratio: pitch_ratio,
         mode,
@@ -493,7 +504,7 @@ pub fn handle_vocal_effects(
     let write_idx = carrier_buffer.write_index();
     carrier_buffer.block_from(write_idx, &mut carrier_unwrapped_buffer);
 
-    let synthesis_output = process_vocal_effects_1024(
+    let mut synthesis_output = process_vocal_effects_1024(
         &mut input_buffer,
         Some(&mut carrier_unwrapped_buffer),
         last_input_phases,
@@ -504,6 +515,19 @@ pub fn handle_vocal_effects(
         &config,
         &musical_settings,
     );
+
+    // PitchControl doesn't mix a carrier, so layer the keypad synth on top
+    // here using the same balance and windowing as Dry mode.
+    if is_tuned && note > 0 {
+        let window = Fft1024::get_hann_window();
+        for ((out, synth), w) in synthesis_output
+            .iter_mut()
+            .zip(carrier_unwrapped_buffer.iter())
+            .zip(window.iter())
+        {
+            *out = *out * 0.96 + synth * 0.04 * w;
+        }
+    }
 
     ctx.out_ring.lock(|output_ring| {
         output_ring.write_overlapped_samples(&synthesis_output);
