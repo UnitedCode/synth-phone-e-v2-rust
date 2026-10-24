@@ -1,4 +1,5 @@
 use crate::audio::drum_synth::{midi_note_to_drum_type, DrumSampler};
+use crate::percussion::RINGER_FIRST_NOTE;
 use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
 
 // Precomputed 1/sqrt(n) for n = 1..=8, indexed by active voice count
@@ -89,6 +90,15 @@ impl HybridVoice {
         self.velocity = 0;
         // Synth will just stop producing sound when we stop calling it
         // Drum will finish its envelope naturally
+    }
+
+    /// Fades out a held drum-channel sound (dial tone, ringer). The voice frees
+    /// itself in `get_sample` once the fade finishes.
+    #[inline]
+    pub fn release(&mut self) {
+        if self.active_type == VoiceTypeId::Drum {
+            self.drum.release();
+        }
     }
 
     /// Get next sample - NO dynamic dispatch, just a match
@@ -252,8 +262,17 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             return;
         }
 
-        // GM spec: drum channel ignores NoteOff — voices self-release via envelope
+        // GM spec: drum channel ignores NoteOff — voices self-release via envelope.
+        // Ringers and dial tones (82+) are held sounds and fade out on release.
         if channel == 9 {
+            if note >= RINGER_FIRST_NOTE {
+                for voice in &mut self.voices {
+                    if voice.is_playing(note, channel) {
+                        voice.release();
+                        return;
+                    }
+                }
+            }
             return;
         }
 

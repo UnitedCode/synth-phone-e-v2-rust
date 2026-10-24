@@ -382,7 +382,7 @@ impl AppStateMachine {
             current_bitcrush: 0,
             current_formant: 0,
             current_waveform: 0,
-            current_percussion: 1,
+            current_percussion: 2, // drums
             volume: 10,
             note: 0,
             key_down_pressed: false,

@@ -2,6 +2,7 @@ use crate::display::text::{
     draw_centered_text, draw_text, header_text, inverted_text, menu_highlight, menu_normal,
     normal_text, small_text,
 };
+use crate::percussion::{SET_DIAL_TONES, SET_RINGER};
 use crate::state_machine::ProcessingProfile;
 use crate::types::LcdDisplay;
 use core::fmt::Write;
@@ -30,6 +31,7 @@ pub fn draw_processing_screen(
     pitch_semitones: i8,
     note: i8,
     volume: i8,
+    percussion: i8,
     display: &mut LcdDisplay,
     atlas: &ImageRawBE<BinaryColor>,
 ) {
@@ -71,7 +73,18 @@ pub fn draw_processing_screen(
     // Draw text
     draw_text(display, &key_buffer, Point::new(26, 3), &inverted_style);
     draw_text(display, &mode_buffer, Point::new(80, 3), &inverted_style);
-    draw_centered_text(display, &note_buffer, Point::new(62, 15), header_style);
+    if process == ProcessingProfile::Percussion {
+        // The keypad plays drum-channel sounds here, so there is no note to
+        // show; name the selected sound set instead.
+        let set_name = match percussion {
+            SET_DIAL_TONES => "Dial Tones",
+            SET_RINGER => "Ringer",
+            _ => "Drums",
+        };
+        draw_centered_text(display, set_name, Point::new(62, 15), inverted_style);
+    } else {
+        draw_centered_text(display, &note_buffer, Point::new(62, 15), header_style);
+    }
     draw_text(display, &oct_buffer, Point::new(14, 28), &inverted_style);
     draw_centered_text(display, &vol_buffer, Point::new(120, 28), inverted_style);
     draw_centered_text(display, process_profile, Point::new(62, 28), small_style);

@@ -1,4 +1,5 @@
 use crate::midi::get_midi_queue_status;
+use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use libdaisy::gpio::Daisy1;
@@ -33,8 +34,17 @@ pub fn audio_handler(
     let mut bit_depth = 32;
     let mut volume_gain = 1.0f32;
     let mut waveform_compensation = 1.0f32;
+    let mut crush_voices = false;
     shared.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
+        // In Percussion the crush keys shape the drums, ringers and dial tones
+        // too, so the voices are mixed in before the crush instead of after.
+        crush_voices = matches!(
+            snapshot.current_state,
+            AppState::Processing(ProcessingProfile::Percussion)
+                | AppState::EffectsProfile(ProcessingProfile::Percussion)
+                | AppState::Menu(_, ProcessingProfile::Percussion)
+        );
         sr_factor = snapshot.sample_reduction;
         wave_type = match snapshot.waveform {
             0 => Waveform::Triangle,
@@ -68,11 +78,14 @@ pub fn audio_handler(
 
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
-            // ************** SAMPLE-RATE REDUCE **************
-            out_sample = sample_rate_reduce(out_sample, sr_factor, sr_hold_counter, sr_held_value);
+            if !crush_voices {
+                // ************** SAMPLE-RATE REDUCE **************
+                out_sample =
+                    sample_rate_reduce(out_sample, sr_factor, sr_hold_counter, sr_held_value);
 
-            // ************** BIT DEPTH REDUCE **************
-            out_sample = bitcrush(out_sample, bit_depth as i8);
+                // ************** BIT DEPTH REDUCE **************
+                out_sample = bitcrush(out_sample, bit_depth as i8);
+            }
 
             // ************** PROCESS MIDI EVENTS **************
             // Process MIDI events when we have available CPU cycles
@@ -177,6 +190,13 @@ pub fn audio_handler(
             let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
             out_sample = out_sample * 0.75 + (midi_sample * waveform_compensation) * 0.1;
 
+            if crush_voices {
+                // Percussion: crush the voice and every MIDI voice together.
+                out_sample =
+                    sample_rate_reduce(out_sample, sr_factor, sr_hold_counter, sr_held_value);
+                out_sample = bitcrush(out_sample, bit_depth as i8);
+            }
+
             // Normalize final output
             out_sample = normalize_sample(out_sample, 0.8) * volume_gain;
             // **********************************************
@@ -247,23 +267,26 @@ pub fn interface_handler(
                     oms[row][col] = is_pressed;
                 });
 
+                let actual_col = 2 - col;
+                let key_num = row * 3 + actual_col + 1;
+
                 if is_pressed {
                     update_state = true;
-                    let current_state = shared
-                        .app_state_machine
-                        .lock(|msm| msm.snapshot().current_state);
+                    let (current_state, percussion_set) = shared.app_state_machine.lock(|msm| {
+                        let snapshot = msm.snapshot();
+                        (snapshot.current_state, snapshot.percussion)
+                    });
 
                     if let AppState::Processing(ProcessingProfile::Percussion) = current_state {
-                        // In Percussion mode keypad presses are drum notes — inject directly
-                        // into the MIDI queue rather than routing through the state machine.
-                        let actual_col = 2 - col;
-                        let key_num = row * 3 + actual_col + 1;
-                        if let Some(note) = keypad_to_drum_note(key_num) {
+                        // In Percussion mode keypad presses play the selected sound set
+                        // (drums, ringers or dial tones) — inject directly into the MIDI
+                        // queue rather than routing through the state machine.
+                        if let Some(note) = local.held_keys.press(percussion_set, key_num) {
                             shared.midi_events.lock(|events| {
                                 let _ = crate::midi::try_enqueue_midi_event(
                                     events,
                                     crate::midi::MidiEvent::NoteOn {
-                                        channel: 9,
+                                        channel: DRUM_CHANNEL,
                                         key: note,
                                         velocity: 100,
                                     },
@@ -277,7 +300,21 @@ pub fn interface_handler(
                     }
                 } else {
                     update_state = true;
-                    // Button has just been released
+                    // Button has just been released. Stop whatever note its press
+                    // started, whatever screen we're on now, so held ringers and
+                    // dial tones never get stuck.
+                    if let Some(note) = local.held_keys.release(key_num) {
+                        shared.midi_events.lock(|events| {
+                            let _ = crate::midi::try_enqueue_midi_event(
+                                events,
+                                crate::midi::MidiEvent::NoteOff {
+                                    channel: DRUM_CHANNEL,
+                                    key: note,
+                                    velocity: 0,
+                                },
+                            );
+                        });
+                    }
                     shared.app_state_machine.lock(|msm| {
                         msm.handle_event(handle_button_release(
                             row,
@@ -359,7 +396,6 @@ pub fn handle_vocal_effects(
     let mut synth_octave_ratio = 1.0f32;
     let mut key = 0i8;
     let mut pitch_ratio = 1.0f32;
-    let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
         let snapshot = asm.snapshot();
@@ -373,7 +409,6 @@ pub fn handle_vocal_effects(
         }
         formant = snapshot.formant;
         key = snapshot.key;
-        percussion = snapshot.percussion;
         // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
         // so -12/0/+12 give 0.5×/1×/2× and everything in between is chromatic.
         pitch_ratio = libm::exp2f(snapshot.pitch_semitones as f32 / 12.0);
@@ -400,6 +435,13 @@ pub fn handle_vocal_effects(
         ProcessingProfile::Harmony => ProcessingMode::Harmony,
         ProcessingProfile::Percussion => ProcessingMode::Dry,
     };
+
+    // In Percussion the keypad plays drum-channel voices and never updates
+    // `note`, so whatever note was last played in another profile would keep
+    // driving the Dry carrier. Treat it as silent here.
+    if current_process == ProcessingProfile::Percussion {
+        note = 0;
+    }
 
     let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
 
@@ -453,30 +495,6 @@ pub fn handle_vocal_effects(
                 for _ in 0..HOP_SIZE {
                     carrier_buffer.push(0.0);
                 }
-            }
-        }
-    }
-
-    if current_process == ProcessingProfile::Percussion {
-        match percussion {
-            0 => {
-                //dial tones
-            }
-            1 => {
-                //ringer
-            }
-            2 => {
-                //drums
-                //rech out to the voice manager and trigger drums
-                //or get the drum sampler directly
-
-                //let mut drum = DrumSampler::new();
-                //drum.set_drum_type(DrumType::Cymbal);
-                //drum.trigger();
-                //carrier_buffer.push(drum.next_value());
-            }
-            _ => {
-                //dial tone
             }
         }
     }

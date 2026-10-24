@@ -22,6 +22,7 @@ mod display;
 mod handler;
 mod input;
 mod midi;
+mod percussion;
 mod state_machine;
 mod types;
 
@@ -37,6 +38,7 @@ mod rtic_app {
             midi::{
                 try_enqueue_midi_event, voice_generator::VoiceManager, MidiEvent, MidiReceiver,
             },
+            percussion::HeldKeys,
             state_machine::{AppState, AppStateMachine, MenuState},
         };
         use embedded_graphics::{image::ImageRawBE, pixelcolor::BinaryColor};
@@ -131,6 +133,7 @@ mod rtic_app {
             previous_pitch_shift_ratio: f32,
             midi_receiver: MidiReceiver,
             sprite_atlas: ImageRawBE<'static, BinaryColor>,
+            held_keys: HeldKeys,
         }
 
         #[init]
@@ -363,6 +366,7 @@ mod rtic_app {
                     }),
                     midi_receiver,
                     sprite_atlas,
+                    held_keys: HeldKeys::new(),
                 },
                 init::Monotonics(),
             )
@@ -462,6 +466,7 @@ mod rtic_app {
                             snapshot.pitch_semitones,
                             snapshot.note,
                             snapshot.volume,
+                            snapshot.percussion,
                             ctx.local.display,
                             ctx.local.sprite_atlas,
                         );
@@ -515,6 +520,7 @@ mod rtic_app {
                 row_3_pin,
                 row_4_pin,
                 encoder_button,
+                held_keys,
             ],
             shared = [
                 app_state_machine,
