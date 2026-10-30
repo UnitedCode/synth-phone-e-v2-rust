@@ -1,20 +1,9 @@
 Translation cache size 536870912 is larger than maximum allowed 134217728. It will be clamped to maximum
 Thread has been woken up 2 times, verify your condition
-rcc: Unhandled write to offset 0x2C. Unhandled bits: [2-3] when writing value 0x1FF000C. Tags: PLL1GRE (0x3).
-rcc: Unhandled write to offset 0x2C. Unhandled bits: [20] when writing value 0x1EF0020. Tags: DIVQ2EN (0x0).
-rcc: Unhandled write to offset 0x2C. Unhandled bits: [21] when writing value 0x1DF0020. Tags: DIVR2EN (0x0).
-rcc: Unhandled write to offset 0x2C. Unhandled bits: [11] when writing value 0x1FF0820. Tags: PLL3RGE (0x2).
-rcc: Unhandled write to offset 0x44. Unhandled bits: [3-4, 6-8, 11-12] when writing value 0x19D8. Tags: FRACN3 (0x33B).
-rcc: Unhandled write to offset 0x2C. Unhandled bits: [8] when writing value 0x1FF0120. Tags: PLL3FRACEN (0x1).
 flashController: Unhandled write to offset 0x0. Unhandled bits: [9-10] when writing value 0x624. Tags: RESERVED (0x18).
 Unhandled write to offset 0x8. Unhandled bits: [29] when writing value 0x2FC00000. Tags: RESERVED (0x1).
 Unhandled write to offset 0x8. Unhandled bits: [31] when writing value 0x9FC10000. Tags: ADCAL (0x1).
-dwt: Unhandled write to offset 0xFB0 (Function3+0xf58), value 0xC5ACCE55.
-rcc: Unhandled write to offset 0x50. Unhandled bits: [1] when writing value 0x2. Tags: SAI1SEL (0x2).
 i2c2: Unhandled write to offset 0x10. Unhandled bits: [2, 5, 10, 13, 16-17, 21-23, 28-31] when writing value 0xF0E32424. Tags: SCLL (0x24), SCLH (0x24), SDADEL (0x3), SCLDEL (0xE), PRESC (0xF).
-nvic: Unhandled write to offset 0xF50 (ICacheInvalidateAllToPoUaIgnored), value 0x0.
-cpu: Trying to enable instruction cache, but it's not supported
-nvic: Unhandled write to offset 0xF60 (DCacheInvalidateBySetWay), value 0x0.
 i2c1: Unhandled write to offset 0x10. Unhandled bits: [2, 5, 10, 13, 16-17, 21-23, 28-31] when writing value 0xF0E32424. Tags: SCLL (0x24), SCLH (0x24), SDADEL (0x3), SCLDEL (0xE), PRESC (0xF).
 usart1: Unhandled write to offset 0x2C, value 0x0.
 usart1: Unhandled write to offset 0x0. Unhandled bits: [29] when writing value 0x2000000D. Tags: RESERVED (0x1).

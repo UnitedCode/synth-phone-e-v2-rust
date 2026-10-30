@@ -7,6 +7,8 @@
   <ItemGroup>
     <Compile Include="DaisyHost.cs" />
     <Compile Include="DaisyNative.cs" />
+    <Compile Include="DaisyMemory.cs" />
+    <Compile Include="DaisyClock.cs" />
     <Reference Include="Infrastructure"><HintPath>$(RenodeRoot)/Infrastructure.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Renode"><HintPath>$(RenodeRoot)/Renode.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="System.Collections.Immutable"><HintPath>$(RenodeRoot)/System.Collections.Immutable.dll</HintPath></Reference>

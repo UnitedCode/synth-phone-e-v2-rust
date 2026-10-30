@@ -84,6 +84,7 @@ public static class DaisyHost
         var input = new float[bytes.Length / 4];
         Buffer.BlockCopy(bytes, 0, input, 0, bytes.Length);
         sai.LoadInput(input);
+        sai.IdealLineInput = args[8] == "ideal-line";
         sai.SuppressReceive = args[5] == "drop-rx";
         using(var log = new StreamWriter(args[3] + ".rtt"))
         {
@@ -93,6 +94,20 @@ public static class DaisyHost
             for(int step = 0; step < 100; step++)
             {
                 emulation.RunFor(TimeInterval.FromSeconds(0.01));
+                if(step == 20 && args[5] == "cacheable-dma") {
+                    uint selected = bus.ReadDoubleWord(0xE000ED98);
+                    bus.WriteDoubleWord(0xE000ED98, 0);
+                    uint rasr = bus.ReadDoubleWord(0xE000EDA0);
+                    bus.WriteDoubleWord(0xE000EDA0, (rasr & ~0x003F0000U) | 0x000B0000U);
+                    bus.WriteDoubleWord(0xE000ED98, selected);
+                }
+                if(step == 20 && args[5] == "dtcm-dma") {
+                    uint cr=bus.ReadDoubleWord(0x40020010);
+                    bus.WriteDoubleWord(0x40020010,cr&~1U);
+                    bus.WriteDoubleWord(0x4002001c,0x20000000);
+                    bus.WriteDoubleWord(0x40020020,0x20000000);
+                    bus.WriteDoubleWord(0x40020010,cr|1U);
+                }
                 uint buffer = bus.ReadDoubleWord(rtt + 28);
                 uint capacity = bus.ReadDoubleWord(rtt + 32);
                 uint write = bus.ReadDoubleWord(rtt + 36);
@@ -105,6 +120,8 @@ public static class DaisyHost
         Console.WriteLine("PC: " + cpu.PC);
         File.WriteAllBytes(args[3], bus.ReadBytes(0x20000000UL, 0x20000));
         sai.Save(args[3] + ".wav");
+        ((DaisyNvic)machine["sysbus.nvic"]).SaveMemory(args[3] + ".memory.txt");
+        File.WriteAllText(args[3]+".bus.txt",$"dma1_lisr={bus.ReadDoubleWord(0x40020000)}\ndma1_s0cr={bus.ReadDoubleWord(0x40020010)}\ndma1_s0ndtr={bus.ReadDoubleWord(0x40020014)}\n");
         emulation.Dispose();
     }
     private static void VerifyPythonGuard()

@@ -105,6 +105,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void FinishTransmission() {}
         public void Reset() { lock(sync) native.Reset(); }
         public uint ActiveMask { get { lock(sync) return native.ReadDoubleWord(0x100); } }
+        public uint WithState(Func<IntPtr,uint> operation) { lock(sync) return operation(native.State); }
         public void OnGPIO(int pin, bool high) { lock(sync) { if(pin != 0 || control(native.State, high ? 1U : 0U) != 0) throw new InvalidOperationException("Unsupported codec control signal"); } }
         private readonly object sync = new object();
         private readonly DaisyNative native;
@@ -116,9 +117,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong Request(IntPtr state, uint channel);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint Irqs(IntPtr state);
-        public DaisyDma(IMachine machine, string libraryPath)
+        public DaisyDma(IMachine machine, string libraryPath, DaisyArchitecture architecture)
         {
             this.machine = machine;
+            this.architecture = architecture;
             native = new DaisyNative(libraryPath, 6, 0x400);
             var library = NativeLibrary.Load(libraryPath);
             request = Marshal.GetDelegateForFunctionPointer<Request>(NativeLibrary.GetExport(library, "daisy_dma_request"));
@@ -136,7 +138,11 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             {
                 var transfer = request(native.State, (uint)number);
                 if(transfer == ulong.MaxValue) throw new InvalidOperationException("Invalid DMA audio request");
-                if(transfer != 0) machine.SystemBus.WriteDoubleWord((uint)transfer, machine.SystemBus.ReadDoubleWord(transfer >> 32));
+                if(transfer != 0) {
+                    uint source = (uint)(transfer >> 32), destination = (uint)transfer;
+                    uint word = architecture.Contains(source) ? architecture.Read(source, 4, false) : machine.SystemBus.ReadDoubleWord(source);
+                    if(architecture.Contains(destination)) architecture.Write(destination, 4, word, false); else machine.SystemBus.WriteDoubleWord(destination, word);
+                }
                 UpdateIrqs();
             }
         }
@@ -146,6 +152,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public IReadOnlyDictionary<int, IGPIO> Connections { get; }
         private readonly object sync = new object();
         private readonly IMachine machine;
+        private readonly DaisyArchitecture architecture;
         private readonly DaisyNative native;
         private readonly Request request;
         private readonly Irqs irqs;
@@ -153,54 +160,65 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
     public class DaisySai : IDoubleWordPeripheral, IKnownSize, IDisposable
     {
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void TickNative(IntPtr state, uint codecActive);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint CodecTickNative(IntPtr state, IntPtr codec, uint idealLine);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void FaultNative(IntPtr state, uint dropRx);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint ConfigureNative(IntPtr state, uint rxChannel);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint RateNative(IntPtr state, double rate);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint Requests(IntPtr state);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void Input(IntPtr state, float[] samples, UIntPtr frames);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveNative(IntPtr state, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
-        public DaisySai(IMachine machine, string libraryPath, DaisyI2c codec, uint rxChannel)
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveNative(IntPtr state, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, uint sampleRate);
+        public DaisySai(IMachine machine, string libraryPath, DaisyI2c codec, DaisyRcc rcc, uint rxChannel)
         {
             this.codec = codec;
+            this.rcc = rcc;
             this.rxChannel = rxChannel;
             native = new DaisyNative(libraryPath, 7, 0x400);
             var library = NativeLibrary.Load(libraryPath);
             var configure = Marshal.GetDelegateForFunctionPointer<ConfigureNative>(NativeLibrary.GetExport(library, "daisy_sai_configure"));
             if(configure(native.State, rxChannel) != 0) throw new InvalidOperationException("Unsupported SAI board wiring");
-            tick = Marshal.GetDelegateForFunctionPointer<TickNative>(NativeLibrary.GetExport(library, "daisy_sai_tick"));
+            codecTick = Marshal.GetDelegateForFunctionPointer<CodecTickNative>(NativeLibrary.GetExport(library, "daisy_sai_tick_codec"));
+            setRate = Marshal.GetDelegateForFunctionPointer<RateNative>(NativeLibrary.GetExport(library, "daisy_sai_rate"));
             fault = Marshal.GetDelegateForFunctionPointer<FaultNative>(NativeLibrary.GetExport(library, "daisy_sai_fault"));
             requests = Marshal.GetDelegateForFunctionPointer<Requests>(NativeLibrary.GetExport(library, "daisy_sai_requests"));
             input = Marshal.GetDelegateForFunctionPointer<Input>(NativeLibrary.GetExport(library, "daisy_sai_input"));
             save = Marshal.GetDelegateForFunctionPointer<SaveNative>(NativeLibrary.GetExport(library, "daisy_sai_save"));
-            clock = machine.ObtainManagedThread(Tick, 48014);
+            clock = machine.ObtainManagedThread(Tick, 1000000);
             clock.Start();
         }
         public uint ReadDoubleWord(long offset) { lock(sync) return native.ReadDoubleWord(offset); }
-        public void WriteDoubleWord(long offset, uint value) { lock(sync) { native.WriteDoubleWord(offset, value); if(offset == 4 || offset == 0x24) PumpRequests(); } }
+        public void WriteDoubleWord(long offset, uint value) { lock(sync) { native.WriteDoubleWord(offset, value); if(offset==4) cr1=native.ReadDoubleWord(4); if(offset==0xc) frcr=native.ReadDoubleWord(0xc); if(offset == 4 || offset == 0x24) PumpRequests(); } }
         private void Tick()
         {
+            // RCC reset can call Reset(). Do not hold the SAI lock while
+            // acquiring RCC's lock in the opposite direction.
+            uint frames = rcc.Frames(cr1, frcr, 1000);
+            double rate = frames==0 ? 0 : rcc.ExactRate(cr1,frcr);
             lock(sync)
             {
-                tick(native.State, codec.ActiveMask);
-                PumpRequests();
+                if(frames!=0 && setRate(native.State,rate)!=0) throw new InvalidOperationException("Invalid SAI frame rate");
+                for(uint frame=0;frame<frames;frame++) { if(codec.WithState(state=>codecTick(native.State,state,IdealLineInput ? 1U:0U))!=0) throw new InvalidOperationException("Unsupported codec audio path"); PumpRequests(); }
             }
         }
         private void PumpRequests() { Pump(rxChannel == 0 ? DmaA : DmaB, 1U << (int)rxChannel, 2); Pump(rxChannel == 0 ? DmaB : DmaA, 1U << (int)(1 - rxChannel), 8); }
         private void Pump(GPIO gpio, uint mask, int words) { for(int i = 0; i < words && (requests(native.State) & mask) != 0; i++) { gpio.Set(true); gpio.Set(false); } }
         public void LoadInput(float[] samples) { lock(sync) input(native.State, samples, (UIntPtr)(samples.Length / 2)); }
-        public void Save(string path) { lock(sync) { if(save(native.State, path) != 0) throw new IOException("Could not save virtual SAI output"); } }
-        public void Reset() { lock(sync) native.Reset(); }
+        public void Save(string path) { uint rate=rcc.Rate(cr1,frcr); lock(sync) { if(save(native.State,path,rate)!=0) throw new IOException("Could not save virtual SAI output"); } rcc.Save(cr1,frcr,path+".clock.txt"); }
+        public void Reset() { lock(sync) { native.Reset(); cr1=0; frcr=0; } }
         public void Dispose() { clock.Dispose(); }
         public long Size { get { return 0x400; } }
         public GPIO DmaA { get; } = new GPIO();
         public GPIO DmaB { get; } = new GPIO();
         public bool SuppressReceive { set { lock(sync) fault(native.State, value ? 1U : 0U); } }
+        public bool IdealLineInput { get; set; }
         private readonly object sync = new object();
         private readonly DaisyNative native;
         private readonly DaisyI2c codec;
+        private readonly DaisyRcc rcc;
         private readonly uint rxChannel;
         private readonly IManagedThread clock;
-        private readonly TickNative tick;
+        private readonly CodecTickNative codecTick;
+        private readonly RateNative setRate;
+        private uint cr1, frcr;
         private readonly FaultNative fault;
         private readonly Requests requests;
         private readonly Input input;

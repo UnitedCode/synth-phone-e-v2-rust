@@ -100,6 +100,7 @@ struct Host<'a> {
     renode: &'a Path,
     directory: &'a Path,
     board: Board,
+    ideal_line: bool,
 }
 impl Host<'_> {
     fn boot(&self, label: &str, input: &Path, fault: &str) -> Result<PathBuf> {
@@ -115,6 +116,11 @@ impl Host<'_> {
             .arg(fault)
             .arg(self.board.id())
             .arg(self.board.grounded_straps().to_string())
+            .arg(if self.ideal_line || fault == "ideal-line" {
+                "ideal-line"
+            } else {
+                "serial"
+            })
             .env(
                 "VIRTUAL_DAISY_INFRASTRUCTURE",
                 self.managed.join("Infrastructure.dll"),
@@ -128,7 +134,19 @@ impl Host<'_> {
     }
 }
 
-fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>, board: Board) -> Result<()> {
+fn run(
+    renode: &Path,
+    directory: &Path,
+    input_wav: Option<&Path>,
+    board: Board,
+    ideal_line: bool,
+) -> Result<()> {
+    if ideal_line && board != Board::Rev5 {
+        return Err(
+            "Ideal line input is only implemented for Rev5/WM8731; select serial for this board"
+                .into(),
+        );
+    }
     fs::create_dir_all(directory)?;
     let directory = directory.canonicalize()?;
     // Reusing an output directory must not leave an old success report behind
@@ -210,7 +228,7 @@ fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>, board: Board) 
         format!("{sha}  firmware.elf\nsource={}\n", elf.display()),
     )?;
     platform::prepare(&renode, &directory, &library, board)?;
-    conformance::write(&directory, board, &sha, &library)?;
+    conformance::write(&directory, board, &sha, &library, ideal_line)?;
     let managed = directory.join("managed");
     fs::create_dir_all(&managed)?;
     checked(
@@ -250,9 +268,13 @@ fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>, board: Board) 
         renode: &renode,
         directory: &directory,
         board,
+        ideal_line,
     };
     let baseline = host.boot("baseline", &tone, "none")?;
     let report = grade::check(&baseline)?;
+    if board == Board::Rev5 && !ideal_line {
+        grade::check(&host.boot("codec-line", &tone, "ideal-line")?)?;
+    }
     for (label, input, fault) in [
         ("silent-input", &silence, "none"),
         ("lost-rx-dma", &tone, "drop-rx"),
@@ -269,6 +291,27 @@ fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>, board: Board) 
             return Err("Lost RX requests did not produce FIFO overrun evidence".into());
         }
     }
+    let cache_fault = host.boot("cacheable-dma", &tone, "cacheable-dma")?;
+    if grade::failures(&cache_fault)?.is_empty() {
+        return Err("Cacheable DMA fault did not corrupt the returned audio".into());
+    }
+    if grade::counter(
+        &grade::artifact(&cache_fault, ".memory.txt"),
+        "dma_cacheable_bytes",
+    )? == 0
+    {
+        return Err("Cache fault did not reach cacheable DMA memory".into());
+    }
+    let bus_fault = host.boot("dtcm-dma", &tone, "dtcm-dma")?;
+    if grade::failures(&bus_fault)?.is_empty() {
+        return Err("DMA TCM bus fault did not fail the audio gates".into());
+    }
+    let bus_stats = grade::artifact(&bus_fault, ".bus.txt");
+    if grade::counter(&bus_stats, "dma1_lisr")? & 8 == 0
+        || grade::counter(&bus_stats, "dma1_s0cr")? & 1 != 0
+    {
+        return Err("DMA bus fault missing TEIF or EN-clear evidence".into());
+    }
     if let Some(source) = input_wav {
         let raw = directory.join("user.f32le");
         wav_input(source, &raw)?;
@@ -277,7 +320,7 @@ fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>, board: Board) 
     if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
         return Err("Firmware changed during the run".into());
     }
-    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nHardware equivalence: UNVERIFIED\nTiming/cache/bus and analog codec behavior require independent hardware evidence\n", board.description());
+    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nInstruction timing/cache, bus contention and complete analog/codec response remain unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal path boot passed" } else { "not implemented for this codec" });
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())
@@ -300,8 +343,17 @@ fn main() -> Result<()> {
         let mut codec = None;
         let mut input = None;
         let mut require_hardware = false;
+        let mut ideal_line = false;
         let mut options = args[3..].iter();
         while let Some(option) = options.next() {
+            if option == "--audio-boundary" {
+                ideal_line = match options.next().and_then(|v| v.to_str()) {
+                    Some("ideal-line") => true,
+                    Some("serial") => false,
+                    _ => return Err("--audio-boundary requires serial|ideal-line".into()),
+                };
+                continue;
+            }
             if option == "--board" {
                 if board.is_some() {
                     return Err("Duplicate --board".into());
@@ -343,7 +395,13 @@ fn main() -> Result<()> {
         if require_hardware {
             return Err(conformance::UNVERIFIED.into());
         }
-        return run(Path::new(&args[1]), Path::new(&args[2]), input, board);
+        return run(
+            Path::new(&args[1]),
+            Path::new(&args[2]),
+            input,
+            board,
+            ideal_line,
+        );
     }
-    Err("Usage: virtual-daisy run RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

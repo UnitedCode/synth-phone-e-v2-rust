@@ -57,6 +57,27 @@ impl Dma {
         }
         let (index, register) = Self::index(offset)?;
         let stream = &mut self.streams[index];
+        if stream.cr & 1 != 0 {
+            if register == 0 {
+                // EN and interrupt enables remain writable. The other stream
+                // fields are protected until EN reads zero (RM0433 DMA_SxCR).
+                stream.cr = (stream.cr & !0x1f) | (value & 0x1f);
+                return Ok(());
+            }
+            if matches!(register, 4 | 8) {
+                return Ok(());
+            }
+            if matches!(register, 12 | 16) {
+                let inactive = stream.cr & (1 << 18) != 0
+                    && ((register == 12) == (stream.cr & (1 << 19) != 0));
+                if !inactive {
+                    return Ok(());
+                }
+            }
+            if register == 20 {
+                return Ok(());
+            }
+        }
         match register {
             0 => {
                 if value & 1 != 0 && stream.cr & 1 == 0 {
@@ -114,6 +135,13 @@ impl Dma {
         } else {
             (peripheral, memory)
         };
+        let transmit = stream.cr & (1 << 6) != 0;
+        let readable_flash = (0x0800_0000..0x0802_0000).contains(&memory) && memory <= 0x0801_fffc;
+        if !(crate::memory::SystemMemory::is_ram(memory, 4) || (transmit && readable_flash)) {
+            self.status[index / 4] |= 1 << ([0, 6, 16, 22][index % 4] + 3);
+            stream.cr &= !1;
+            return Ok(None);
+        }
         stream.remaining -= 1;
         stream.cursor += 1;
         self.transfers += 1;
@@ -143,6 +171,7 @@ impl Dma {
                 let flags = self.status[i / 4] >> [0, 6, 16, 22][i % 4];
                 mask | if (flags & 0x10 != 0 && stream.cr & 8 != 0)
                     || (flags & 0x20 != 0 && stream.cr & 16 != 0)
+                    || (flags & 8 != 0 && stream.cr & 4 != 0)
                 {
                     1 << i
                 } else {

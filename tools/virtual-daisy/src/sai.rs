@@ -13,6 +13,8 @@ pub struct Sai {
     pub overruns: u64,
     pub drop_rx: bool,
     pub rx_channel: usize,
+    pub sample_rate: f64,
+    input_position: f64,
 }
 impl Sai {
     fn level(words: usize) -> u32 {
@@ -125,6 +127,29 @@ impl Sai {
         self.tick_mask(if codec_active { 3 } else { 0 });
     }
     pub fn tick_mask(&mut self, codec_mask: u32) {
+        let sample = self.input_sample();
+        self.tick_sample(codec_mask, sample);
+    }
+    pub fn input_sample(&self) -> [f32; 2] {
+        let position = if self.sample_rate > 0.0 {
+            self.input_position
+        } else {
+            self.frames as f64
+        };
+        let first = self
+            .input
+            .get(position as usize)
+            .copied()
+            .unwrap_or([0.0; 2]);
+        let next = self
+            .input
+            .get(position as usize + 1)
+            .copied()
+            .unwrap_or(first);
+        let fraction = position.fract() as f32;
+        std::array::from_fn(|channel| first[channel] + (next[channel] - first[channel]) * fraction)
+    }
+    pub fn tick_sample(&mut self, codec_mask: u32, sample: [f32; 2]) {
         if self.registers[1] & (1 << 16) == 0 {
             return;
         }
@@ -132,7 +157,13 @@ impl Sai {
             self.overruns += 1;
             self.rx.clear();
         }
-        let sample = self.input.get(self.frames).copied().unwrap_or([0.0; 2]);
+        // Input WAV/raw PCM is timestamped at 48014 Hz. Interpolate at the
+        // derived SAI frame clock; never relabel input to change its pitch.
+        self.input_position += if self.sample_rate > 0.0 {
+            48014.0 / self.sample_rate
+        } else {
+            1.0
+        };
         for (channel, s) in sample.into_iter().enumerate() {
             self.rx.push_back(Self::packed(
                 if codec_mask & 1 != 0 && codec_mask & (1 << (channel + 2)) == 0 {

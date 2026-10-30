@@ -1,0 +1,321 @@
+//! Functional H750 data-cache and RAM views. No cycle/eviction-timing claim.
+use std::collections::BTreeMap;
+
+type Result<T> = std::result::Result<T, &'static str>;
+const LINE: u32 = 32;
+const SETS: usize = 128;
+const WAYS: usize = 4;
+
+#[derive(Clone, Default)]
+struct CacheLine {
+    valid: bool,
+    dirty: bool,
+    address: u32,
+    data: [u8; 32],
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Policy {
+    Noncacheable,
+    WriteThrough,
+    WriteBack,
+    WriteAllocate,
+}
+
+pub struct SystemMemory {
+    pages: BTreeMap<u32, Box<[u8; 4096]>>,
+    cache: Vec<CacheLine>,
+    next_way: [usize; SETS],
+    ccr: u32,
+    mpu_ctrl: u32,
+    region_number: usize,
+    regions: [(u32, u32); 16],
+    cache_selection: u32,
+    fills: u64,
+    writebacks: u64,
+    dma_cacheable_bytes: u64,
+}
+impl Default for SystemMemory {
+    fn default() -> Self {
+        Self {
+            pages: BTreeMap::new(),
+            cache: vec![CacheLine::default(); SETS * WAYS],
+            next_way: [0; SETS],
+            ccr: 0,
+            mpu_ctrl: 0,
+            region_number: 0,
+            regions: [(0, 0); 16],
+            cache_selection: 0,
+            fills: 0,
+            writebacks: 0,
+            dma_cacheable_bytes: 0,
+        }
+    }
+}
+impl SystemMemory {
+    pub fn reset_registers(&mut self) {
+        self.ccr = 0;
+        self.mpu_ctrl = 0;
+        self.region_number = 0;
+        self.regions = [(0, 0); 16];
+        self.cache_selection = 0;
+        self.cache.fill(CacheLine::default());
+        self.next_way = [0; SETS];
+    }
+    pub fn read_scb(&self, offset: u64) -> Result<u32> {
+        match offset {
+            0xd14 => Ok(self.ccr),
+            0xd78 => Ok(0x09000003),
+            0xd7c => Ok(0x8303c003),
+            0xd80 => {
+                if self.cache_selection == 0 {
+                    Ok(0xf00fe019)
+                } else if self.cache_selection == 1 {
+                    Ok(0x201fe009)
+                } else {
+                    Err("no cache at selected level")
+                }
+            }
+            0xd84 => Ok(self.cache_selection),
+            _ => Err("SCB read delegated to NVIC"),
+        }
+    }
+    pub fn is_ram(address: u32, width: usize) -> bool {
+        let end = u64::from(address) + width as u64;
+        [
+            (0x2400_0000_u32, 0x80000_u32),
+            (0x3000_0000, 0x48000),
+            (0x3800_0000, 0x10000),
+            (0x3880_0000, 0x1000),
+            (0xc000_0000, 0x4000000),
+        ]
+        .iter()
+        .any(|&(base, size)| address >= base && end <= u64::from(base) + u64::from(size))
+    }
+    fn check(address: u32, width: usize) -> Result<()> {
+        if ![1, 2, 4].contains(&width) || !Self::is_ram(address, width) {
+            return Err("RAM access outside H750/Daisy memory");
+        }
+        Ok(())
+    }
+    fn physical_byte(&self, address: u32) -> u8 {
+        self.pages
+            .get(&(address >> 12))
+            .map_or(0, |page| page[(address & 4095) as usize])
+    }
+    fn store_byte(&mut self, address: u32, value: u8) {
+        self.pages
+            .entry(address >> 12)
+            .or_insert_with(|| Box::new([0; 4096]))[(address & 4095) as usize] = value;
+    }
+    fn clean(&mut self, index: usize) {
+        if self.cache[index].valid && self.cache[index].dirty {
+            let line = self.cache[index].clone();
+            for (offset, value) in line.data.into_iter().enumerate() {
+                self.store_byte(line.address + offset as u32, value);
+            }
+            self.cache[index].dirty = false;
+            self.writebacks += 1;
+        }
+    }
+    fn find(&self, address: u32) -> Option<usize> {
+        let base = address & !(LINE - 1);
+        let set = (base / LINE) as usize % SETS;
+        (set * WAYS..(set + 1) * WAYS)
+            .find(|&index| self.cache[index].valid && self.cache[index].address == base)
+    }
+    fn allocate(&mut self, address: u32) -> usize {
+        if let Some(index) = self.find(address) {
+            return index;
+        }
+        let base = address & !(LINE - 1);
+        let set = (base / LINE) as usize % SETS;
+        let index = (set * WAYS..(set + 1) * WAYS)
+            .find(|&i| !self.cache[i].valid)
+            .unwrap_or(set * WAYS + self.next_way[set]);
+        self.next_way[set] = (index % WAYS + 1) % WAYS;
+        self.clean(index);
+        let mut data = [0; 32];
+        for (offset, byte) in data.iter_mut().enumerate() {
+            *byte = self.physical_byte(base + offset as u32);
+        }
+        self.cache[index] = CacheLine {
+            valid: true,
+            dirty: false,
+            address: base,
+            data,
+        };
+        self.fills += 1;
+        index
+    }
+    fn policy(&self, address: u32) -> Result<Policy> {
+        if self.ccr & (1 << 16) == 0 {
+            return Ok(Policy::Noncacheable);
+        }
+        if self.mpu_ctrl & 1 != 0 {
+            for &(base, attributes) in self.regions.iter().rev() {
+                if attributes & 1 == 0 {
+                    continue;
+                }
+                let size = 1_u64 << (((attributes >> 1) & 31) + 1);
+                if u64::from(address) < u64::from(base)
+                    || u64::from(address) >= u64::from(base) + size
+                {
+                    continue;
+                }
+                let subregion = (u64::from(address - base) * 8 / size) as u32;
+                if size >= 256 && attributes & (1 << (8 + subregion)) != 0 {
+                    continue;
+                }
+                if attributes & (1 << 18) != 0 {
+                    return Ok(Policy::Noncacheable);
+                }
+                let tex = (attributes >> 19) & 7;
+                let cb = (attributes >> 16) & 3;
+                return match (tex, cb) {
+                    (0, 0 | 1) | (1 | 2, 0) => Ok(Policy::Noncacheable),
+                    (0, 2) => Ok(Policy::WriteThrough),
+                    (0, 3) => Ok(Policy::WriteBack),
+                    (1, 3) => Ok(Policy::WriteAllocate),
+                    (4..=7, 0) => Ok(Policy::Noncacheable),
+                    (4..=7, 1) => Ok(Policy::WriteAllocate),
+                    (4..=7, 2) => Ok(Policy::WriteThrough),
+                    (4..=7, 3) => Ok(Policy::WriteBack),
+                    _ => Err("reserved MPU memory attribute encoding"),
+                };
+            }
+            if self.mpu_ctrl & 4 == 0 {
+                return Err("no MPU region and no privileged background map");
+            }
+        }
+        Ok(match address {
+            0..=0x1fff_ffff | 0x8000_0000..=0x9fff_ffff => Policy::WriteThrough,
+            0x2000_0000..=0x3fff_ffff | 0x6000_0000..=0x7fff_ffff => Policy::WriteAllocate,
+            _ => Policy::Noncacheable,
+        })
+    }
+    pub fn read_cpu(&mut self, address: u32, width: usize) -> Result<u32> {
+        Self::check(address, width)?;
+        let mut value = 0;
+        for byte in 0..width {
+            let addr = address + byte as u32;
+            let b = if self.policy(addr)? != Policy::Noncacheable {
+                let line = self.allocate(addr);
+                self.cache[line].data[(addr & 31) as usize]
+            } else {
+                self.physical_byte(addr)
+            };
+            value |= u32::from(b) << (byte * 8);
+        }
+        Ok(value)
+    }
+    pub fn write_cpu(&mut self, address: u32, width: usize, value: u32) -> Result<()> {
+        Self::check(address, width)?;
+        for byte in 0..width {
+            let addr = address + byte as u32;
+            let b = (value >> (byte * 8)) as u8;
+            let policy = self.policy(addr)?;
+            let line = if policy == Policy::WriteAllocate {
+                Some(self.allocate(addr))
+            } else if policy != Policy::Noncacheable {
+                self.find(addr)
+            } else {
+                None
+            };
+            if let Some(line) = line {
+                self.cache[line].data[(addr & 31) as usize] = b;
+                self.cache[line].dirty = policy != Policy::WriteThrough;
+            }
+            if line.is_none() || matches!(policy, Policy::Noncacheable | Policy::WriteThrough) {
+                self.store_byte(addr, b);
+            }
+        }
+        Ok(())
+    }
+    pub fn read_dma(&mut self, address: u32, width: usize) -> Result<u32> {
+        Self::check(address, width)?;
+        if self
+            .policy(address)
+            .is_ok_and(|policy| policy != Policy::Noncacheable)
+        {
+            self.dma_cacheable_bytes += width as u64;
+        }
+        Ok((0..width).fold(0, |value, byte| {
+            value | (u32::from(self.physical_byte(address + byte as u32)) << (byte * 8))
+        }))
+    }
+    pub fn write_dma(&mut self, address: u32, width: usize, value: u32) -> Result<()> {
+        Self::check(address, width)?;
+        if self
+            .policy(address)
+            .is_ok_and(|policy| policy != Policy::Noncacheable)
+        {
+            self.dma_cacheable_bytes += width as u64;
+        }
+        for byte in 0..width {
+            self.store_byte(address + byte as u32, (value >> (byte * 8)) as u8);
+        }
+        Ok(())
+    }
+    pub fn stats(&self) -> String {
+        format!("data_cache_enabled={}\ncache_line_fills={}\ncache_line_writebacks={}\ndirty_lines={}\ndma_cacheable_bytes={}\n", u32::from(self.ccr & (1 << 16) != 0), self.fills, self.writebacks, self.cache.iter().filter(|line| line.valid && line.dirty).count(), self.dma_cacheable_bytes)
+    }
+    pub fn write_scb(&mut self, offset: u64, value: u32) -> Result<()> {
+        match offset {
+            0xd14 => self.ccr = value,
+            0xd84 => self.cache_selection = value & 15,
+            0xd94 => self.mpu_ctrl = value & 7,
+            0xd98 => {
+                if value > 15 {
+                    return Err("H750 has 16 MPU regions");
+                }
+                self.region_number = value as usize;
+            }
+            0xd9c | 0xda4 | 0xdac | 0xdb4 => {
+                if value & 16 != 0 {
+                    self.region_number = (value & 15) as usize;
+                }
+                self.regions[self.region_number].0 = value & !31;
+            }
+            0xda0 | 0xda8 | 0xdb0 | 0xdb8 => {
+                let bits = (value >> 1) & 31;
+                if value & 1 != 0 && (bits < 4 || (bits < 7 && value & 0xff00 != 0)) {
+                    return Err("invalid MPU region size/subregions");
+                }
+                self.regions[self.region_number].1 = value;
+            }
+            0xf68 => {
+                if let Some(index) = self.find(value) {
+                    self.clean(index);
+                }
+            }
+            0xf5c => {
+                if let Some(index) = self.find(value) {
+                    self.cache[index].valid = false;
+                }
+            }
+            0xf70 => {
+                if let Some(index) = self.find(value) {
+                    self.clean(index);
+                    self.cache[index].valid = false;
+                }
+            }
+            0xf60 | 0xf6c | 0xf74 => {
+                let index = (((value >> 5) & 127) as usize) * WAYS + ((value >> 30) as usize);
+                if offset != 0xf60 {
+                    self.clean(index);
+                }
+                if offset != 0xf6c {
+                    self.cache[index].valid = false;
+                }
+            }
+            0xf64 => {
+                if let Some(index) = self.find(value) {
+                    self.clean(index);
+                }
+            }
+            0xf50 | 0xf58 => {} // Instruction-cache maintenance: no data-cache effect.
+            _ => return Err("unsupported cache/MPU register"),
+        }
+        Ok(())
+    }
+}
