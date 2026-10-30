@@ -33,7 +33,8 @@ jobs:
             tools/virtual-daisy/target
             audio-lab-results/daisy/${{ matrix.board }}/native
             audio-lab-results/daisy/${{ matrix.board }}/firmware-build
-          key: virtual-daisy-${{ runner.os }}-${{ matrix.board }}-${{ hashFiles('Cargo.lock', 'tools/virtual-daisy/Cargo.lock') }}
+            audio-lab-results/daisy/${{ matrix.board }}/cpu-core
+          key: virtual-daisy-${{ runner.os }}-${{ matrix.board }}-${{ hashFiles('Cargo.lock', 'tools/virtual-daisy/Cargo.lock', 'tools/virtual-daisy/src/core.rs') }}
       - name: Download pinned prebuilt emulator
         run: |
           curl -fL --retry 3 https://github.com/renode/renode/releases/download/v1.17.0/renode-1.17.0.linux-portable.tar.gz -o "$RUNNER_TEMP/renode.tar.gz"
@@ -67,3 +68,5 @@ jobs:
             audio-lab-results/daisy/${{ matrix.board }}/*.wav
             audio-lab-results/daisy/${{ matrix.board }}/*.stats
             audio-lab-results/daisy/${{ matrix.board }}/*.repl
+            audio-lab-results/daisy/${{ matrix.board }}/architecture-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/*.architecture.bin

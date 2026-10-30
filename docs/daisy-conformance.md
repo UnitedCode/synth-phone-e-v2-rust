@@ -138,14 +138,61 @@ and tests are not substitutes for comparing with a board.
 
 ## What blocks a hardware-equivalence claim
 
+### Further source-verified behavior
+
+The [Arm Cortex-M7 TRM, DDI0489F](https://documentation-service.arm.com/static/5e906dc68259fe2368e2abbe),
+sections3.3.4/3.3.5 and5.9, specifies the instruction-cache geometry and maintenance.
+The RAM fetch model now separates instruction and data views, handles ICIALLU
+and ICIMVAU, and checks generated-code coherency on the emulated ARM CPU.
+Dirty CPU code stores, invalidation without cleaning, cleaning without invalidation,
+and external DMA writes all have independent stale-instruction checks. The passing
+control uses the prescribed clean/invalidate/DSB/ISB sequence. The same register
+tables corrected the prior I-cache CCSIDR value to `0xf01fe009` and made CSSELR
+LEVEL RAZ/WI. This is architectural RAM coherence coverage; flash cache lookups,
+instruction prefetch, full runtime eviction and missing-barrier hazards remain
+unvalidated. A translation-cache flush is implementation plumbing, not an
+architectural I-cache invalidation: Rust retains stale bytes until maintenance.
+
+The fetch/data distinction is a minimal adapter in the pinned native engine,
+not a PC/TB/thread heuristic. Source archives are SHA256 verified, the built
+core is fingerprinted, and every boot checks its adapter version. All cache
+decisions and the ARM probe's generator/grader remain Rust.
+
+RM0433's SDRAM register descriptions now drive an analytical timing report.
+It decodes the actual FMC mux/divider and programmed timings, including CAS,
+row/pipeline delays, refresh COUNT and TMRD. Open/precharged/conflicting-row and
+cache-line read bounds are tested against worked register cases. Refresh COUNT
+uses SDCLK; RPIPE uses the faster FMC kernel clock, unlike CAS and row timings.
+The distinction follows [RM0433 section22.9.5's SDCR definitions](https://www.st.com/resource/en/reference_manual/dm00314099-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf). Refresh COUNT
+is a counter period; the documented 20-cycle calculation margin is not added
+to its runtime period. These are lower bounds, not a model of actual CPU stalls,
+bus arbitration, FMC queueing or SDRAM refresh interference.
+
+The WM8731 Rev4.9 Table32 specifies normal Type1 group delays of20/FS for ADC
+and18/FS for DAC. The ideal-line path now includes those nominal passband delay
+surrogates, with impulse-frame tests. Serial PCM remains after/before converter
+processing and adds no surrogate. Per-capture codec reports record this scope.
+The [AK4556 manufacturer datasheet, MS0559-E-02](https://static6.arrow.com/aropdfconversion/f0d656c6c3d4125aedb0547a5480444a9b1c9600/9ak4556vt.pdf)
+and [PCM3060 datasheet, SLAS533B](https://www.ti.com/lit/ds/symlink/pcm3060.pdf)
+provide additional nominal group-delay/response constraints for those profiles;
+reports preserve their ADC/DAC delays (18/21 and17.4/20 frames respectively).
+They do not silently enable a WM8731 filter model for other hardware.
+
+The public datasheets provide transfer functions for selected stages and
+response/group-delay tables for others. They do not publish all interpolation/
+decimation coefficients, internal arithmetic and rounding. Full codec responses
+remain incomplete; a pure delay is not claimed to reproduce a converter's impulse
+or stop-band response. Reconstructing those responses needs more manufacturer
+detail or independent measurements, not an arbitrary filter fitted to a diagram.
+
 | Area | Current evidence | Required next evidence/work |
 | --- | --- | --- |
 | Firmware boot and selected audio path | Executed in simulation | Same ELF on an identified physical revision |
 | Serial data, reset and control behavior | Source-backed cases | Captured control transactions and SAI words/edges, including reset and faults |
 | Interrupt/buffer ownership | Functional DMA and IRQ tests | Hardware DMA HT/TC, NVIC and task traces with timestamps and simultaneous UI/MIDI load |
-| Performance and deadlines | Functional data-cache/DMA coherency, nominal instruction pacing | Instruction-cache coherence, silicon cache allocation/replacement, calibrated instruction/flash/SDRAM latency and contention |
+| Performance and deadlines | Functional data/instruction-cache RAM coherency, nominal instruction pacing, programmed SDRAM timing bounds | Flash/runtime cache lookups, silicon allocation/replacement, calibrated instruction/flash/SDRAM stalls and contention |
 | Clock rates and drift | RCC/PLL/SAI rational derivation, 1µs event grid, DWT/core and timer prescalers | PLL/oscillator lock and jitter, clock-domain crossing delays, oscillator tolerance, independent frequency measurements |
-| Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal stage | Full ADC/DAC filters, internal rounding and startup/group delays, impulse/frequency responses per codec |
+| Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal and passband-delay stage | Full ADC/DAC filters, internal rounding and startup behavior, independent impulse/frequency responses per codec |
 | Analog sound | No analog model | Calibrated gain, impedance, headroom, clipping, noise and distortion measurements |
 | Other peripherals | Partial STM32/Renode coverage | Full register/error/reset semantics, QSPI storage, display, MIDI/USB/ADC tests |
 | Other revisions | Unsupported | Separate sourced profiles and codec conformance suites, then board comparisons |

@@ -12,6 +12,14 @@ using Antmicro.Renode.Peripherals;
 
 namespace Antmicro.Renode.Peripherals.Miscellaneous
 {
+    public sealed class DaisyFmc : DaisyNative
+    {
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveNative(IntPtr state,IntPtr clock,[MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+        public DaisyFmc(string libraryPath,DaisyRcc rcc) :base(libraryPath,1,0x1000) { this.rcc=rcc; var library=NativeLibrary.Load(libraryPath); save=Marshal.GetDelegateForFunctionPointer<SaveNative>(NativeLibrary.GetExport(library,"daisy_fmc_save")); }
+        public void Save(string path) { if(save(State,rcc.NativeState,path)!=0) throw new InvalidOperationException("Invalid or unmodeled FMC timing configuration"); }
+        private readonly DaisyRcc rcc;
+        private readonly SaveNative save;
+    }
     public class DaisyNative : IDoubleWordPeripheral, IKnownSize
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr New(uint kind);
@@ -93,12 +101,14 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint WriteNative(IntPtr state, byte[] bytes, UIntPtr length);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint ControlNative(IntPtr state, uint high);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveCodec(IntPtr state,[MarshalAs(UnmanagedType.LPUTF8Str)] string path,uint idealLine,double rate);
         public DaisyI2c(string libraryPath, uint kind)
         {
             var library = NativeLibrary.Load(libraryPath);
             native = new DaisyNative(libraryPath, kind, 0x400);
             write = Marshal.GetDelegateForFunctionPointer<WriteNative>(NativeLibrary.GetExport(library, "daisy_i2c_write"));
             control = Marshal.GetDelegateForFunctionPointer<ControlNative>(NativeLibrary.GetExport(library, "daisy_codec_control"));
+            saveCodec = Marshal.GetDelegateForFunctionPointer<SaveCodec>(NativeLibrary.GetExport(library,"daisy_codec_save"));
         }
         public void Write(byte[] bytes) { lock(sync) { if(write(native.State, bytes, (UIntPtr)bytes.Length) != 0) throw new InvalidOperationException("Unsupported I2C transaction"); } }
         public byte[] Read(int count) { throw new InvalidOperationException("Read from write-only Daisy codec/display control model"); }
@@ -106,11 +116,13 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void Reset() { lock(sync) native.Reset(); }
         public uint ActiveMask { get { lock(sync) return native.ReadDoubleWord(0x100); } }
         public uint WithState(Func<IntPtr,uint> operation) { lock(sync) return operation(native.State); }
+        public void Save(string path,bool idealLine,double rate) { lock(sync) { if(saveCodec(native.State,path,idealLine ? 1U:0U,rate)!=0) throw new InvalidOperationException("Could not save codec filter scope"); } }
         public void OnGPIO(int pin, bool high) { lock(sync) { if(pin != 0 || control(native.State, high ? 1U : 0U) != 0) throw new InvalidOperationException("Unsupported codec control signal"); } }
         private readonly object sync = new object();
         private readonly DaisyNative native;
         private readonly WriteNative write;
         private readonly ControlNative control;
+        private readonly SaveCodec saveCodec;
     }
 
     public class DaisyDma : IDoubleWordPeripheral, IKnownSize, IGPIOReceiver, INumberedGPIOOutput
@@ -202,7 +214,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private void PumpRequests() { Pump(rxChannel == 0 ? DmaA : DmaB, 1U << (int)rxChannel, 2); Pump(rxChannel == 0 ? DmaB : DmaA, 1U << (int)(1 - rxChannel), 8); }
         private void Pump(GPIO gpio, uint mask, int words) { for(int i = 0; i < words && (requests(native.State) & mask) != 0; i++) { gpio.Set(true); gpio.Set(false); } }
         public void LoadInput(float[] samples) { lock(sync) input(native.State, samples, (UIntPtr)(samples.Length / 2)); }
-        public void Save(string path) { uint rate=rcc.Rate(cr1,frcr); lock(sync) { if(save(native.State,path,rate)!=0) throw new IOException("Could not save virtual SAI output"); } rcc.Save(cr1,frcr,path+".clock.txt"); }
+        public void Save(string path) { uint rate=rcc.Rate(cr1,frcr); lock(sync) { if(save(native.State,path,rate)!=0) throw new IOException("Could not save virtual SAI output"); } rcc.Save(cr1,frcr,path+".clock.txt"); codec.Save(path+".codec.txt",IdealLineInput,rcc.ExactRate(cr1,frcr)); }
         public void Reset() { lock(sync) { native.Reset(); cr1=0; frcr=0; } }
         public void Dispose() { clock.Dispose(); }
         public long Size { get { return 0x400; } }

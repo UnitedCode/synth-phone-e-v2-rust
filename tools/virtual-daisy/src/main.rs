@@ -1,7 +1,9 @@
 //! Run the unmodified production ELF on a functional virtual Daisy.
 mod conformance;
+mod core;
 mod grade;
 mod platform;
+mod probe;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -129,7 +131,9 @@ impl Host<'_> {
             &mut command,
             &self.directory.join(format!("{label}.host.log")),
         )?;
-        grade::boot_evidence(&capture)?;
+        if fault != "architecture" {
+            grade::boot_evidence(&capture)?;
+        }
         Ok(capture)
     }
 }
@@ -228,7 +232,6 @@ fn run(
         format!("{sha}  firmware.elf\nsource={}\n", elf.display()),
     )?;
     platform::prepare(&renode, &directory, &library, board)?;
-    conformance::write(&directory, board, &sha, &library, ideal_line)?;
     let managed = directory.join("managed");
     fs::create_dir_all(&managed)?;
     checked(
@@ -242,14 +245,8 @@ fn run(
             .arg(&managed)
             .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1"),
     )?;
-    #[cfg(unix)]
-    {
-        let link = managed.join("platform-lib");
-        if link.symlink_metadata().is_ok() {
-            fs::remove_file(&link)?;
-        }
-        std::os::unix::fs::symlink(renode.join("platform-lib"), link)?;
-    }
+    core::prepare(&renode, &directory, &managed)?;
+    conformance::write(&directory, board, &sha, &library, ideal_line)?;
     bounded(
         Command::new(&dotnet)
             .arg(managed.join("DaisyHost.dll"))
@@ -271,6 +268,14 @@ fn run(
         ideal_line,
     };
     let baseline = host.boot("baseline", &tone, "none")?;
+    fs::write(directory.join("architecture-probe.bin"), probe::image())?;
+    let probes = host.boot("architecture-probes", &tone, "architecture")?;
+    probe::check(&probes)?;
+    for counter in ["instruction_fetch_reads", "instruction_cache_fills"] {
+        if grade::counter(&grade::artifact(&probes, ".memory.txt"), counter)? == 0 {
+            return Err(format!("ARM probe did not exercise {counter}").into());
+        }
+    }
     let report = grade::check(&baseline)?;
     if board == Board::Rev5 && !ideal_line {
         grade::check(&host.boot("codec-line", &tone, "ideal-line")?)?;
@@ -320,7 +325,7 @@ fn run(
     if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
         return Err("Firmware changed during the run".into());
     }
-    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nInstruction timing/cache, bus contention and complete analog/codec response remain unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal path boot passed" } else { "not implemented for this codec" });
+    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nARM generated-code coherence: CPU and DMA stale-instruction controls passed\nSDRAM timing: programmed lower bounds saved; CPU stalls/contention unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nFlash/runtime cache behavior, calibrated CPU timing and complete analog/codec response remain unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())

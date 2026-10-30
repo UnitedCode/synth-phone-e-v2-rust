@@ -24,6 +24,10 @@ enum Policy {
 pub struct SystemMemory {
     pages: BTreeMap<u32, Box<[u8; 4096]>>,
     cache: Vec<CacheLine>,
+    instructions: Vec<CacheLine>,
+    instruction_way: [usize; 256],
+    instruction_fills: u64,
+    instruction_reads: u64,
     next_way: [usize; SETS],
     ccr: u32,
     mpu_ctrl: u32,
@@ -39,6 +43,10 @@ impl Default for SystemMemory {
         Self {
             pages: BTreeMap::new(),
             cache: vec![CacheLine::default(); SETS * WAYS],
+            instructions: vec![CacheLine::default(); 512],
+            instruction_way: [0; 256],
+            instruction_fills: 0,
+            instruction_reads: 0,
             next_way: [0; SETS],
             ccr: 0,
             mpu_ctrl: 0,
@@ -59,6 +67,8 @@ impl SystemMemory {
         self.regions = [(0, 0); 16];
         self.cache_selection = 0;
         self.cache.fill(CacheLine::default());
+        self.instructions.fill(CacheLine::default());
+        self.instruction_way = [0; 256];
         self.next_way = [0; SETS];
     }
     pub fn read_scb(&self, offset: u64) -> Result<u32> {
@@ -70,7 +80,7 @@ impl SystemMemory {
                 if self.cache_selection == 0 {
                     Ok(0xf00fe019)
                 } else if self.cache_selection == 1 {
-                    Ok(0x201fe009)
+                    Ok(0xf01fe009)
                 } else {
                     Err("no cache at selected level")
                 }
@@ -148,7 +158,11 @@ impl SystemMemory {
         index
     }
     fn policy(&self, address: u32) -> Result<Policy> {
-        if self.ccr & (1 << 16) == 0 {
+        self.access_policy(address, false)
+    }
+    fn access_policy(&self, address: u32, instruction: bool) -> Result<Policy> {
+        let enabled = self.ccr & (1 << if instruction { 17 } else { 16 }) != 0;
+        if !enabled && !instruction {
             return Ok(Policy::Noncacheable);
         }
         if self.mpu_ctrl & 1 != 0 {
@@ -166,11 +180,20 @@ impl SystemMemory {
                 if size >= 256 && attributes & (1 << (8 + subregion)) != 0 {
                     continue;
                 }
-                if attributes & (1 << 18) != 0 {
-                    return Ok(Policy::Noncacheable);
+                if instruction && attributes & (1 << 28) != 0 {
+                    return Err("instruction fetch from MPU execute-never region");
                 }
                 let tex = (attributes >> 19) & 7;
                 let cb = (attributes >> 16) & 3;
+                if instruction && matches!((tex, cb), (0, 0 | 1) | (2, 0)) {
+                    return Err("instruction fetch from Device or Strongly-ordered region");
+                }
+                if attributes & (1 << 18) != 0 {
+                    return Ok(Policy::Noncacheable);
+                }
+                if !enabled {
+                    return Ok(Policy::Noncacheable);
+                }
                 return match (tex, cb) {
                     (0, 0 | 1) | (1 | 2, 0) => Ok(Policy::Noncacheable),
                     (0, 2) => Ok(Policy::WriteThrough),
@@ -187,6 +210,15 @@ impl SystemMemory {
                 return Err("no MPU region and no privileged background map");
             }
         }
+        if instruction
+            && !(0..=0x3fff_ffff).contains(&address)
+            && !(0x6000_0000..=0x9fff_ffff).contains(&address)
+        {
+            return Err("instruction fetch from default execute-never Device map");
+        }
+        if !enabled {
+            return Ok(Policy::Noncacheable);
+        }
         Ok(match address {
             0..=0x1fff_ffff | 0x8000_0000..=0x9fff_ffff => Policy::WriteThrough,
             0x2000_0000..=0x3fff_ffff | 0x6000_0000..=0x7fff_ffff => Policy::WriteAllocate,
@@ -201,6 +233,44 @@ impl SystemMemory {
             let b = if self.policy(addr)? != Policy::Noncacheable {
                 let line = self.allocate(addr);
                 self.cache[line].data[(addr & 31) as usize]
+            } else {
+                self.physical_byte(addr)
+            };
+            value |= u32::from(b) << (byte * 8);
+        }
+        Ok(value)
+    }
+    /// Harvard instruction view: never forwards dirty data-cache contents.
+    pub fn read_instruction(&mut self, address: u32, width: usize) -> Result<u32> {
+        Self::check(address, width)?;
+        self.instruction_reads += 1;
+        let mut value = 0;
+        for byte in 0..width {
+            let addr = address + byte as u32;
+            let b = if self.access_policy(addr, true)? != Policy::Noncacheable {
+                let base = addr & !31;
+                let set = ((base / 32) % 256) as usize;
+                let index = (set * 2..set * 2 + 2)
+                    .find(|&i| self.instructions[i].valid && self.instructions[i].address == base);
+                let index = if let Some(index) = index {
+                    index
+                } else {
+                    let index = (set * 2..set * 2 + 2)
+                        .find(|&i| !self.instructions[i].valid)
+                        .unwrap_or(set * 2 + self.instruction_way[set]);
+                    let data =
+                        std::array::from_fn(|offset| self.physical_byte(base + offset as u32));
+                    self.instructions[index] = CacheLine {
+                        valid: true,
+                        dirty: false,
+                        address: base,
+                        data,
+                    };
+                    self.instruction_way[set] = (index % 2 + 1) % 2;
+                    self.instruction_fills += 1;
+                    index
+                };
+                self.instructions[index].data[(addr & 31) as usize]
             } else {
                 self.physical_byte(addr)
             };
@@ -257,12 +327,12 @@ impl SystemMemory {
         Ok(())
     }
     pub fn stats(&self) -> String {
-        format!("data_cache_enabled={}\ncache_line_fills={}\ncache_line_writebacks={}\ndirty_lines={}\ndma_cacheable_bytes={}\n", u32::from(self.ccr & (1 << 16) != 0), self.fills, self.writebacks, self.cache.iter().filter(|line| line.valid && line.dirty).count(), self.dma_cacheable_bytes)
+        format!("data_cache_enabled={}\ncache_line_fills={}\ncache_line_writebacks={}\ndirty_lines={}\ndma_cacheable_bytes={}\ninstruction_cache_enabled={}\ninstruction_fetch_reads={}\ninstruction_cache_fills={}\n", u32::from(self.ccr & (1 << 16) != 0), self.fills, self.writebacks, self.cache.iter().filter(|line| line.valid && line.dirty).count(), self.dma_cacheable_bytes,u32::from(self.ccr&(1<<17)!=0),self.instruction_reads,self.instruction_fills)
     }
     pub fn write_scb(&mut self, offset: u64, value: u32) -> Result<()> {
         match offset {
             0xd14 => self.ccr = value,
-            0xd84 => self.cache_selection = value & 15,
+            0xd84 => self.cache_selection = value & 1,
             0xd94 => self.mpu_ctrl = value & 7,
             0xd98 => {
                 if value > 15 {
@@ -313,7 +383,14 @@ impl SystemMemory {
                     self.clean(index);
                 }
             }
-            0xf50 | 0xf58 => {} // Instruction-cache maintenance: no data-cache effect.
+            0xf50 => self.instructions.fill(CacheLine::default()),
+            0xf58 => {
+                for line in &mut self.instructions {
+                    if line.address == value & !31 {
+                        line.valid = false;
+                    }
+                }
+            }
             _ => return Err("unsupported cache/MPU register"),
         }
         Ok(())

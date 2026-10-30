@@ -10,6 +10,11 @@ pub fn prepare(
     fs::create_dir_all(directory)?;
     let directory = fs::canonicalize(directory)?;
     let mut platform = fs::read_to_string(renode.join("platforms/cpus/stm32h7.repl"))?;
+    platform = platform.replace("cpu: CPU.CortexM @", "cpu: Miscellaneous.DaisyCortexM @");
+    platform = platform.replace(
+        "    cpuType: \"cortex-m7\"",
+        "    cpuType: \"cortex-m7\"\n    architecture: architecture",
+    );
     platform = platform.replace(
         "rcc: Miscellaneous.STM32H7_RCC @ sysbus 0x58024400",
         &format!(
@@ -76,6 +81,11 @@ pub fn prepare(
         + start;
     let native = format!("pwr: Miscellaneous.DaisyNative @ sysbus 0x58024800\n    libraryPath: \"{}\"\n    kind: 0\n    size: 0x400\n\nfmc: Miscellaneous.DaisyNative @ sysbus 0x52004000\n    libraryPath: \"{}\"\n    kind: 1\n    size: 0x1000\n\n", library.display(), library.display());
     platform.replace_range(start..end, &native);
+    platform = platform.replace(
+        "fmc: Miscellaneous.DaisyNative @ sysbus 0x52004000",
+        "fmc: Miscellaneous.DaisyFmc @ sysbus 0x52004000",
+    );
+    platform = platform.replace("    kind: 1\n    size: 0x1000", "    rcc: rcc");
     platform = platform.replace("GPIOPort.STM32_GPIOPort", "Miscellaneous.DaisyGpio");
     for (port, letter) in ('A'..='K').enumerate() {
         let marker = format!("rcc RegistrationPeripheralAlias.GPIO{letter}\n    }}");
