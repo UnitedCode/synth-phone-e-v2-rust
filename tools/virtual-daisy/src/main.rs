@@ -126,6 +126,12 @@ impl Host<'_> {
 fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>) -> Result<()> {
     fs::create_dir_all(directory)?;
     let directory = directory.canonicalize()?;
+    // Reusing an output directory must not leave an old success report behind
+    // if a new build, boot or quality gate fails.
+    let summary = directory.join("summary.txt");
+    if summary.exists() {
+        fs::remove_file(summary)?;
+    }
     let renode = renode.canonicalize()?;
     if !renode.join("Infrastructure.dll").is_file()
         || !renode.join("platforms/cpus/stm32h7.repl").is_file()
