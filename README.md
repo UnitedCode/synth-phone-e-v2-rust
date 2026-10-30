@@ -57,11 +57,19 @@ cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target
 cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" -- emulate audio-lab-results/arm
 ```
 
-The [ARM emulation guide](docs/arm-emulation.md) explains what the Cortex-M7 guest
-tests and what remains for a complete virtual Daisy. Physical hardware is still
-needed to validate board timing and codec behavior. The audio-testing guide
-documents known failures and how CI distinguishes regressions from unresolved
-quality issues.
+The [virtual Daisy](docs/virtual-daisy.md) now boots the **actual production ELF**
+under Renode, feeds audio through modeled codec/SAI/DMA peripherals and records
+stereo WAV output. Its regression command checks tuning, boot completion and
+audio continuity, then verifies detection of silent input and lost RX DMA.
+
+```sh
+cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target "$LAB_HOST" -- run /absolute/path/to/renode-runtime audio-lab-results/daisy
+```
+
+The [ARM emulation guide](docs/arm-emulation.md) covers the complementary QEMU
+DSP parity tests. Physical hardware is still needed to calibrate performance and
+analog codec behavior. The audio-testing guide documents known quality failures
+and how CI distinguishes regressions from unresolved issues.
 
 ## Setting Up the Debugger
 
