@@ -1,5 +1,9 @@
 # ARM execution tests without a board
 
+The complementary [virtual Daisy](virtual-daisy.md) now boots the production ELF
+with STM32 peripherals and modeled audio IO. This page describes the smaller
+QEMU guest used for sample-by-sample DSP parity checks.
+
 The audio lab now builds and runs a real `no_std` ARM executable under QEMU's
 `mps2-an500` Cortex-M7 model. The guest uses the Daisy firmware's
 `thumbv7em-none-eabihf` target, DSP revision, locked dependencies and shared
@@ -75,21 +79,13 @@ access/cache timing. SysTick delivery tests interrupt execution, not production
 scheduling deadlines. Host duration and emulator interrupt counts cannot be
 converted into trustworthy Daisy processing time.
 
-Renode's current [STM32H7 platform definition](https://github.com/renode/renode/blob/master/platforms/cpus/stm32h7.repl)
-is a plausible starting point for booting more of the production firmware. It
-already has an M7, NVIC, clocks, timers, UART, GPIO, I2C and DMA models, but SAI1 is
-only an address tag, not an implemented audio device. Its default memory capacities
-also do not describe the H750/Daisy exactly. Its power/FMC stubs and random-ID
-initialization use Python; those would need non-Python replacements before this
-project used them under its language rule.
-
-A complete virtual Daisy needs the H750 memory map and boot behavior, validated
-clock/power initialization, SAI/DMAMUX/DMA audio transfers and IRQs, the particular
-codec/control wiring, and the display/buttons used during startup. A useful next
-milestone is booting the **unmodified production ELF** to its audio task with a
-modeled PCM source/sink. After that, test MIDI bursts, UI activity, delayed/dropped
-DMA events and buffer ownership. Those models must fail on unsupported accesses
-instead of returning success values that hide missing hardware behavior.
+The [virtual Daisy guide](virtual-daisy.md) describes the implemented Renode
+platform: the production ELF boots through HAL and RTIC startup and processes
+modeled PCM through SAI/DMAMUX/DMA and the codec. Rust replaces the Python PWR/FMC
+stubs, and the direct managed host blocks Python initialization. The model uses
+H750/Daisy memory capacities and checks dropped RX DMA and silent-input faults.
+MIDI bursts, scripted UI activity, broader peripheral coverage and full electrical
+behavior remain future work.
 
 Accurate performance prediction is a separate requirement: M7 pipeline, cache,
 flash/external-memory wait states and bus contention would need calibration against

@@ -1,0 +1,15 @@
+[package]
+name = "virtual-daisy"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+hound = "3.5"
+audio-lab = { path = "../audio-lab" }
+sha2 = "0.10.9"

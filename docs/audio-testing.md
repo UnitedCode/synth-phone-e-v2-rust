@@ -1,5 +1,9 @@
 # Automated vocal testing
 
+For booting the complete production firmware with modeled audio IO, see the
+[virtual Daisy guide](virtual-daisy.md). This page covers the faster desktop DSP
+lab and its wider parameter sweeps.
+
 The Rust audio lab runs the firmware's actual pinned vocal DSP on a desktop. It
 shares `src/vocal_frame.rs` with the firmware, imports the device's audio constants,
 and checks that the DSP revision and its locked dependencies match. It needs no
