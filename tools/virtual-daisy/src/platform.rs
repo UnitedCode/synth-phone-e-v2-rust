@@ -39,7 +39,18 @@ pub fn prepare(
     // flash-controller object and is deliberately not on the system bus.
     platform = platform.replace(
         "flashBank1: Memory.MappedMemory @ sysbus 0x08000000\n    size: 0x100000",
-        "flashBank1: Memory.MappedMemory @ sysbus 0x08000000\n    size: 0x20000",
+        "flashBank1: Memory.MappedMemory @ none\n    size: 0x20000\n\nuserFlash: Miscellaneous.DaisyMemory @ sysbus 0x08000000\n    size: 0x20000\n    baseAddress: 0x08000000\n    readOnly: true\n    architecture: architecture",
+    );
+    platform = platform.replace(
+        "flashController: MTD.STM32H7_FlashController @",
+        "flashController: Miscellaneous.DaisyReadOnlyFlashController @",
+    );
+    platform = platform.replace(
+        "    flash1: flashBank1",
+        &format!(
+            "    libraryPath: \"{}\"\n    rcc: rcc\n    flash1: flashBank1",
+            library.display()
+        ),
     );
     platform = platform.replace(
         "flashBank2: Memory.MappedMemory @ sysbus 0x08100000\n    size: 0x100000",
@@ -182,13 +193,14 @@ pub fn prepare(
         "\narchitecture: Miscellaneous.DaisyArchitecture @ none\n    libraryPath: \"{}\"\n",
         library.display()
     ));
+    platform.push_str(&format!("\naxi: Miscellaneous.DaisyNative @ sysbus 0x51000000\n    libraryPath: \"{}\"\n    kind: 15\n    size: 0x100000\n",library.display()));
     let registration = if board == Board::Rev5 {
         "i2c2 0x1a"
     } else {
         "none"
     };
     platform.push_str(&format!("\n\ncodec: Miscellaneous.DaisyI2c @ {registration}\n    libraryPath: \"{}\"\n    kind: {}\n\noled: Miscellaneous.DaisyI2c @ i2c1 0x3c\n    libraryPath: \"{}\"\n    kind: 5\n", library.display(), board.codec_kind(), library.display()));
-    platform.push_str(&format!("\nsai1: Miscellaneous.DaisySai @ {{ sysbus 0x40015800; rcc RegistrationPeripheralAlias.SAI1 }}\n    libraryPath: \"{}\"\n    codec: codec\n    rcc: rcc\n    rxChannel: {}\n    DmaA -> dmamux1@87\n    DmaB -> dmamux1@88\n", library.display(), board.rx_channel()));
+    platform.push_str(&format!("\nsai1: Miscellaneous.DaisySai @ {{ sysbus 0x40015800; rcc RegistrationPeripheralAlias.SAI1 }}\n    libraryPath: \"{}\"\n    codec: codec\n    rcc: rcc\n    dma: dma1\n    rxChannel: {}\n    DmaA -> dmamux1@87\n    DmaB -> dmamux1@88\n", library.display(), board.rx_channel()));
     if board == Board::Rev4 {
         platform = platform.replace("    11 -> timer2@03", "    11 -> timer2@03 | codec@0");
     }

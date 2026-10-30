@@ -1,6 +1,79 @@
 use virtual_daisy::memory::SystemMemory;
 
 #[test]
+fn flash_shares_the_instruction_cache_but_is_not_writable_ram() {
+    let mut memory = SystemMemory::default();
+    memory.load_flash(0x08000000, 4, 0x47702001).unwrap();
+    memory.write_scb(0xd14, 3 << 16).unwrap();
+    assert_eq!(memory.read_instruction(0x08000000, 4).unwrap(), 0x47702001);
+    memory.load_flash(0x08000000, 4, 0x47702002).unwrap();
+    assert_eq!(memory.read_instruction(0x08000000, 4).unwrap(), 0x47702001);
+    memory.write_scb(0xf50, 0).unwrap();
+    assert_eq!(memory.read_instruction(0x08000000, 4).unwrap(), 0x47702002);
+    assert!(memory.write_cpu(0x08000000, 4, 0).is_err());
+    assert!(memory.write_dma(0x08000000, 4, 0).is_err());
+    assert!(memory.load_flash(0x08020000, 4, 0).is_err());
+    assert!(!SystemMemory::is_ram(0x08000000, 4));
+}
+
+#[test]
+fn reused_translations_must_refetch_after_mixed_flash_ram_eviction() {
+    let mut memory = SystemMemory::default();
+    memory.load_flash(0x08000000, 4, 0x47702001).unwrap();
+    for address in [0x24000000, 0x24002000] {
+        memory.write_dma(address, 4, 0x47702009).unwrap();
+    }
+    memory.write_scb(0xd14, 1 << 17).unwrap();
+    assert_eq!(
+        memory.decode_instruction(0x08000000, 4).unwrap(),
+        0x47702001
+    );
+    assert!(!memory.runtime_fetch(0x08000000, 2).unwrap());
+    memory.load_flash(0x08000000, 4, 0x47702002).unwrap();
+    assert!(!memory.runtime_fetch(0x08000000, 2).unwrap()); // Cached flash still returns 1.
+    for address in [0x24000000, 0x24002000] {
+        memory.decode_instruction(address, 4).unwrap();
+        assert!(!memory.runtime_fetch(address, 2).unwrap());
+    }
+    // The old translation must be rejected, not executed after its line was evicted.
+    assert!(memory.runtime_fetch(0x08000000, 2).unwrap());
+    assert_eq!(
+        memory.decode_instruction(0x08000000, 4).unwrap(),
+        0x47702002
+    );
+    assert!(!memory.runtime_fetch(0x08000000, 2).unwrap());
+}
+
+#[test]
+fn flash_literals_use_the_separate_data_cache_and_erased_bytes_are_all_ones() {
+    let mut memory = SystemMemory::default();
+    assert_eq!(memory.read_cpu(0x0801fffc, 4).unwrap(), u32::MAX);
+    memory.load_flash(0x08000000, 4, 0x12345678).unwrap();
+    memory.write_scb(0xd14, 3 << 16).unwrap();
+    assert_eq!(memory.read_cpu(0x08000000, 4).unwrap(), 0x12345678);
+    memory.load_flash(0x08000000, 4, 0x87654321).unwrap();
+    memory.write_scb(0xf50, 0).unwrap();
+    assert_eq!(memory.read_cpu(0x08000000, 4).unwrap(), 0x12345678);
+    memory.write_scb(0xf5c, 0x08000000).unwrap();
+    assert_eq!(memory.read_cpu(0x08000000, 4).unwrap(), 0x87654321);
+    memory.reset_registers();
+    assert_eq!(memory.read_cpu(0x08000000, 4).unwrap(), 0x87654321);
+}
+
+#[test]
+fn runtime_thumb32_instruction_fetch_can_cross_a_cache_line() {
+    let mut memory = SystemMemory::default();
+    memory.load_flash(0x0800001e, 4, 0xf800f000).unwrap(); // Thumb-2 BL halfwords.
+    memory.write_scb(0xd14, 1 << 17).unwrap();
+    memory.decode_instruction(0x0800001e, 4).unwrap();
+    assert!(!memory.runtime_fetch(0x0800001e, 4).unwrap());
+    memory.load_flash(0x08000020, 2, 0xf801).unwrap();
+    assert!(!memory.runtime_fetch(0x0800001e, 4).unwrap());
+    memory.write_scb(0xf58, 0x08000020).unwrap();
+    assert!(memory.runtime_fetch(0x0800001e, 4).unwrap());
+}
+
+#[test]
 fn generated_code_needs_both_data_clean_and_instruction_invalidation() {
     let mut memory = SystemMemory::default();
     memory.write_dma(0x24000000, 4, 0x47702001).unwrap(); // movs r0,#1; bx lr.

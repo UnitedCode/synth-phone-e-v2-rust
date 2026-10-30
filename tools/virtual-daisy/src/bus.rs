@@ -1,5 +1,161 @@
 //! RM0433 programmed SDRAM timing bounds. These are not CPU stall estimates.
 use crate::clock::Rate;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum FlashAdmission {
+    Queued,
+    BufferHit,
+    Backpressure,
+}
+/// RM0433 4.3.8 bank-one command model in flash-interface clocks. One active
+/// read and two waiting; consecutive reads can reuse a 256-bit buffer. This is
+/// an earliest-service model, not a reconstructed AXI/NVM pipeline waveform.
+pub struct FlashReadPipeline {
+    queue: std::collections::VecDeque<u32>,
+    buffer: Option<u32>,
+    remaining: u64,
+    service: u64,
+}
+impl FlashReadPipeline {
+    pub fn new(latency: u32) -> Result<Self, &'static str> {
+        if latency > 7 {
+            return Err("reserved flash read latency");
+        }
+        Ok(Self {
+            queue: std::collections::VecDeque::new(),
+            buffer: None,
+            remaining: 0,
+            service: u64::from(latency) + 1,
+        })
+    }
+    pub fn submit(&mut self, address: u32) -> Result<FlashAdmission, &'static str> {
+        if !crate::memory::SystemMemory::is_flash(address, 1) {
+            return Err("outside H750 user flash");
+        }
+        if self.queue.len() == 3 {
+            return Ok(FlashAdmission::Backpressure);
+        }
+        if self.queue.is_empty() && self.buffer == Some(address & !31) {
+            return Ok(FlashAdmission::BufferHit);
+        }
+        if self.queue.is_empty() {
+            self.remaining = self.service;
+        }
+        self.queue.push_back(address);
+        Ok(FlashAdmission::Queued)
+    }
+    pub fn advance(&mut self, mut clocks: u64) -> Vec<u32> {
+        let mut completed = Vec::new();
+        while let Some(&address) = self.queue.front() {
+            if self.buffer != Some(address & !31) {
+                if clocks < self.remaining {
+                    self.remaining -= clocks;
+                    break;
+                }
+                clocks -= self.remaining;
+                self.buffer = Some(address & !31);
+            }
+            completed.push(self.queue.pop_front().unwrap());
+            self.remaining = self.service;
+        }
+        completed
+    }
+}
+
+/// RM0433 2.2 functional AXI admission/arbitration. Callers provide coincident
+/// requests; this is not a source of CPU arrival times or cycle-accurate stalls.
+#[derive(Default)]
+pub struct Axi {
+    qos: [[u32; 2]; 6],
+    overrides: [u32; 6],
+    outstanding: [[u32; 2]; 6],
+    last: [[[u64; 6]; 2]; 7],
+    sequence: u64,
+}
+impl Axi {
+    fn register(offset: u64) -> Result<(usize, usize), &'static str> {
+        if offset < 0x42100 {
+            return Err("unmodeled AXI register");
+        }
+        let ini = ((offset - 0x42100) / 0x1000) as usize;
+        let field = (offset - 0x42100) % 0x1000;
+        if ini >= 6 || ![0, 4, 8].contains(&field) {
+            return Err("unmodeled AXI register");
+        }
+        Ok((ini, (field / 4) as usize))
+    }
+    pub fn read(&self, offset: u64) -> Result<u32, &'static str> {
+        let (ini, field) = Self::register(offset)?;
+        Ok(if field == 2 {
+            self.overrides[ini]
+        } else {
+            self.qos[ini][field]
+        })
+    }
+    pub fn write(&mut self, offset: u64, value: u32) -> Result<(), &'static str> {
+        let (ini, field) = Self::register(offset)?;
+        if field == 2 {
+            self.overrides[ini] = value & 3;
+        } else {
+            self.qos[ini][field] = value & 15;
+        }
+        Ok(())
+    }
+    pub fn reserve(&mut self, ini: usize, write: bool) -> Result<bool, &'static str> {
+        let i = ini
+            .checked_sub(1)
+            .filter(|&i| i < 6)
+            .ok_or("invalid AXI initiator")?;
+        let channel = usize::from(write);
+        let limits = [[1, 4], [7, 32], [1, 4], [4, 1], [2, 1], [1, 1]];
+        let limit = if self.overrides[i] & (1 << channel) != 0 {
+            1
+        } else {
+            limits[i][channel]
+        };
+        if self.outstanding[i][channel] >= limit {
+            return Ok(false);
+        }
+        self.outstanding[i][channel] += 1;
+        Ok(true)
+    }
+    pub fn complete(&mut self, ini: usize, write: bool) -> Result<(), &'static str> {
+        let i = ini
+            .checked_sub(1)
+            .filter(|&i| i < 6)
+            .ok_or("invalid AXI initiator")?;
+        let count = &mut self.outstanding[i][usize::from(write)];
+        *count = count
+            .checked_sub(1)
+            .ok_or("completion without AXI transaction")?;
+        Ok(())
+    }
+    /// Numbered INI/TARG ports follow RM0433 Figure2. Reset ties have no
+    /// published initial ranking; lower port number is a deterministic choice.
+    pub fn grant(
+        &mut self,
+        target: usize,
+        write: bool,
+        pending: u32,
+    ) -> Result<Option<usize>, &'static str> {
+        let target = target
+            .checked_sub(1)
+            .filter(|&i| i < 7)
+            .ok_or("invalid AXI target")?;
+        if pending & !63 != 0 {
+            return Err("invalid AXI request mask");
+        }
+        let channel = usize::from(write);
+        let winner = (0..6)
+            .filter(|&i| pending & (1 << i) != 0)
+            .min_by_key(|&i| (15 - self.qos[i][channel], self.last[target][channel][i], i));
+        if let Some(i) = winner {
+            self.sequence += 1;
+            self.last[target][channel][i] = self.sequence;
+        }
+        Ok(winner.map(|i| i + 1))
+    }
+}
 pub struct SdramTiming {
     clock: Rate,
     divider: u64,
