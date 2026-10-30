@@ -269,7 +269,9 @@ pub unsafe extern "C" fn daisy_sai_input(
         return;
     }
     (*state).sai.input = std::slice::from_raw_parts(samples, frames * 2)
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|s| [s[0], s[1]])
         .collect();
 }

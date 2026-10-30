@@ -134,7 +134,10 @@ needed to calibrate those behaviors.
 
 `tools/virtual-daisy/known-warnings.txt` contains exact observed warnings for these
 specific clock/cache/I2C timing fields, ADC calibration tags, UART fields, flash
-latency and DWT unlock. The grader permits only those exact messages, without
+latency and DWT unlock. It also allows the exact observed two-wakeup diagnostic
+from Renode's [host-thread condition loop](https://github.com/renode/renode-infrastructure/blob/master/src/Emulator/Main/Utilities/MonitorCondition.cs),
+which rechecks its wait predicate after a redundant wakeup; it does not indicate
+a dropped virtual interrupt. The grader permits only those exact messages, without
 timestamps. New unsupported accesses fail; do not expand the list to conceal a
 functional failure. Native models reject unsupported accesses immediately.
 

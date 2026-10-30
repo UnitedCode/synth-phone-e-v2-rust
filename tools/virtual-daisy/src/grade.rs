@@ -138,7 +138,9 @@ fn evaluate(prefix: &Path) -> Result<(Vec<String>, String)> {
     let mut reports = Vec::new();
     for channel in 0..2 {
         let steady: Vec<f32> = audio
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .skip(RATE as usize / 5)
             .map(|f| f[channel])
             .collect();
@@ -150,7 +152,9 @@ fn evaluate(prefix: &Path) -> Result<(Vec<String>, String)> {
         reports.push(format!("channel {channel}: {report}"));
     }
     if audio
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .any(|frame| (frame[0] - frame[1]).abs() > 1e-6)
     {
         failures.push("Stereo mismatch for duplicated mono fixture".into());
@@ -202,6 +206,11 @@ mod tests {
     }
     #[test]
     fn warning_allowlist_does_not_hide_unknown_accesses() {
+        // Renode MonitorCondition.Wait rechecks its predicate after an extra
+        // host-thread wakeup; this exact diagnostic is not a lost virtual IRQ.
+        assert!(known_warning(
+            "[time]  [WARNING] Thread has been woken up 2 times, verify your condition"
+        ));
         assert!(known_warning(
             "[time]  [WARNING] cpu: Trying to enable instruction cache, but it's not supported"
         ));

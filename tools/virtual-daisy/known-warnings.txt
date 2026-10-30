@@ -1,4 +1,5 @@
 Translation cache size 536870912 is larger than maximum allowed 134217728. It will be clamped to maximum
+Thread has been woken up 2 times, verify your condition
 rcc: Unhandled write to offset 0x2C. Unhandled bits: [2-3] when writing value 0x1FF000C. Tags: PLL1GRE (0x3).
 rcc: Unhandled write to offset 0x2C. Unhandled bits: [20] when writing value 0x1EF0020. Tags: DIVQ2EN (0x0).
 rcc: Unhandled write to offset 0x2C. Unhandled bits: [21] when writing value 0x1DF0020. Tags: DIVR2EN (0x0).
