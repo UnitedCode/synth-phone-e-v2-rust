@@ -7,6 +7,12 @@ pub struct Gpio {
     alternate: [u16; 16],
 }
 impl Gpio {
+    pub fn release(&mut self, pin: u32) {
+        if pin < 16 {
+            self.external_mask &= !(1 << pin);
+            self.external_levels &= !(1 << pin);
+        }
+    }
     pub fn reset(&mut self, port: u32) {
         self.registers = [0; 10];
         self.registers[0] = if port == 0 {

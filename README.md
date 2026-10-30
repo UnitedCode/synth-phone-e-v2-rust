@@ -63,13 +63,17 @@ stereo WAV output. Its regression command checks tuning, boot completion and
 audio continuity, then verifies detection of silent input and lost RX DMA.
 
 ```sh
-cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target "$LAB_HOST" -- run /absolute/path/to/renode-runtime audio-lab-results/daisy
+cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target "$LAB_HOST" -- run /absolute/path/to/renode-runtime audio-lab-results/daisy --board rev5
 ```
 
 The [ARM emulation guide](docs/arm-emulation.md) covers the complementary QEMU
 DSP parity tests. Physical hardware is still needed to calibrate performance and
 analog codec behavior. The audio-testing guide documents known quality failures
 and how CI distinguishes regressions from unresolved issues.
+
+Select the physical Seed revision: `rev4` (AK4556), `rev5` (WM8731), or `rev7`
+(PCM3060). See the [conformance evidence and remaining gaps](docs/daisy-conformance.md)
+before interpreting a simulated pass as evidence about real hardware.
 
 ## Setting Up the Debugger
 

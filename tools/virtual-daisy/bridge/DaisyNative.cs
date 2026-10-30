@@ -89,23 +89,27 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly DaisyNative extra;
     }
 
-    public class DaisyI2c : II2CPeripheral
+    public class DaisyI2c : II2CPeripheral, IGPIOReceiver
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint WriteNative(IntPtr state, byte[] bytes, UIntPtr length);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint ControlNative(IntPtr state, uint high);
         public DaisyI2c(string libraryPath, uint kind)
         {
             var library = NativeLibrary.Load(libraryPath);
             native = new DaisyNative(libraryPath, kind, 0x400);
             write = Marshal.GetDelegateForFunctionPointer<WriteNative>(NativeLibrary.GetExport(library, "daisy_i2c_write"));
+            control = Marshal.GetDelegateForFunctionPointer<ControlNative>(NativeLibrary.GetExport(library, "daisy_codec_control"));
         }
         public void Write(byte[] bytes) { lock(sync) { if(write(native.State, bytes, (UIntPtr)bytes.Length) != 0) throw new InvalidOperationException("Unsupported I2C transaction"); } }
         public byte[] Read(int count) { throw new InvalidOperationException("Read from write-only Daisy codec/display control model"); }
         public void FinishTransmission() {}
         public void Reset() { lock(sync) native.Reset(); }
-        public bool Active { get { lock(sync) return native.ReadDoubleWord(0x100) == 1; } }
+        public uint ActiveMask { get { lock(sync) return native.ReadDoubleWord(0x100); } }
+        public void OnGPIO(int pin, bool high) { lock(sync) { if(pin != 0 || control(native.State, high ? 1U : 0U) != 0) throw new InvalidOperationException("Unsupported codec control signal"); } }
         private readonly object sync = new object();
         private readonly DaisyNative native;
         private readonly WriteNative write;
+        private readonly ControlNative control;
     }
 
     public class DaisyDma : IDoubleWordPeripheral, IKnownSize, IGPIOReceiver, INumberedGPIOOutput
@@ -151,14 +155,18 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void TickNative(IntPtr state, uint codecActive);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void FaultNative(IntPtr state, uint dropRx);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint ConfigureNative(IntPtr state, uint rxChannel);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint Requests(IntPtr state);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void Input(IntPtr state, float[] samples, UIntPtr frames);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveNative(IntPtr state, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
-        public DaisySai(IMachine machine, string libraryPath, DaisyI2c codec)
+        public DaisySai(IMachine machine, string libraryPath, DaisyI2c codec, uint rxChannel)
         {
             this.codec = codec;
+            this.rxChannel = rxChannel;
             native = new DaisyNative(libraryPath, 7, 0x400);
             var library = NativeLibrary.Load(libraryPath);
+            var configure = Marshal.GetDelegateForFunctionPointer<ConfigureNative>(NativeLibrary.GetExport(library, "daisy_sai_configure"));
+            if(configure(native.State, rxChannel) != 0) throw new InvalidOperationException("Unsupported SAI board wiring");
             tick = Marshal.GetDelegateForFunctionPointer<TickNative>(NativeLibrary.GetExport(library, "daisy_sai_tick"));
             fault = Marshal.GetDelegateForFunctionPointer<FaultNative>(NativeLibrary.GetExport(library, "daisy_sai_fault"));
             requests = Marshal.GetDelegateForFunctionPointer<Requests>(NativeLibrary.GetExport(library, "daisy_sai_requests"));
@@ -168,16 +176,17 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             clock.Start();
         }
         public uint ReadDoubleWord(long offset) { lock(sync) return native.ReadDoubleWord(offset); }
-        public void WriteDoubleWord(long offset, uint value) { lock(sync) native.WriteDoubleWord(offset, value); }
+        public void WriteDoubleWord(long offset, uint value) { lock(sync) { native.WriteDoubleWord(offset, value); if(offset == 4 || offset == 0x24) PumpRequests(); } }
         private void Tick()
         {
             lock(sync)
             {
-                tick(native.State, codec.Active ? 1U : 0U);
-                for(int i = 0; i < 2 && (requests(native.State) & 1) != 0; i++) { DmaA.Set(true); DmaA.Set(false); }
-                for(int i = 0; i < 8 && (requests(native.State) & 2) != 0; i++) { DmaB.Set(true); DmaB.Set(false); }
+                tick(native.State, codec.ActiveMask);
+                PumpRequests();
             }
         }
+        private void PumpRequests() { Pump(rxChannel == 0 ? DmaA : DmaB, 1U << (int)rxChannel, 2); Pump(rxChannel == 0 ? DmaB : DmaA, 1U << (int)(1 - rxChannel), 8); }
+        private void Pump(GPIO gpio, uint mask, int words) { for(int i = 0; i < words && (requests(native.State) & mask) != 0; i++) { gpio.Set(true); gpio.Set(false); } }
         public void LoadInput(float[] samples) { lock(sync) input(native.State, samples, (UIntPtr)(samples.Length / 2)); }
         public void Save(string path) { lock(sync) { if(save(native.State, path) != 0) throw new IOException("Could not save virtual SAI output"); } }
         public void Reset() { lock(sync) native.Reset(); }
@@ -189,6 +198,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly object sync = new object();
         private readonly DaisyNative native;
         private readonly DaisyI2c codec;
+        private readonly uint rxChannel;
         private readonly IManagedThread clock;
         private readonly TickNative tick;
         private readonly FaultNative fault;
@@ -220,12 +230,14 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void Drive(IntPtr state, uint pin, uint high);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void Alternate(IntPtr state, uint pin, uint af, uint high);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint Straps(IntPtr state, uint grounded);
         public DaisyGpio(string libraryPath, uint port)
         {
             native = new DaisyNative(libraryPath, 100 + port, 0x400);
             var library = NativeLibrary.Load(libraryPath);
             drive = Marshal.GetDelegateForFunctionPointer<Drive>(NativeLibrary.GetExport(library, "daisy_gpio_drive"));
             alternate = Marshal.GetDelegateForFunctionPointer<Alternate>(NativeLibrary.GetExport(library, "daisy_gpio_alternate"));
+            straps = Marshal.GetDelegateForFunctionPointer<Straps>(NativeLibrary.GetExport(library, "daisy_revision_straps"));
             var connections = new Dictionary<int, IGPIO>();
             for(int pin = 0; pin < 16; pin++) connections[pin] = new GPIO();
             Connections = connections;
@@ -233,6 +245,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public uint ReadDoubleWord(long offset) { lock(sync) return native.ReadDoubleWord(offset); }
         public void WriteDoubleWord(long offset, uint value) { lock(sync) { native.WriteDoubleWord(offset, value); Update(); } }
         public void OnGPIO(int pin, bool high) { lock(sync) { drive(native.State, (uint)pin, high ? 1U : 0U); Update(); } }
+        public void ConfigureStraps(uint grounded) { lock(sync) { if(straps(native.State, grounded) != 0) throw new InvalidOperationException("Invalid board straps"); Update(); } }
         private void Update() { uint levels = native.ReadDoubleWord(0x10); for(int pin = 0; pin < 16; pin++) Connections[pin].Set((levels & (1U << pin)) != 0); }
         public void Reset() { lock(sync) { native.Reset(); Update(); } }
         public long Size { get { return 0x400; } }
@@ -240,6 +253,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly DaisyNative native;
         private readonly Drive drive;
         private readonly Alternate alternate;
+        private readonly Straps straps;
         public IGPIOReceiver GetLocalReceiver(int pin) { return new AlternateReceiver(this, pin); }
         private sealed class AlternateReceiver : IGPIOReceiver { public AlternateReceiver(DaisyGpio owner, int pin) { this.owner = owner; this.pin = pin; } public void OnGPIO(int af, bool high) { lock(owner.sync) { owner.alternate(owner.native.State, (uint)pin, (uint)af, high ? 1U : 0U); owner.Update(); } } public void Reset() {} private readonly DaisyGpio owner; private readonly int pin; }
         private readonly object sync = new object();

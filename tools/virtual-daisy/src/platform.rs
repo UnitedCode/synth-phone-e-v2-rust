@@ -1,6 +1,12 @@
 use std::{error::Error, fs, path::Path};
+use virtual_daisy::board::Board;
 
-pub fn prepare(renode: &Path, directory: &Path, library: &Path) -> Result<(), Box<dyn Error>> {
+pub fn prepare(
+    renode: &Path,
+    directory: &Path,
+    library: &Path,
+    board: Board,
+) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(directory)?;
     let directory = fs::canonicalize(directory)?;
     let mut platform = fs::read_to_string(renode.join("platforms/cpus/stm32h7.repl"))?;
@@ -127,8 +133,18 @@ pub fn prepare(renode: &Path, directory: &Path, library: &Path) -> Result<(), Bo
     if platform.contains("Python.") || platform.contains("`py ") {
         return Err("Python platform code remains".into());
     }
-    platform.push_str(&format!("\n\ncodec: Miscellaneous.DaisyI2c @ i2c2 0x1a\n    libraryPath: \"{}\"\n    kind: 4\n\noled: Miscellaneous.DaisyI2c @ i2c1 0x3c\n    libraryPath: \"{}\"\n    kind: 5\n", library.display(), library.display()));
-    platform.push_str(&format!("\nsai1: Miscellaneous.DaisySai @ sysbus 0x40015800\n    libraryPath: \"{}\"\n    codec: codec\n    DmaA -> dmamux1@87\n    DmaB -> dmamux1@88\n", library.display()));
+    let registration = if board == Board::Rev5 {
+        "i2c2 0x1a"
+    } else {
+        "none"
+    };
+    platform.push_str(&format!("\n\ncodec: Miscellaneous.DaisyI2c @ {registration}\n    libraryPath: \"{}\"\n    kind: {}\n\noled: Miscellaneous.DaisyI2c @ i2c1 0x3c\n    libraryPath: \"{}\"\n    kind: 5\n", library.display(), board.codec_kind(), library.display()));
+    platform.push_str(&format!("\nsai1: Miscellaneous.DaisySai @ sysbus 0x40015800\n    libraryPath: \"{}\"\n    codec: codec\n    rxChannel: {}\n    DmaA -> dmamux1@87\n    DmaB -> dmamux1@88\n", library.display(), board.rx_channel()));
+    if board == Board::Rev4 {
+        platform = platform.replace("    11 -> timer2@03", "    11 -> timer2@03 | codec@0");
+    }
+    platform
+        .push_str("\n// Physical GPIO straps; loaded by the API host before reset execution.\n");
     fs::write(directory.join("daisy.repl"), platform)?;
     let obsolete = directory.join("boot.resc");
     if obsolete.exists() {

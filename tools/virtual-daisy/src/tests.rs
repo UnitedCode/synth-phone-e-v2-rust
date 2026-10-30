@@ -89,13 +89,13 @@ fn sai_stereo_sign_extension_fifo_prefill_and_codec_gate() {
     let mut sai = sai::Sai::default();
     sai.input = vec![[-0.5, 0.25]; 2];
     assert!(sai.write(0x24, 1 << 17).is_err());
-    sai.write(0x24, (1 << 17) | (6 << 5)).unwrap();
+    sai.write(0x24, (1 << 17) | (6 << 5) | 2).unwrap();
     assert_eq!(sai.requests(), 2); // DMA can prefill before TX enable.
     sai.write(0x40, 0x00c0_0000).unwrap();
     sai.write(0x40, 0x0020_0000).unwrap();
     sai.tick(true);
     assert_eq!(sai.frames, 0); // RX disabled.
-    sai.write(4, (1 << 16) | (1 << 17) | (6 << 5)).unwrap();
+    sai.write(4, (1 << 16) | (1 << 17) | (6 << 5) | 1).unwrap();
     sai.tick(true);
     assert_eq!(sai.output[0], [-0.5, 0.25]);
     assert_eq!(sai.read(0x20).unwrap() as i32, -4_194_304);
@@ -111,7 +111,7 @@ fn sai_stereo_sign_extension_fifo_prefill_and_codec_gate() {
 #[test]
 fn sai_lost_rx_requests_overrun_and_empty_tx_underruns() {
     let mut sai = sai::Sai::default();
-    sai.write(4, (1 << 16) | (1 << 17) | (6 << 5)).unwrap();
+    sai.write(4, (1 << 16) | (1 << 17) | (6 << 5) | 1).unwrap();
     sai.drop_rx = true;
     for _ in 0..5 {
         sai.tick(true);
@@ -163,9 +163,13 @@ fn codec_protocol_active_reset_and_unsupported_registers() {
     assert!(codec.read(0x100).is_err());
     codec.i2c_write(&[14, 9]).unwrap();
     codec.i2c_write(&[12, 0x42]).unwrap();
-    assert_eq!(codec.read(0x100), Ok(1));
+    codec.i2c_write(&[0, 0x17]).unwrap();
+    codec.i2c_write(&[2, 0x17]).unwrap();
+    codec.i2c_write(&[8, 0x12]).unwrap();
+    codec.i2c_write(&[10, 0]).unwrap();
+    assert_eq!(codec.read(0x100), Ok(3));
     codec.i2c_write(&[10, 8]).unwrap();
-    assert_eq!(codec.read(0x100), Ok(0));
+    assert_eq!(codec.read(0x100), Ok(1));
     assert!(codec.i2c_write(&[18]).is_err());
     assert!(codec.i2c_write(&[20, 1]).is_err());
     codec.i2c_write(&[30, 0]).unwrap();
