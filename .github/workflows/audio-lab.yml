@@ -1,0 +1,45 @@
+name: Audio regression lab
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  audio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/audio-lab/target
+          key: audio-lab-${{ runner.os }}-${{ hashFiles('tools/audio-lab/Cargo.lock') }}
+      - name: Format
+        run: cargo fmt --manifest-path tools/audio-lab/Cargo.toml -- --check
+      - name: Lint
+        run: cargo clippy --locked --manifest-path tools/audio-lab/Cargo.toml --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+      - name: Audio regression tests and fault injection
+        run: cargo test --release --locked --manifest-path tools/audio-lab/Cargo.toml --target x86_64-unknown-linux-gnu
+      - name: Sweep 720 pitch settings and reject new failures
+        run: cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target x86_64-unknown-linux-gnu -- sweep audio-lab-results
+      - name: Publish measured quality summary
+        if: always()
+        run: |
+          if [ -f audio-lab-results/summary.txt ]; then
+            cat audio-lab-results/summary.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-lab-results
+          path: audio-lab-results/
+          if-no-files-found: ignore

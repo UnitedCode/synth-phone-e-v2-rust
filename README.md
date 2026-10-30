@@ -43,10 +43,21 @@ cargo xtask embed
 
 This command reads your `Embed.toml` configuration file (if present) and flashes the program accordingly.
 
-## Running the host example
+## Automated vocal audio tests
+
+The [Rust audio lab](docs/audio-testing.md) runs the firmware's pinned vocal DSP on
+your computer, replays WAV recordings, and sweeps 720 pitch/key/formant settings.
+It measures pitch error and audio defects without flashing the Daisy.
+
 ```sh
-cargo run -p host-target-tests --bin host-target-tests
+LAB_HOST=$(rustc -vV | sed -n 's/^host: //p')
+cargo test --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST"
+cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" -- sweep audio-lab-results
 ```
+
+This simulates the vocal signal path; physical hardware is still needed to measure
+board timing and codec behavior. The guide documents the initial known failures
+and how CI distinguishes regressions from unresolved quality issues.
 
 ## Setting Up the Debugger
 

@@ -1,6 +1,7 @@
 use crate::midi::get_midi_queue_status;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
+use app_lib::vocal_frame::{default_config, process_frame};
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -10,9 +11,7 @@ use rtic::Mutex;
 use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator, Waveform};
 use synthphone_e_vocal_dsp::dsp::{bitcrush, normalize_sample, sample_rate_reduce};
 use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
-use synthphone_e_vocal_dsp::{
-    process_vocal_effects_1024, MusicalSettings, ProcessingMode, VocalEffectsConfig,
-};
+use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
 pub fn audio_handler(
     audio: &mut audio::Audio,
@@ -483,7 +482,7 @@ pub fn handle_vocal_effects(
         octave_ratio: pitch_ratio,
         mode,
     };
-    let config = VocalEffectsConfig::default();
+    let config = default_config();
     let mut input_buffer = [0.0; FFT_SIZE];
     let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);
     ctx.in_ring
@@ -493,9 +492,9 @@ pub fn handle_vocal_effects(
     let write_idx = carrier_buffer.write_index();
     carrier_buffer.block_from(write_idx, &mut carrier_unwrapped_buffer);
 
-    let synthesis_output = process_vocal_effects_1024(
+    let synthesis_output = process_frame(
         &mut input_buffer,
-        Some(&mut carrier_unwrapped_buffer),
+        &mut carrier_unwrapped_buffer,
         last_input_phases,
         last_output_phases,
         cached_harmony_envelope,
