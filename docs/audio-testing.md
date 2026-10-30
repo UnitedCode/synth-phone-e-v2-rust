@@ -113,7 +113,8 @@ the sound while establishing the baseline.
 
 ## Performance and hardware testing
 
-CSV host p95/max timings measure the frame DSP call, excluding replay bookkeeping.
+CSV host p95/max timings measure a DSP hop, including its buffer copies and
+overlap-add bookkeeping.
 They can help compare versions on the same host/build configuration. They cannot
 predict Cortex-M7 cycles, interrupt deadlines or physical round-trip latency.
 
@@ -138,6 +139,12 @@ the H750 and list DMA and I2S among missing devices. A CPU emulator can exercise
 some ARM code, but a Daisy model would additionally need its clocks, SAI/DMA,
 codec, external memory and timing behavior. Even functional peripheral emulation
 would need validation before making performance claims.
+
+There is now an [ARM execution layer](arm-emulation.md): a Rust command builds a
+`no_std` Cortex-M7 guest, executes it in QEMU, compares its output samples against
+the host, and verifies that an injected lost frame is caught. It requires no
+physical board. It does not yet boot the complete production firmware or model
+the STM32's audio peripherals. The guide describes the remaining virtual-Daisy work.
 
 The next useful work is to add annotated real singing, vibrato/slides, consonants,
 noise and note transitions; fix the exposed failures one at a time; then optimize

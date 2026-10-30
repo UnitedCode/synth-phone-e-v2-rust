@@ -16,26 +16,43 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: thumbv7em-none-eabihf
+      - name: Install ARM emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y qemu-system-arm
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             tools/audio-lab/target
-          key: audio-lab-${{ runner.os }}-${{ hashFiles('tools/audio-lab/Cargo.lock') }}
+            tools/arm-audio-tests/target
+          key: audio-lab-${{ runner.os }}-${{ hashFiles('tools/audio-lab/Cargo.lock', 'tools/arm-audio-tests/Cargo.lock') }}
       - name: Format
-        run: cargo fmt --manifest-path tools/audio-lab/Cargo.toml -- --check
+        run: |
+          cargo fmt --manifest-path tools/audio-lab/Cargo.toml -- --check
+          cargo fmt --manifest-path tools/arm-audio-tests/Cargo.toml -- --check
       - name: Lint
         run: cargo clippy --locked --manifest-path tools/audio-lab/Cargo.toml --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+      - name: Lint ARM guest
+        env:
+          RUSTFLAGS: -C link-arg=-Tlink.x -C target-cpu=cortex-m7
+        run: cargo clippy --release --locked --manifest-path tools/arm-audio-tests/Cargo.toml --target thumbv7em-none-eabihf --all-features -- -D warnings
       - name: Audio regression tests and fault injection
         run: cargo test --release --locked --manifest-path tools/audio-lab/Cargo.toml --target x86_64-unknown-linux-gnu
       - name: Sweep 720 pitch settings and reject new failures
         run: cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target x86_64-unknown-linux-gnu -- sweep audio-lab-results
+      - name: Execute Cortex-M7 guest and verify lost-frame fault detection
+        run: cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target x86_64-unknown-linux-gnu -- emulate audio-lab-results/arm
       - name: Publish measured quality summary
         if: always()
         run: |
           if [ -f audio-lab-results/summary.txt ]; then
             cat audio-lab-results/summary.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f audio-lab-results/arm/emulator-summary.txt ]; then
+            cat audio-lab-results/arm/emulator-summary.txt >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@v4
         if: always()

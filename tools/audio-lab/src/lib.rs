@@ -1,15 +1,15 @@
 //! Deterministic audio replay, not CPU/peripheral emulation.
 use std::time::Instant;
-use synthphone_e_vocal_dsp::{
-    dsp::normalize_sample, ring_buffer::RingBuffer, MusicalSettings, VocalEffectsConfig,
-};
+use synthphone_e_vocal_dsp::{dsp::normalize_sample, MusicalSettings, VocalEffectsConfig};
+pub mod emulator;
+pub mod replay;
 
 // Compile the same entry point and constants as the device, without its HAL.
 #[path = "../../../src/constants.rs"]
 pub mod constants;
 #[path = "../../../src/vocal_frame.rs"]
 pub mod vocal_frame;
-use constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE};
+use constants::{BLOCK_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE};
 
 pub struct Render {
     /// Before the firmware's final peak limiter, useful for detecting overloads.
@@ -43,55 +43,25 @@ pub fn render_with_fault(
     assert_eq!(config.fft_size, FFT_SIZE);
     assert_eq!(config.hop_size, HOP_SIZE);
     assert_eq!((FFT_SIZE as f32 * config.hop_ratio) as usize, HOP_SIZE);
-    let input_ring = RingBuffer::<BUFFER_SIZE>::new();
-    let output_ring = RingBuffer::<BUFFER_SIZE>::new();
-    let carrier_ring = RingBuffer::<BUFFER_SIZE>::new();
-    let mut input_phases = [0.0; FFT_SIZE];
-    let mut output_phases = [0.0; FFT_SIZE];
-    let mut envelope = [0.0; FFT_SIZE / 2];
-    let mut inv_envelope = [0.0; FFT_SIZE / 2];
-    let mut hop_counter = 0;
-    let mut hops = 0;
+    let mut replay = replay::Replay::new();
     let mut hop_micros = Vec::new();
     let mut raw = Vec::with_capacity(input.len() + FFT_SIZE * 2);
     let total = (input.len() + FFT_SIZE * 2).div_ceil(BLOCK_SIZE) * BLOCK_SIZE;
     for block in (0..total).step_by(BLOCK_SIZE) {
-        let mut pending = None;
         for i in block..block + BLOCK_SIZE {
-            input_ring.push(input.get(i).copied().unwrap_or(0.0));
-            raw.push(output_ring.pop());
-            // Match src/handler.rs, including its initial 257-sample first hop.
-            if hop_counter >= HOP_SIZE {
-                hop_counter = 0;
-                pending = Some(input_ring.write_index());
-            }
-            hop_counter += 1;
+            raw.push(replay.sample(input.get(i).copied().unwrap_or(0.0)));
         }
-        if let Some(write_idx) = pending {
-            for i in hops * HOP_SIZE..(hops + 1) * HOP_SIZE {
-                carrier_ring.push(carrier.get(i).copied().unwrap_or(0.0));
+        if replay.pending() {
+            let mut carrier_block = [0.0; HOP_SIZE];
+            for (i, sample) in carrier_block.iter_mut().enumerate() {
+                *sample = carrier
+                    .get(replay.hops * HOP_SIZE + i)
+                    .copied()
+                    .unwrap_or(0.0);
             }
-            let mut frame = [0.0; FFT_SIZE];
-            let mut carrier_frame = [0.0; FFT_SIZE];
-            input_ring.block_from(write_idx, &mut frame);
-            carrier_ring.block_from(carrier_ring.write_index(), &mut carrier_frame);
             let start = Instant::now();
-            let synthesis = vocal_frame::process_frame(
-                &mut frame,
-                &mut carrier_frame,
-                &mut input_phases,
-                &mut output_phases,
-                &mut envelope,
-                &mut inv_envelope,
-                1.0, // The device currently never updates previous_pitch_shift_ratio.
-                config,
-                settings,
-            );
+            replay.finish_block(&carrier_block, config, settings, omit_hop);
             hop_micros.push(start.elapsed().as_secs_f64() * 1e6);
-            if omit_hop != Some(hops) {
-                output_ring.write_overlapped_samples(&synthesis);
-            }
-            hops += 1;
         }
     }
     let audio = raw.iter().map(|&x| normalize_sample(x, 0.8)).collect();
@@ -99,7 +69,7 @@ pub fn render_with_fault(
         raw,
         audio,
         hop_micros,
-        hops,
+        hops: replay.hops,
     }
 }
 

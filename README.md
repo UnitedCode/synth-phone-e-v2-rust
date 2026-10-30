@@ -53,11 +53,15 @@ It measures pitch error and audio defects without flashing the Daisy.
 LAB_HOST=$(rustc -vV | sed -n 's/^host: //p')
 cargo test --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST"
 cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" -- sweep audio-lab-results
+# Execute the ARM DSP in QEMU (requires qemu-system-arm):
+cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" -- emulate audio-lab-results/arm
 ```
 
-This simulates the vocal signal path; physical hardware is still needed to measure
-board timing and codec behavior. The guide documents the initial known failures
-and how CI distinguishes regressions from unresolved quality issues.
+The [ARM emulation guide](docs/arm-emulation.md) explains what the Cortex-M7 guest
+tests and what remains for a complete virtual Daisy. Physical hardware is still
+needed to validate board timing and codec behavior. The audio-testing guide
+documents known failures and how CI distinguishes regressions from unresolved
+quality issues.
 
 ## Setting Up the Debugger
 
