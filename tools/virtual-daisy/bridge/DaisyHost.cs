@@ -47,6 +47,15 @@ public static class DaisyHost
             il.Append(il.Create(Mono.Cecil.Cil.OpCodes.Ldstr, "Python execution is disabled in virtual Daisy"));
             il.Append(il.Create(Mono.Cecil.Cil.OpCodes.Newobj, assembly.MainModule.ImportReference(typeof(InvalidOperationException).GetConstructor(new[] {typeof(string)}))));
             il.Append(il.Create(Mono.Cecil.Cil.OpCodes.Throw));
+            // Dispatch the budget check through its existing virtual getter.
+            // Only the initial condition is changed; the two subsequent field
+            // reads stay atomic with the CPU thread's budget subtraction.
+            var cpu=assembly.MainModule.Types.Single(t=>t.FullName=="Antmicro.Renode.Peripherals.CPU.BaseCPU");
+            var body=cpu.Methods.Single(m=>m.Name=="CpuThreadBodyInner");
+            var getter=cpu.Methods.Single(m=>m.Name=="get_SkipInstructions");
+            var reads=body.Body.Instructions.Where(i=>i.OpCode==Mono.Cecil.Cil.OpCodes.Ldfld && i.Operand is Mono.Cecil.FieldReference f && f.Name=="skipInstructions").ToArray();
+            if(reads.Length!=3) throw new InvalidOperationException("Pinned CPU pacing adapter point changed");
+            reads[0].OpCode=Mono.Cecil.Cil.OpCodes.Callvirt;reads[0].Operand=getter;
             assembly.Write(output + ".tmp");
             File.Move(output + ".tmp", output, true);
         }
@@ -60,6 +69,7 @@ public static class DaisyHost
         Misc.TryGetRootDirectory(args[0], out ignored);
         TypeManager.Instance.ScanFile(Assembly.GetExecutingAssembly().Location, false);
         VerifyPythonGuard();
+        VerifyPacingAdapter();
         var emulation = EmulationManager.Instance.CurrentEmulation;
         var machine = new Machine();
         emulation.AddMachine(machine, "daisy");
@@ -76,7 +86,7 @@ public static class DaisyHost
         ((DaisyGpio)machine["sysbus.gpioPortD"]).ConfigureStraps(uint.Parse(args[7]));
         Console.WriteLine("Board: " + args[6]);
         var cpu = (CortexM)machine["sysbus.cpu"];
-        if(((DaisyCortexM)cpu).FetchTagVersion!=5) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
+        if(((DaisyCortexM)cpu).FetchTagVersion!=8) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
         Console.WriteLine("Native instruction-fetch tag verified");
         cpu.VectorTableOffset = 0x08000000;
         cpu.SP = bus.ReadDoubleWord(0x08000000);
@@ -85,6 +95,8 @@ public static class DaisyHost
         emulation.MasterTimeSource.Quantum = TimeInterval.FromMicroseconds(1);
         if(args[5]=="architecture" || args[5]=="runtime-fault") { ArchitectureProbes(emulation,machine,args[3],args[5]=="runtime-fault"); emulation.Dispose(); return; }
         if(args[5]=="flash" || args[5]=="flash-wait-fault") {FlashProbes(emulation,machine,args[3],args[5]=="flash-wait-fault");emulation.Dispose();return;}
+        if(args[5]=="timing" || args[5]=="dsb-fault" || args[5]=="entry-fault") {TimingProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="wait-irq" || args[5]=="wait-irq-fault" || args[5]=="wait-irq-target") {InterruptProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -170,6 +182,67 @@ public static class DaisyHost
         File.WriteAllBytes(prefix+".flash.bin",bus.ReadBytes(0x2001d000UL,40));
         architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM flash programming probe executed; results require Rust grading");
+    }
+    private static void TimingProbes(Emulation emulation,Machine machine,string prefix,string fault) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        var architecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
+        architecture.LoadFlash(0x0801e02c,4,0x3801);
+        bus.WriteBytes(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(prefix),"timing-probe.bin")),0x3000);
+        bus.WriteDoubleWord(0xe000ed98,0);
+        bus.WriteDoubleWord(0xe000ed9c,0x3001e000);
+        bus.WriteDoubleWord(0xe000eda0,0x030c0019);
+        bus.WriteDoubleWord(0xe000ed94,5);
+        bus.WriteDoubleWord(0xe000ed14,3U<<16);
+        bus.WriteDoubleWord(0xe000edfc,1U<<24);
+        bus.WriteDoubleWord(0xe0001fb0,0xc5acce55);
+        bus.WriteDoubleWord(0xe0001000,1);
+        bus.WriteDoubleWord(0xe0001004,0);
+        cpu.VectorTableOffset=0x0801e000;
+        cpu.SP=0x3001f000;cpu.PC=0x3001;
+        architecture.InjectBusLoad(7,100000,true);
+        if(fault=="dsb-fault") cpu.DisableBarriers();
+        if(fault=="entry-fault") architecture.Register(3,0,1,true);
+        emulation.RunFor(TimeInterval.FromMicroseconds(50));
+        File.WriteAllBytes(prefix+".timing-early.bin",bus.ReadBytes(0x2001c000UL,4));
+        for(int step=0;step<45;step++) {
+            emulation.RunFor(TimeInterval.FromMicroseconds(10));
+            if(step%5==0) {Console.WriteLine($"Timing progress: {60+step*10} us, PC={cpu.PC}, SP={cpu.SP}");architecture.Save(prefix+".timing-progress.txt");File.WriteAllBytes(prefix+".timing-progress.bin",bus.ReadBytes(0x2001c000UL,48));}
+        }
+        File.WriteAllBytes(prefix+".timing.bin",bus.ReadBytes(0x2001c000UL,48));
+        architecture.Save(prefix+".memory.txt");
+        Console.WriteLine("ARM writeback/exception timing probe executed; results require Rust grading");
+    }
+    private static void InterruptProbes(Emulation emulation,Machine machine,string prefix,string fault) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        bool otherTarget=fault=="wait-irq-target";
+        bus.WriteBytes(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(prefix),otherTarget?"interrupt-target-probe.bin":"interrupt-probe.bin")),0x5000);
+        bus.WriteDoubleWord(0x6040,0x5801);cpu.VectorTableOffset=0x6000;
+        bus.WriteDoubleWord(0xe000edfc,1U<<24);bus.WriteDoubleWord(0xe0001fb0,0xc5acce55);
+        bus.WriteDoubleWord(0xe0001000,1);bus.WriteDoubleWord(0xe0001004,0);
+        cpu.SP=0x2001f000;cpu.PC=0x5001;
+        if(otherTarget) {
+            cpu.SP=0x3001f000;bus.WriteDoubleWord(0x24040000,42);
+            ((DaisyNvic)machine["sysbus.nvic"]).Architecture.InjectBusLoad(7,100000);
+        }
+        cpu.DisableWaitPreemption=fault=="wait-irq-fault";
+        emulation.RunFor(TimeInterval.FromMicroseconds(20));
+        bus.WriteDoubleWord(0xe000e100,1);bus.WriteDoubleWord(0xe000e200,1);
+        emulation.RunFor(TimeInterval.FromMicroseconds(10));
+        File.WriteAllBytes(prefix+".interrupt-early.bin",bus.ReadBytes(0x2001b008UL,4));
+        emulation.RunFor(TimeInterval.FromMicroseconds(470));
+        File.WriteAllBytes(prefix+".interrupt.bin",bus.ReadBytes(0x2001b000UL,20));
+        ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
+        Console.WriteLine("ARM interrupt-during-memory-wait probe executed; results require Rust grading");
+    }
+    private static void VerifyPacingAdapter() {
+        using(var assembly=Mono.Cecil.AssemblyDefinition.ReadAssembly(typeof(BaseCPU).Assembly.Location)) {
+            var cpu=assembly.MainModule.Types.Single(t=>t.FullName=="Antmicro.Renode.Peripherals.CPU.BaseCPU");
+            var method=cpu.Methods.Single(m=>m.Name=="CpuThreadBodyInner");
+            int reads=method.Body.Instructions.Count(i=>i.OpCode==Mono.Cecil.Cil.OpCodes.Ldfld && i.Operand is Mono.Cecil.FieldReference f && f.Name=="skipInstructions");
+            int calls=method.Body.Instructions.Count(i=>i.OpCode==Mono.Cecil.Cil.OpCodes.Callvirt && i.Operand is Mono.Cecil.MethodReference m && m.Name=="get_SkipInstructions" && m.DeclaringType.FullName==cpu.FullName);
+            if(reads!=2 || calls!=1) throw new InvalidOperationException("Missing native-wait IRQ pacing adapter");
+        }
+        Console.WriteLine("IRQ-aware wait pacing adapter verified");
     }
     private static void VerifyPythonGuard()
     {

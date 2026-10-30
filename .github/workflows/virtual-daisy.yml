@@ -78,6 +78,11 @@ jobs:
             audio-lab-results/daisy/${{ matrix.board }}/*.architecture.bin
             audio-lab-results/daisy/${{ matrix.board }}/flash-probe.bin
             audio-lab-results/daisy/${{ matrix.board }}/*.flash.bin
+            audio-lab-results/daisy/${{ matrix.board }}/timing-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/*.timing*.bin
+            audio-lab-results/daisy/${{ matrix.board }}/interrupt-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/interrupt-target-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/*.interrupt*.bin
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.txt
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.log
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.bin
