@@ -1,4 +1,6 @@
 /target
+**/target/
+/audio-lab-results/
 .vscode/launch.json
 /mutants.out
 .temp*

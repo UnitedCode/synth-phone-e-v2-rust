@@ -1,0 +1,17 @@
+[package]
+name = "audio-lab"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Independent of hardware-only firmware dependencies; pin checked by a regression test.
+[workspace]
+
+[dependencies]
+synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "ac8cc3582d3f0c0ee53ab0ad9af840e9d80ce6bc"}
+hound = "3.5"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
