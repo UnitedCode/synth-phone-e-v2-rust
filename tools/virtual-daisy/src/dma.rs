@@ -15,9 +15,40 @@ pub struct Dma {
     pub streams: [Stream; 8],
     pub status: [u32; 2],
     pub transfers: u64,
+    pub contested_grants: u64,
+    pub grants: [u64; 8],
 }
 
 impl Dma {
+    /// RM0433 15.3.6: four PL levels, then lower stream number.
+    /// Single-beat/direct audio path; burst locking and independent port timing
+    /// are separate from this functional request ordering.
+    pub fn arbitrate(&mut self, requests: u32) -> Option<usize> {
+        let mut eligible = 0;
+        let mut winner = None;
+        for (i, stream) in self.streams.iter().enumerate() {
+            if requests & (1 << i) == 0 || stream.cr & 1 == 0 || stream.remaining == 0 {
+                continue;
+            }
+            eligible += 1;
+            let priority = (stream.cr >> 16) & 3;
+            if winner
+                .is_none_or(|previous: usize| priority > ((self.streams[previous].cr >> 16) & 3))
+            {
+                winner = Some(i);
+            }
+        }
+        if let Some(i) = winner {
+            self.grants[i] += 1;
+            if eligible > 1 {
+                self.contested_grants += 1;
+            }
+        }
+        winner
+    }
+    pub fn stats(&self) -> String {
+        format!("scope=DMA_SINGLE_BEAT_FUNCTIONAL_ARBITRATION\ncontested_grants={}\nstream_grants={:?}\ntransfers={}\naxi_ahb_stalls=UNMODELED\n",self.contested_grants,self.grants,self.transfers)
+    }
     fn index(offset: u64) -> Result<(usize, u64), &'static str> {
         if !(0x10..0xd0).contains(&offset) || !offset.is_multiple_of(4) {
             return Err("unknown DMA register");

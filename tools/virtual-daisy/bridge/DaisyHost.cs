@@ -67,20 +67,22 @@ public static class DaisyHost
         var resolver = new PlatformDescriptionMachineExtensions.UsingResolver(new[] {args[0], Path.GetDirectoryName(args[1])});
         new CreationDriver(machine, resolver, new NoScripts()).ProcessFile(args[1]);
         var bus = machine.SystemBus;
-        bus.LoadELF(args[2]);
+        var imageArchitecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
+        imageArchitecture.ImageLoading=true;
+        try { bus.LoadELF(args[2]); } finally { imageArchitecture.ImageLoading=false; }
         foreach(var entry in new[] { Tuple.Create("gpioPortA", new[] {0, 3, 7}), Tuple.Create("gpioPortB", new[] {1}), Tuple.Create("gpioPortC", new[] {0, 7, 9, 10, 11}) })
             foreach(int pin in entry.Item2) ((IGPIOReceiver)machine["sysbus." + entry.Item1]).OnGPIO(pin, true);
         ((DaisyGpio)machine["sysbus.gpioPortD"]).ConfigureStraps(uint.Parse(args[7]));
         Console.WriteLine("Board: " + args[6]);
         var cpu = (CortexM)machine["sysbus.cpu"];
-        if(((DaisyCortexM)cpu).FetchTagVersion!=1) throw new InvalidOperationException("Missing native instruction-fetch tag");
+        if(((DaisyCortexM)cpu).FetchTagVersion!=3) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
         Console.WriteLine("Native instruction-fetch tag verified");
         cpu.VectorTableOffset = 0x08000000;
         cpu.SP = bus.ReadDoubleWord(0x08000000);
         cpu.PC = bus.ReadDoubleWord(0x08000004);
         cpu.PerformanceInMips = 480;
         emulation.MasterTimeSource.Quantum = TimeInterval.FromMicroseconds(1);
-        if(args[5]=="architecture") { ArchitectureProbes(emulation,machine,args[3]); emulation.Dispose(); return; }
+        if(args[5]=="architecture" || args[5]=="runtime-fault") { ArchitectureProbes(emulation,machine,args[3],args[5]=="runtime-fault"); emulation.Dispose(); return; }
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -124,24 +126,29 @@ public static class DaisyHost
         File.WriteAllBytes(args[3], bus.ReadBytes(0x20000000UL, 0x20000));
         sai.Save(args[3] + ".wav");
         ((DaisyFmc)machine["sysbus.fmc"]).Save(args[3]+".sdram.txt");
+        ((DaisyReadOnlyFlashController)machine["sysbus.flashController"]).Save(args[3]+".flash.txt");
+        ((DaisyDma)machine["sysbus.dma1"]).Save(args[3]+".dma.txt");
         ((DaisyNvic)machine["sysbus.nvic"]).SaveMemory(args[3] + ".memory.txt");
         File.WriteAllText(args[3]+".bus.txt",$"dma1_lisr={bus.ReadDoubleWord(0x40020000)}\ndma1_s0cr={bus.ReadDoubleWord(0x40020010)}\ndma1_s0ndtr={bus.ReadDoubleWord(0x40020014)}\n");
         emulation.Dispose();
     }
-    private static void ArchitectureProbes(Emulation emulation,Machine machine,string prefix)
+    private static void ArchitectureProbes(Emulation emulation,Machine machine,string prefix,bool disableRuntime)
     {
         var bus=machine.SystemBus;
         var cpu=(DaisyCortexM)machine["sysbus.cpu"];
         var architecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
         bus.WriteDoubleWord(0x24040000,0x47702001); // movs r0,#1; bx lr.
+        architecture.LoadFlash(0x0801e000,4,0x47702009);
+        bus.WriteDoubleWord(0x24042000,0x47702008);
         bus.WriteBytes(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(prefix),"architecture-probe.bin")),0x1000);
         bus.WriteDoubleWord(0xe000ed14,3U<<16);
         cpu.PC=0x1001;
         emulation.RunFor(TimeInterval.FromMilliseconds(1));
         architecture.Write(0x24040000,4,0x47702003,false); // DMA/physical path, no I-cache snooping.
+        if(disableRuntime) cpu.DisableRuntimeFetching();
         bus.WriteDoubleWord(0x2001e03cUL,1); // Release the ARM program's mailbox wait.
         emulation.RunFor(TimeInterval.FromMilliseconds(1));
-        File.WriteAllBytes(prefix+".architecture.bin",bus.ReadBytes(0x2001e000UL,40));
+        File.WriteAllBytes(prefix+".architecture.bin",bus.ReadBytes(0x2001e000UL,60));
         architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM instruction-cache probe executed; results require Rust grading");
     }

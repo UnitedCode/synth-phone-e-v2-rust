@@ -131,7 +131,7 @@ impl Host<'_> {
             &mut command,
             &self.directory.join(format!("{label}.host.log")),
         )?;
-        if fault != "architecture" {
+        if fault != "architecture" && fault != "runtime-fault" {
             grade::boot_evidence(&capture)?;
         }
         Ok(capture)
@@ -271,12 +271,31 @@ fn run(
     fs::write(directory.join("architecture-probe.bin"), probe::image())?;
     let probes = host.boot("architecture-probes", &tone, "architecture")?;
     probe::check(&probes)?;
-    for counter in ["instruction_fetch_reads", "instruction_cache_fills"] {
+    let broken_runtime = host.boot("runtime-cache-fault", &tone, "runtime-fault")?;
+    let error = probe::check(&broken_runtime)
+        .err()
+        .ok_or("Disabled runtime fetching was not caught")?
+        .to_string();
+    if !error.contains("ARM coherence result 10: expected 0x3, got 0x2") {
+        return Err(format!("Unexpected runtime negative-control failure: {error}").into());
+    }
+    fs::write(
+        grade::artifact(&broken_runtime, ".architecture-negative.txt"),
+        format!("disabled_runtime_fetch=caught\n{error}\n"),
+    )?;
+    for counter in [
+        "instruction_fetch_reads",
+        "instruction_cache_fills",
+        "runtime_retranslations",
+    ] {
         if grade::counter(&grade::artifact(&probes, ".memory.txt"), counter)? == 0 {
             return Err(format!("ARM probe did not exercise {counter}").into());
         }
     }
     let report = grade::check(&baseline)?;
+    if grade::counter(&grade::artifact(&baseline, ".dma.txt"), "contested_grants")? == 0 {
+        return Err("Production boot did not exercise simultaneous DMA arbitration".into());
+    }
     if board == Board::Rev5 && !ideal_line {
         grade::check(&host.boot("codec-line", &tone, "ideal-line")?)?;
     }
@@ -325,7 +344,7 @@ fn run(
     if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
         return Err("Firmware changed during the run".into());
     }
-    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nARM generated-code coherence: CPU and DMA stale-instruction controls passed\nSDRAM timing: programmed lower bounds saved; CPU stalls/contention unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nFlash/runtime cache behavior, calibrated CPU timing and complete analog/codec response remain unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
+    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nDMA ordering: single-beat priority arbitration; no cycle-accurate bus stalls\nSDRAM timing: programmed lower bounds saved; CPU stalls/contention unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, calibrated CPU timing, bus stalls and complete codec response remain unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())

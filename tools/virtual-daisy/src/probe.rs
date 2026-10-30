@@ -31,9 +31,22 @@ pub fn image() -> Vec<u8> {
     code.extend([0x2042, 0x61a8]); // Phase-one sentinel at results+24.
     code.extend([0x6be8, 0x2800, 0xd0fc]); // Poll DTCM mailbox at results+60.
     result(&mut code, 7); // DMA changed RAM: I-cache must still return 2.
+                          // Two other lines in the same two-way set, one flash and one RAM.
+                          // This exercises the declared deterministic replacement policy, not a claim
+                          // that silicon chooses the same victim sequence.
+    load(&mut code, &mut literals, 4, 0x0801e001);
+    result(&mut code, 8);
+    load(&mut code, &mut literals, 4, 0x24042001);
+    result(&mut code, 9);
+    load(&mut code, &mut literals, 4, 0x24040001);
+    result(&mut code, 10); // The old translated block must refetch and return 3.
     maintain(&mut code, &mut literals, 0xe000ef50);
-    result(&mut code, 8); // ICIALLU exposes DMA's new instruction, returning 3.
-    code.extend([0x2043, 0x6268, 0xe7fe]); // Final sentinel at results+36.
+    result(&mut code, 11);
+    load(&mut code, &mut literals, 6, 0x51043100);
+    code.extend([0x200f, 0x6030, 0x6830, 0x6368]); // CPU read QoS -> results+52.
+    load(&mut code, &mut literals, 6, 0x51043108);
+    code.extend([0x2001, 0x6030, 0x6830, 0x63a8]); // Read issue override -> results+56.
+    code.extend([0x2043, 0x6328, 0xe7fe]); // Final sentinel at results+48.
     if !code.len().is_multiple_of(2) {
         code.push(0xbf00);
     }
@@ -47,10 +60,14 @@ pub fn image() -> Vec<u8> {
 }
 
 pub fn check(prefix: &std::path::Path) -> super::Result<()> {
+    let report = super::grade::artifact(prefix, ".architecture.txt");
+    if report.exists() {
+        std::fs::remove_file(&report)?;
+    }
     let data = std::fs::read(super::grade::artifact(prefix, ".architecture.bin"))?;
     // Architectural outcomes, checked against processor-written public memory.
-    let expected = [1, 0x47702002, 1, 1, 1, 2, 0x42, 2, 3, 0x43];
-    if data.len() != 40 {
+    let expected = [1, 0x47702002, 1, 1, 1, 2, 0x42, 2, 9, 8, 3, 3, 0x43, 15, 1];
+    if data.len() != 60 {
         return Err("Truncated ARM probe results".into());
     }
     for (i, (bytes, expected)) in data.as_chunks::<4>().0.iter().zip(expected).enumerate() {
@@ -62,6 +79,6 @@ pub fn check(prefix: &std::path::Path) -> super::Result<()> {
             .into());
         }
     }
-    std::fs::write(super::grade::artifact(prefix,".architecture.txt"),"arm_generated_code_coherence=passed\narm_data_and_instruction_views=distinct\ndirty_code_negative_control=caught\nuncleaned_code_negative_control=caught\ndma_code_negative_control=caught\n")?;
+    std::fs::write(super::grade::artifact(prefix,".architecture.txt"),"arm_generated_code_coherence=passed\narm_data_and_instruction_views=distinct\ndirty_code_negative_control=caught\nuncleaned_code_negative_control=caught\ndma_code_negative_control=caught\nflash_execution=passed\nmixed_flash_ram_conflict_eviction=passed\nreused_translation_refetch=passed\neviction_victim_sequence=EMULATOR_POLICY_ONLY\n")?;
     Ok(())
 }

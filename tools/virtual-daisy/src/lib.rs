@@ -20,10 +20,11 @@ pub struct Peripheral {
     qspi: qspi::Qspi,
     gpio: gpio::Gpio,
     codec_reset_high: bool,
-    memory: memory::SystemMemory,
+    memory: std::sync::Mutex<memory::SystemMemory>,
     clock: clock::ClockTree,
     line_stage: codec::LineStage,
     passband_delay: codec::PassbandDelay,
+    axi: bus::Axi,
 }
 
 impl Peripheral {
@@ -98,19 +99,21 @@ impl Peripheral {
             qspi: qspi::Qspi::default(),
             gpio: gpio::Gpio::default(),
             codec_reset_high: false,
-            memory: memory::SystemMemory::default(),
+            memory: std::sync::Mutex::new(memory::SystemMemory::default()),
             clock: clock::ClockTree::default(),
             line_stage: codec::LineStage::default(),
             passband_delay: codec::PassbandDelay::default(),
+            axi: bus::Axi::default(),
         };
         result.reset();
         result
     }
     pub fn reset(&mut self) {
-        self.memory.reset_registers();
+        self.memory.lock().unwrap().reset_registers();
         self.clock = clock::ClockTree::default();
         self.line_stage = codec::LineStage::default();
         self.passband_delay = codec::PassbandDelay::default();
+        self.axi = bus::Axi::default();
         self.registers.clear();
         self.dma = dma::Dma::default();
         self.qspi = qspi::Qspi::default();
@@ -210,8 +213,9 @@ impl Peripheral {
             8 => self.qspi.read(offset, 4),
             9 if offset == 0x100 => Ok(if self.codec_reset_high { 3 } else { 0 }),
             10 if offset == 0x100 => Ok(3), // Rev7 hardware mode, fixed LJ24, no I2C.
-            12 => self.memory.read_scb(offset),
+            12 => self.memory.lock().unwrap().read_scb(offset),
             13 => Ok(self.clock.read(offset)),
+            15 => self.axi.read(offset),
             100..=110 => self.gpio.read(offset),
             _ => Err("unsupported peripheral"),
         }
@@ -250,8 +254,11 @@ impl Peripheral {
         Ok(())
     }
     pub fn write(&mut self, offset: u64, value: u32) -> Result<(), &'static str> {
+        if self.kind == 15 {
+            return self.axi.write(offset, value);
+        }
         if self.kind == 12 {
-            return self.memory.write_scb(offset, value);
+            return self.memory.lock().unwrap().write_scb(offset, value);
         }
         if self.kind == 6 {
             return self.dma.write(offset, value);
@@ -313,11 +320,23 @@ pub unsafe extern "C" fn daisy_memory_read(
     cpu: u32,
 ) -> u64 {
     let result = if cpu == 2 {
-        (*state).memory.read_instruction(address, width as usize)
+        (*state)
+            .memory
+            .lock()
+            .unwrap()
+            .decode_instruction(address, width as usize)
     } else if cpu != 0 {
-        (*state).memory.read_cpu(address, width as usize)
+        (*state)
+            .memory
+            .lock()
+            .unwrap()
+            .read_cpu(address, width as usize)
     } else {
-        (*state).memory.read_dma(address, width as usize)
+        (*state)
+            .memory
+            .lock()
+            .unwrap()
+            .read_dma(address, width as usize)
     };
     match result {
         Ok(value) => u64::from(value),
@@ -336,13 +355,47 @@ pub unsafe extern "C" fn daisy_memory_write(
     cpu: u32,
 ) -> u32 {
     u32::from(
-        if cpu != 0 {
-            (*state).memory.write_cpu(address, width as usize, value)
+        if cpu == 2 {
+            (*state)
+                .memory
+                .lock()
+                .unwrap()
+                .load_flash(address, width as usize, value)
+        } else if cpu != 0 {
+            (*state)
+                .memory
+                .lock()
+                .unwrap()
+                .write_cpu(address, width as usize, value)
         } else {
-            (*state).memory.write_dma(address, width as usize, value)
+            (*state)
+                .memory
+                .lock()
+                .unwrap()
+                .write_dma(address, width as usize, value)
         }
         .is_err(),
     )
+}
+
+/// # Safety
+/// Live, serialized architecture state. Called before a translated block runs.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_runtime_fetch(
+    state: *mut Peripheral,
+    address: u32,
+    count: u32,
+) -> u32 {
+    match (*state)
+        .memory
+        .lock()
+        .unwrap()
+        .runtime_fetch(address, count)
+    {
+        Ok(false) => 0,
+        Ok(true) => 1,
+        Err(_) => 2,
+    }
 }
 
 #[no_mangle]
@@ -434,7 +487,7 @@ pub unsafe extern "C" fn daisy_memory_save(
     let Ok(path) = std::ffi::CStr::from_ptr(path).to_str() else {
         return 1;
     };
-    u32::from(std::fs::write(path, (*state).memory.stats()).is_err())
+    u32::from(std::fs::write(path, (*state).memory.lock().unwrap().stats()).is_err())
 }
 
 /// # Safety
@@ -451,6 +504,30 @@ pub unsafe extern "C" fn daisy_fmc_save(
         let rate = (*clock).clock.fmc_rate()?.ok_or("FMC clock disabled")?;
         let timing = bus::SdramTiming::decode(reg(0x140), reg(0x148), reg(0x154), rate)?;
         std::fs::write(path, timing.report())?;
+        Ok(())
+    })();
+    u32::from(result.is_err())
+}
+
+/// # Safety
+/// Live serialized RCC state and NUL-terminated UTF-8 destination path.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_flash_bus_save(
+    clock: *mut Peripheral,
+    acr: u32,
+    path: *const std::ffi::c_char,
+) -> u32 {
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::ffi::CStr::from_ptr(path).to_str()?;
+        let rate = (*clock)
+            .clock
+            .domain_rate(1)?
+            .ok_or("flash interface clock stopped")?;
+        let latency = acr & 15;
+        let _pipeline = bus::FlashReadPipeline::new(latency)?;
+        let ns = (u128::from(latency + 1) * u128::from(rate.denominator) * 1_000_000_000)
+            .div_ceil(u128::from(rate.numerator));
+        std::fs::write(path,format!("scope=PROGRAMMED_FLASH_READ_LOWER_BOUND\nflash_acr={acr}\nflash_interface_hz={}\nlatency_wait_states={latency}\nnonvolatile_word_service_clocks={}\nnonvolatile_word_service_min_ns={ns}\nread_buffer_bytes=32\nactive_read_commands=1\nwaiting_read_commands=2\ncommand_model=STANDALONE_TESTED\ncpu_stalls_and_queue_arrival_times=NOT_CONNECTED\n",rate.hz(),latency+1))?;
         Ok(())
     })();
     u32::from(result.is_err())
@@ -513,6 +590,29 @@ pub unsafe extern "C" fn daisy_dma_request(state: *mut Peripheral, channel: u32)
 /// `state` must be live with serialized access.
 pub unsafe extern "C" fn daisy_dma_irqs(state: *mut Peripheral) -> u32 {
     (*state).dma.irqs()
+}
+
+/// # Safety
+/// Live and exclusively accessed DMA state, with simultaneous pending requests.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_dma_grant(state: *mut Peripheral, requests: u32) -> u32 {
+    (*state)
+        .dma
+        .arbitrate(requests)
+        .map_or(u32::MAX, |i| i as u32)
+}
+
+/// # Safety
+/// Live, serialized DMA state and NUL-terminated UTF-8 path.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_dma_save(
+    state: *mut Peripheral,
+    path: *const std::ffi::c_char,
+) -> u32 {
+    let Ok(path) = std::ffi::CStr::from_ptr(path).to_str() else {
+        return 1;
+    };
+    u32::from(std::fs::write(path, (*state).dma.stats()).is_err())
 }
 #[no_mangle]
 /// # Safety

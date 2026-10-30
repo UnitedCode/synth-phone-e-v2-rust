@@ -129,6 +129,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong Request(IntPtr state, uint channel);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint Irqs(IntPtr state);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint Grant(IntPtr state,uint pending);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveDma(IntPtr state,[MarshalAs(UnmanagedType.LPUTF8Str)] string path);
         public DaisyDma(IMachine machine, string libraryPath, DaisyArchitecture architecture)
         {
             this.machine = machine;
@@ -137,6 +139,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             var library = NativeLibrary.Load(libraryPath);
             request = Marshal.GetDelegateForFunctionPointer<Request>(NativeLibrary.GetExport(library, "daisy_dma_request"));
             irqs = Marshal.GetDelegateForFunctionPointer<Irqs>(NativeLibrary.GetExport(library, "daisy_dma_irqs"));
+            grant=Marshal.GetDelegateForFunctionPointer<Grant>(NativeLibrary.GetExport(library,"daisy_dma_grant"));
+            save=Marshal.GetDelegateForFunctionPointer<SaveDma>(NativeLibrary.GetExport(library,"daisy_dma_save"));
             var connections = new Dictionary<int, IGPIO>();
             for(int i = 0; i < 8; i++) connections[i] = new GPIO();
             Connections = connections;
@@ -146,9 +150,19 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void OnGPIO(int number, bool value)
         {
             if(!value) return;
+            if(number<0 || number>=8) throw new InvalidOperationException("Invalid DMA stream request");
             lock(sync)
             {
-                var transfer = request(native.State, (uint)number);
+                if(collecting) { pending|=1U<<number; return; }
+                Transfer((uint)number);
+            }
+        }
+        public void BeginBatch() { lock(sync) { collecting=true; pending=0; } }
+        public bool EndBatch() { lock(sync) { collecting=false; uint winner=grant(native.State,pending); if(winner==uint.MaxValue) return false; Transfer(winner); return true; } }
+        public void Save(string path) { lock(sync) { if(save(native.State,path)!=0) throw new InvalidOperationException("Could not save DMA arbitration statistics"); } }
+        private void Transfer(uint number)
+        {
+                var transfer = request(native.State, number);
                 if(transfer == ulong.MaxValue) throw new InvalidOperationException("Invalid DMA audio request");
                 if(transfer != 0) {
                     uint source = (uint)(transfer >> 32), destination = (uint)transfer;
@@ -156,10 +170,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                     if(architecture.Contains(destination)) architecture.Write(destination, 4, word, false); else machine.SystemBus.WriteDoubleWord(destination, word);
                 }
                 UpdateIrqs();
-            }
         }
         private void UpdateIrqs() { uint mask = irqs(native.State); for(int i = 0; i < 8; i++) Connections[i].Set((mask & (1U << i)) != 0); }
-        public void Reset() { lock(sync) { native.Reset(); UpdateIrqs(); } }
+        public void Reset() { lock(sync) { native.Reset(); pending=0; collecting=false; UpdateIrqs(); } }
         public long Size { get { return 0x400; } }
         public IReadOnlyDictionary<int, IGPIO> Connections { get; }
         private readonly object sync = new object();
@@ -168,6 +181,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly DaisyNative native;
         private readonly Request request;
         private readonly Irqs irqs;
+        private readonly Grant grant;
+        private readonly SaveDma save;
+        private bool collecting;
+        private uint pending;
     }
 
     public class DaisySai : IDoubleWordPeripheral, IKnownSize, IDisposable
@@ -179,11 +196,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint Requests(IntPtr state);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void Input(IntPtr state, float[] samples, UIntPtr frames);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveNative(IntPtr state, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, uint sampleRate);
-        public DaisySai(IMachine machine, string libraryPath, DaisyI2c codec, DaisyRcc rcc, uint rxChannel)
+        public DaisySai(IMachine machine, string libraryPath, DaisyI2c codec, DaisyRcc rcc, uint rxChannel,DaisyDma dma)
         {
             this.codec = codec;
             this.rcc = rcc;
             this.rxChannel = rxChannel;
+            this.dma=dma;
             native = new DaisyNative(libraryPath, 7, 0x400);
             var library = NativeLibrary.Load(libraryPath);
             var configure = Marshal.GetDelegateForFunctionPointer<ConfigureNative>(NativeLibrary.GetExport(library, "daisy_sai_configure"));
@@ -211,8 +229,16 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 for(uint frame=0;frame<frames;frame++) { if(codec.WithState(state=>codecTick(native.State,state,IdealLineInput ? 1U:0U))!=0) throw new InvalidOperationException("Unsupported codec audio path"); PumpRequests(); }
             }
         }
-        private void PumpRequests() { Pump(rxChannel == 0 ? DmaA : DmaB, 1U << (int)rxChannel, 2); Pump(rxChannel == 0 ? DmaB : DmaA, 1U << (int)(1 - rxChannel), 8); }
-        private void Pump(GPIO gpio, uint mask, int words) { for(int i = 0; i < words && (requests(native.State) & mask) != 0; i++) { gpio.Set(true); gpio.Set(false); } }
+        private void PumpRequests() {
+            for(int i=0;i<16;i++) {
+                uint mask=requests(native.State);
+                if(mask==0) return;
+                dma.BeginBatch();
+                if((mask&1)!=0) { DmaA.Set(true); DmaA.Set(false); }
+                if((mask&2)!=0) { DmaB.Set(true); DmaB.Set(false); }
+                if(!dma.EndBatch()) return;
+            }
+        }
         public void LoadInput(float[] samples) { lock(sync) input(native.State, samples, (UIntPtr)(samples.Length / 2)); }
         public void Save(string path) { uint rate=rcc.Rate(cr1,frcr); lock(sync) { if(save(native.State,path,rate)!=0) throw new IOException("Could not save virtual SAI output"); } rcc.Save(cr1,frcr,path+".clock.txt"); codec.Save(path+".codec.txt",IdealLineInput,rcc.ExactRate(cr1,frcr)); }
         public void Reset() { lock(sync) { native.Reset(); cr1=0; frcr=0; } }
@@ -227,6 +253,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly DaisyI2c codec;
         private readonly DaisyRcc rcc;
         private readonly uint rxChannel;
+        private readonly DaisyDma dma;
         private readonly IManagedThread clock;
         private readonly CodecTickNative codecTick;
         private readonly RateNative setRate;

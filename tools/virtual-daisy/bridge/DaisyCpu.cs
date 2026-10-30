@@ -12,7 +12,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     public sealed class DaisyCortexM : CortexM, IPeripheralWithTransactionState
     {
         public DaisyCortexM(string cpuType,IMachine machine,NVIC nvic,DaisyArchitecture architecture,uint? numberOfMPURegions=null)
-            :base(cpuType,machine,nvic,numberOfMPURegions:numberOfMPURegions) { architecture.AttachCPU(this); }
+            :base(cpuType,machine,nvic,numberOfMPURegions:numberOfMPURegions) {
+            architecture.AttachCPU(this);
+            tlibDaisySetRuntimeFetch(architecture.NativeState,architecture.RuntimeFetchPointer);
+        }
         public new bool TryConvertUlongToStateObj(ulong? raw,out IContextState state)
         {
             state=null;
@@ -29,9 +32,11 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         }
         public sealed class FetchState : ContextState { public bool InstructionFetch; }
         public uint FetchTagVersion => tlibDaisyFetchTagVersion();
+        public void DisableRuntimeFetching() { tlibDaisySetRuntimeFetch(IntPtr.Zero,IntPtr.Zero); }
         // Assigned by Renode's native binder, as required by its import API.
 #pragma warning disable CS0649
         [Import] private readonly Func<uint> tlibDaisyFetchTagVersion;
+        [Import] private readonly Action<IntPtr,IntPtr> tlibDaisySetRuntimeFetch;
 #pragma warning restore CS0649
     }
 }

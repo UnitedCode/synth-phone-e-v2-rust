@@ -1,6 +1,30 @@
 use virtual_daisy::{daisy_dma_irqs, daisy_dma_request, Peripheral};
 
 #[test]
+fn simultaneous_dma_requests_obey_software_priority_then_stream_number() {
+    let mut dma = Peripheral::new(6);
+    for stream in [0_u64, 1, 2] {
+        let offset = 0x10 + stream * 0x18;
+        dma.write(offset + 4, 4).unwrap();
+        dma.write(offset + 8, 0x40015820).unwrap();
+        dma.write(offset + 12, 0x30000000).unwrap();
+        dma.write(
+            offset,
+            1 | (2 << 11) | (2 << 13) | if stream == 2 { 3 << 16 } else { 0 },
+        )
+        .unwrap();
+    }
+    assert_eq!(unsafe { virtual_daisy::daisy_dma_grant(&mut dma, 7) }, 2);
+    assert_eq!(unsafe { virtual_daisy::daisy_dma_grant(&mut dma, 3) }, 0);
+    dma.write(0x10, 0).unwrap();
+    assert_eq!(unsafe { virtual_daisy::daisy_dma_grant(&mut dma, 3) }, 1);
+    assert_eq!(
+        unsafe { virtual_daisy::daisy_dma_grant(&mut dma, 0) },
+        u32::MAX
+    );
+}
+
+#[test]
 fn dma1_cannot_transfer_into_dtcm_and_reports_a_transfer_error_irq() {
     let mut dma = Peripheral::new(6);
     dma.write(0x14, 4).unwrap();

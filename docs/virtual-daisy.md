@@ -21,8 +21,10 @@ Install Rust's `thumbv7em-none-eabihf` target, a .NET 8 SDK, and the official
 prebuilt Renode 1.17.0 release for Linux x86-64 or macOS ARM64. CMake and a C
 compiler are also required for the pinned native instruction-fetch adapter.
 The runner downloads SHA256-verified Renode infrastructure and tlib source
-archives and builds a private ARM-M core. Its only behavior change tags instruction
-fetches separately from data loads. Register/cache behavior and probe generation/
+archives and builds a private ARM-M core. The adapter tags instruction
+fetches separately from data loads and calls Rust before each translated block
+executes. Stale decoded code is invalidated at the engine's existing safe restart
+point. Register/cache behavior and probe generation/
 grading are Rust; the existing engine's required C interface and managed Renode
 adapters provide dispatch. No Python build/helper is used. The installed
 Renode runtime is unchanged. Do not launch
@@ -118,7 +120,7 @@ Faults are MMIO writes after startup; the ELF is never patched. Every fault run
 must still complete startup and produce a valid capture. Unit
 tests also check that the grader catches bypass, clipping, NaNs and missing audio.
 Rev5 also boots through the WM8731 ideal line stage and checks its audio output.
-Each run also executes a separate generated-code probe on the actual M7 engine.
+Each run also executes a separate generated-code probe on the emulated M7 CPU.
 The ARM program writes a new instruction through the data cache, records stale
 return values when either clean or invalidate is omitted, and records the new
 value after DCCMVAU/ICIMVAU plus DSB/ISB. A second phase overwrites code through
@@ -159,11 +161,20 @@ the additional behavior needed by this firmware:
   32-byte lines, MPU memory attributes/priority/subregions, write-through and
   write-back policies, MVA and set/way clean/invalidate operations. DMA bypasses
   both the CPU cache and CPU MPU permissions. CMSIS can enumerate all sets/ways.
-- A separate 16KiB, two-way, 32-byte instruction-cache view for executable system
-  RAM. Fetches never forward dirty data-cache bytes. ICIALLU/ICIMVAU update that
+- A separate 16KiB, two-way, 32-byte instruction-cache view shared by user flash
+  and executable system RAM. Flash literal loads use the separate data cache.
+  Fetches never forward dirty data-cache bytes. ICIALLU/ICIMVAU update that
   view and invalidate Renode translations so the CPU actually observes the change.
   Shared/noncacheable memory bypasses caching; execute-never memory is checked.
   CSSELR's level bits are read-only zero and CCSIDR reports the documented encoding.
+- Runtime block-entry fetching, including reused translations and flash/RAM
+  conflict eviction. Decoding peeks at bytes without allocating cache lines;
+  execution fetches them. A changed cache view forces retranslation before the
+  stale body can run. This is a functional block-granular model.
+- Simultaneous single-beat DMA requests are collected through DMAMUX, then
+  arbitrated by software priority and stream number. FIFO request levels are
+  checked again after each word; receive traffic no longer gets unconditional
+  priority merely because the host serviced it first.
 - Daisy's 16MHz HSE, rational PLL/SAI clock calculation, fractional shadow-register
   latching, PLL write protection, SAI divider/oversampling selection, and clock
   gates. APB timer kernels and SysTick follow their prescalers. DWT CYCCNT follows
@@ -194,7 +205,9 @@ ratios, de-emphasis, microphone and analog-bypass paths fail explicitly.
 The memory map constrains internal flash to 128 KiB and SDRAM to 64 MiB; it
 retains the actual SRAM/DTCM regions. Generic H743 extra flash and huge unused FMC
 windows are removed. The unused second flash-controller backing object is not
-mapped onto the bus. QSPI memory-mapped reads, general flash read/program/erase,
+mapped onto the bus. Unloaded user flash reads as erased ones and survives CPU
+reset. CPU programming stores, erase and option commands explicitly fail because
+those operations are not implemented. QSPI memory-mapped reads,
 Seed2 DFM/Seed3 codecs, USB audio, MIDI input injection, full ADC simulation,
 and complete alternate-function electrical behavior are not implemented. Unknown
 Rust-model registers/commands throw instead of returning invented success.
@@ -204,14 +217,15 @@ pacing. The SAI phase accumulator preserves fractional clock rate over time,
 but events have 1-microsecond resolution. CYCCNT counts core-clock periods of
 virtual elapsed time; it cannot measure true M7 instruction costs. PLL lock,
 oscillator tolerance, flash/SDRAM wait states, write buffers, SDRAM refresh and
-DMA/bus contention remain unmodeled. Data-cache replacement uses deterministic
+DMA/bus stall timing remains unmodeled. Data-cache replacement uses deterministic
 round-robin, not the silicon's replacement sequence, and the M7 dynamic
 read-allocation optimization is not reproduced. Cache barriers are effectively
-synchronous in this model. RAM instruction-cache coherence is tested, but native
-flash fetches still follow Renode's ROM path. RAM cache lookups occur during
-translation; reuse of a translated block is not a silicon cache lookup. Mixed
-flash/RAM eviction, pipeline behavior when barriers are missing, speculative
-fetches, full MPU fault semantics and general peripheral kernel-clock muxes are
+synchronous in this model. Flash and RAM are fetched through Rust when translated
+blocks execute, including reuse. Lines for a linear block are fetched at entry;
+this does not reproduce individual pipeline fetch cycles, speculative paths or
+the exact victim sequence of silicon. Fetch statistics describe block-entry
+opportunities, not a retired-instruction trace. Pipeline behavior when barriers
+are missing, speculative fetches, full MPU fault semantics and general peripheral kernel-clock muxes are
 not validated. Passing cannot
 certify deadline compliance, CPU headroom or complete cache correctness.
 
@@ -222,6 +236,21 @@ register quiet time. Field encodings include the specified plus-one timing
 conversion; refresh periods use COUNT directly, without adding the software's
 20-cycle safety margin. These bounds do not impose guessed stalls on the CPU
 or claim to model AXI arbitration, FMC queues, row state or SDRAM retention.
+
+`*.flash.txt` reports FLASH_ACR's programmed wait states and the flash-interface
+clock. The standalone Rust flash command model covers one active read plus two
+waiting reads, backpressure at capacity, and reuse of the current 256-bit data
+buffer. Its completion schedule is an optimistic service bound; AXI beat timing,
+programming, ECC and CPU stall injection are not connected to that model.
+
+The AXI GPV's six initiators expose read/write QoS and issuing overrides. The
+standalone arbitration model implements higher QoS first, least-recently-served
+equal-priority requests per target/channel, and Table4's outstanding limits.
+Callers supply pending transactions and completions; the firmware runner does
+not infer an AXI timeline from instruction pacing. Reset ties use a deterministic
+port order because the initial hardware ranking is not specified.
+`*.dma.txt` separately records live DMA grants and simultaneous-request contests.
+Neither these ordering models nor the flash queue certify whole-system bus stalls.
 
 `tools/virtual-daisy/known-warnings.txt` contains exact observed warnings for these
 I2C timing fields, ADC calibration tags, UART fields and flash latency.
@@ -255,6 +284,11 @@ rates and the programmed PLL/SAI fields. CI uploads these on success and failure
 the ARM test program, processor-written outcomes and Rust grade. CPU builds are
 cached under the output's `cpu-core/`; `VIRTUAL_DAISY_CORE_CACHE` can select a
 shared cache directory. Archive hashes are verified on every run.
+The ARM probe executes flash and RAM functions in the same cache set. Its
+conflict-victim expectation tests the declared replacement approximation.
+`runtime-cache-fault.architecture-negative.txt` must confirm that disabling the
+runtime hook produces the wrong ARM return value. Exceptions and timeouts cannot
+count as that negative control passing.
 Replay the WAVs to judge
 timbre; objective pitch gates are only part of listening quality.
 

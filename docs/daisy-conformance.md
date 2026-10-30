@@ -148,9 +148,9 @@ Dirty CPU code stores, invalidation without cleaning, cleaning without invalidat
 and external DMA writes all have independent stale-instruction checks. The passing
 control uses the prescribed clean/invalidate/DSB/ISB sequence. The same register
 tables corrected the prior I-cache CCSIDR value to `0xf01fe009` and made CSSELR
-LEVEL RAZ/WI. This is architectural RAM coherence coverage; flash cache lookups,
-instruction prefetch, full runtime eviction and missing-barrier hazards remain
-unvalidated. A translation-cache flush is implementation plumbing, not an
+LEVEL RAZ/WI. The subsequent flash/runtime pass below extends this coverage.
+Instruction prefetch and missing-barrier hazards remain unvalidated.
+A translation-cache flush is implementation plumbing, not an
 architectural I-cache invalidation: Rust retains stale bytes until maintenance.
 
 The fetch/data distinction is a minimal adapter in the pinned native engine,
@@ -185,12 +185,60 @@ remain incomplete; a pure delay is not claimed to reproduce a converter's impuls
 or stop-band response. Reconstructing those responses needs more manufacturer
 detail or independent measurements, not an arbitrary filter fitted to a diagram.
 
+### Flash, runtime fetching and bus admission
+
+User flash now shares the Rust cache/memory path with RAM, including separate
+instruction and data views, erased contents, reset persistence and the H750's
+128KiB boundary. Flash programming/erase/options fail explicitly; the upstream
+controller cannot silently mutate a disconnected backing object.
+
+The native adapter calls Rust at the engine's pre-execution block check. Translation
+only peeks at the current instruction view; allocation and conflict eviction occur
+when a block executes. Reused blocks are checked too, and stale decoded bytes
+trigger the engine's own invalidate/restart path before execution. The ARM probe
+executes conflicting flash and RAM functions and detects stale translations.
+Disabling runtime fetching is a required negative control: the grader must observe
+return value2 where the functioning model returns3. All cache decisions, comparison
+plans and grading remain Rust; shared memory is protected by a Rust mutex across
+the native runtime callback and managed DMA accesses.
+
+This still uses block-granular fetches and deterministic round-robin victims.
+Fetching a block's lines at entry is not a reconstruction of M7 prefetch,
+speculation, interrupted-block fetches or pipeline overlap. The conflict test's
+specific victim sequence verifies the approximation, not a silicon guarantee.
+
+[RM0433 Rev8 sections2.2.3/2.2.4 and15.3.6](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743-753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+define the admission and arbitration rules now tested in Rust. DMA's direct
+single-beat audio requests are batched through the actual DMAMUX wiring, then
+granted by PL priority with lower stream number breaking ties. Runtime reports
+count contested grants; memory/peripheral port timing remains atomic.
+
+The AXI GPV exposes independent read/write QoS and issuing overrides for six
+initiators. The standalone model orders supplied concurrent requests by QoS,
+then least-recently-served priority independently per target and channel.
+Table4's issuing limits apply admission backpressure until completion; setting
+an override limits new issues to one without cancelling existing transactions.
+The initial equal-age port order is unspecified and remains a deterministic
+model choice. RM0433's prose and register tables specify QoS reset0; the pinned
+Rust PAC metadata says4. This model follows RM0433 and records the discrepancy
+for an eventual reset-register capture, rather than treating the PAC as proof.
+
+RM0433 section4.3.8 and Figure10 describe a flash bank's active command, two
+waiting reads and 256-bit read buffer. A standalone earliest-service model now
+tests queue-full backpressure, ordered completion and consecutive-word reuse.
+FLASH_ACR LATENCY plus one interface cycle supplies its nonvolatile-read service
+bound; per-run reports retain the actual register and clock. It does not model
+AXI handshakes, ECC, programming conflicts or pipeline overlap. Flash command
+arrival times and AXI admission/grants are not yet coupled to CPU/DMA stalls.
+That coupling still requires implementation work; these tests do not imply it
+is blocked solely on real-board traces.
+
 | Area | Current evidence | Required next evidence/work |
 | --- | --- | --- |
 | Firmware boot and selected audio path | Executed in simulation | Same ELF on an identified physical revision |
 | Serial data, reset and control behavior | Source-backed cases | Captured control transactions and SAI words/edges, including reset and faults |
 | Interrupt/buffer ownership | Functional DMA and IRQ tests | Hardware DMA HT/TC, NVIC and task traces with timestamps and simultaneous UI/MIDI load |
-| Performance and deadlines | Functional data/instruction-cache RAM coherency, nominal instruction pacing, programmed SDRAM timing bounds | Flash/runtime cache lookups, silicon allocation/replacement, calibrated instruction/flash/SDRAM stalls and contention |
+| Performance and deadlines | Functional flash/RAM Harvard caches and block-entry runtime refetch; DMA priority arbitration; standalone AXI admission/grants and flash read queue; SDRAM timing bounds | Pipeline/speculation and silicon victim policy, coupling of queues/arbitration to CPU/DMA stalls, calibrated instruction/flash/SDRAM costs |
 | Clock rates and drift | RCC/PLL/SAI rational derivation, 1µs event grid, DWT/core and timer prescalers | PLL/oscillator lock and jitter, clock-domain crossing delays, oscillator tolerance, independent frequency measurements |
 | Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal and passband-delay stage | Full ADC/DAC filters, internal rounding and startup behavior, independent impulse/frequency responses per codec |
 | Analog sound | No analog model | Calibrated gain, impedance, headroom, clipping, noise and distortion measurements |

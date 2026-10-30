@@ -13,7 +13,8 @@ const INFRA_SHA: &str = "8353496d3489e3801a45fd79b9281040e9d6b00f0c1615a5e77e995
 const TLIB_SHA: &str = "8db4d1fe0a316eec5dcae83bd4d2757b5172332493d6fdecfd9d4b81cb7a77a3";
 const TAG: &str =
     "    cpustate |= (READ_ACCESS_TYPE == ACCESS_INST_FETCH) ? (UINT64_C(1) << 63) : 0;";
-const MARKER:&str="\nuint32_t tlib_daisy_fetch_tag_version(void) { return 1; }\nEXC_INT_0(uint32_t, tlib_daisy_fetch_tag_version)\n";
+const MARKER:&str="\nuint32_t tlib_daisy_fetch_tag_version(void) { return 3; }\nEXC_INT_0(uint32_t, tlib_daisy_fetch_tag_version)\nvoid *daisy_fetch_state;\nuint32_t (*daisy_fetch_runtime)(void *, uint32_t, uint32_t);\nvoid tlib_daisy_set_runtime_fetch(void *state, void *callback) { daisy_fetch_state = state; daisy_fetch_runtime = callback; }\nEXC_VOID_2(tlib_daisy_set_runtime_fetch, void *, state, void *, callback)\n";
+const RUNTIME:&str="    if(cpu->tb_restart_request == 0 && daisy_fetch_runtime) {\n        uint32_t result = daisy_fetch_runtime(daisy_fetch_state, cpu->current_tb->pc, cpu->current_tb->size);\n        if(result > 1) { tlib_abort(\"Invalid Daisy runtime instruction fetch\"); }\n        if(result == 1) { tb_phys_invalidate(cpu->current_tb, -1); cpu->tb_restart_request = 1; }\n    }\n";
 
 fn archive(cache: &Path, name: &str, url: &str, sha: &str) -> Result<PathBuf> {
     let path = cache.join(name);
@@ -55,7 +56,7 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
     let source = cache.join("source");
     let source_stamp = format!(
         "{:x}",
-        Sha256::digest(format!("{INFRA}{TLIB}{TAG}{MARKER}"))
+        Sha256::digest(format!("{INFRA}{TLIB}{TAG}{MARKER}{RUNTIME}"))
     );
     if fs::read_to_string(source.join(".fetch-tag-v1"))
         .ok()
@@ -98,6 +99,13 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
         let mut code = fs::read_to_string(&exports)?;
         code.push_str(MARKER);
         fs::write(exports, code)?;
+        let helper = tlib_dir.join("helper.c");
+        let original = fs::read_to_string(&helper)?;
+        let needle = "    return cpu->tb_restart_request;";
+        if original.matches(needle).count() != 1 {
+            return Err("Pinned runtime fetch hook changed".into());
+        }
+        fs::write(helper,format!("extern void *daisy_fetch_state;\nextern unsigned int (*daisy_fetch_runtime)(void *, unsigned int, unsigned int);\n{}",original.replace(needle,&format!("{RUNTIME}{needle}"))))?;
         fs::write(source.join(".fetch-tag-v1"), &source_stamp)?;
     }
     let build = cache.join("build");
@@ -150,6 +158,6 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
     if !platform.join(rid).join("translate-arm-m-le.so").is_file() {
         return Err("Renode native platform directory missing".into());
     }
-    fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=1\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
+    fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=3\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
     Ok(())
 }
