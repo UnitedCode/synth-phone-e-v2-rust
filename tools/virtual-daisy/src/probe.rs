@@ -169,3 +169,180 @@ pub fn check_flash(prefix: &std::path::Path) -> super::Result<()> {
     std::fs::write(grade,"arm_flash_erase_and_program=passed\nflash_reads_wait_for_completion=passed\nprogrammed_instruction_cache_stays_stale_until_invalidation=passed\n")?;
     Ok(())
 }
+
+/// ITCM code checks writeback/DSB, a busy-flash SVC vector and a full SRAM
+/// frame/return. SVC is fixed at 0x3100 so its stacked return PC is independent.
+pub fn timing_image() -> Vec<u8> {
+    let mut code = Vec::<u16>::new();
+    let mut literals = Vec::<(usize, u16, u32)>::new();
+    fn load(code: &mut Vec<u16>, literals: &mut Vec<(usize, u16, u32)>, reg: u16, value: u32) {
+        literals.push((code.len(), reg, value));
+        code.push(0);
+    }
+    load(&mut code, &mut literals, 5, 0x2001c000);
+    load(&mut code, &mut literals, 4, 0x24040000);
+    code.extend([0x202a, 0x6020]);
+    load(&mut code, &mut literals, 6, 0xe000ef68);
+    code.extend([0x6034, 0xf3bf, 0x8f4f, 0x20ab, 0x6028]);
+    load(&mut code, &mut literals, 6, 0x52002000);
+    code.extend([0x2011, 0x6030]);
+    load(&mut code, &mut literals, 0, 0x45670123);
+    code.push(0x6070);
+    load(&mut code, &mut literals, 0, 0xcdef89ab);
+    code.push(0x6070);
+    code.extend([0x2032, 0x60f0]);
+    load(&mut code, &mut literals, 4, 0x0801e100);
+    code.push(0x202a);
+    for word in 0..8 {
+        code.push(0x6020 | (word << 6));
+    }
+    load(&mut code, &mut literals, 6, 0xe0001000);
+    code.extend([0x6870, 0x6068]);
+    load(&mut code, &mut literals, 0, 0x12345678);
+    code.extend([0x4686, 0x2063]);
+    assert!(code.len() < 128);
+    code.resize(128, 0xbf00);
+    code.extend([
+        0xdf00, 0x20ef, 0x61a8, 0xa800, 0x61e8, 0x4670, 0x62e8, 0x2055, 0x6228, 0xe7fe,
+    ]);
+    if !code.len().is_multiple_of(2) {
+        code.push(0xbf00);
+    }
+    for (index, reg, value) in literals {
+        let offset = code.len() * 2 - ((index * 2 + 4) & !3);
+        assert!(offset.is_multiple_of(4) && offset <= 1020);
+        code[index] = 0x4800 | (reg << 8) | (offset as u16 / 4);
+        code.extend([value as u16, (value >> 16) as u16]);
+    }
+    code.resize(0x400, 0xbf00); // Handler at ITCM 0x3800.
+    code.extend([
+        0x6870, 0x60a8, 0x9800, 0x60e8, 0xa800, 0x6128, 0x6968, 0x3001, 0x6168, 0x9806, 0x6268,
+        0x9805, 0x62a8, 0x4770,
+    ]);
+    code.into_iter().flat_map(u16::to_le_bytes).collect()
+}
+
+pub fn check_timing(prefix: &std::path::Path) -> super::Result<()> {
+    super::grade::execution_evidence(prefix)?;
+    let report = super::grade::artifact(prefix, ".timing.txt");
+    if report.exists() {
+        std::fs::remove_file(&report)?;
+    }
+    let early = std::fs::read(super::grade::artifact(prefix, ".timing-early.bin"))?;
+    let bytes = std::fs::read(super::grade::artifact(prefix, ".timing.bin"))?;
+    if early.len() != 4 || bytes.len() != 48 {
+        return Err("Truncated ARM timing probe".into());
+    }
+    let early = u32::from_le_bytes(early.as_slice().try_into()?);
+    if early != 0 {
+        return Err(format!("ARM writeback early marker: expected 0, got {early:#x}").into());
+    }
+    let values: Vec<u32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
+        .collect();
+    for (index, expected) in [
+        (0, 0xab),
+        (3, 99),
+        (4, 0x3001efe0),
+        (5, 1),
+        (6, 0xef),
+        (7, 0x3001f000),
+        (8, 0x55),
+        (9, 0x3102),
+        (10, 0x12345678),
+        (11, 0x12345678),
+    ] {
+        if values[index] != expected {
+            return Err(format!(
+                "ARM timing result {index}: expected {expected:#x}, got {:#x}",
+                values[index]
+            )
+            .into());
+        }
+    }
+    let cycles = values[2].wrapping_sub(values[1]);
+    let minimum = if std::env::var_os("VIRTUAL_DAISY_FLASH_MAXIMUM").is_some_and(|v| v == "1") {
+        12000
+    } else {
+        6000
+    };
+    if cycles < minimum {
+        return Err(format!(
+            "ARM exception entry started too soon: {cycles} DWT cycles, minimum {minimum}"
+        )
+        .into());
+    }
+    std::fs::write(report,format!("arm_writeback_dsb_wait=passed\narm_busy_flash_vector_wait=passed\narm_sram_exception_frame_and_return=passed\nexception_frame_count=1\nexception_wait_dwt_cycles={cycles}\ndwt_clock=HSI64_MHZ\ncycle_scope=FUNCTIONAL_SERVICE_SCENARIO\n"))?;
+    Ok(())
+}
+
+/// A normal flash load is waiting for NVM programming. An IRQ with a TCM
+/// vector/stack must preempt that wait, then the abandoned load must restart.
+pub fn interrupt_image() -> Vec<u8> {
+    let mut code = Vec::<u16>::new();
+    let mut literals = Vec::<(usize, u16, u32)>::new();
+    fn load(code: &mut Vec<u16>, literals: &mut Vec<(usize, u16, u32)>, reg: u16, value: u32) {
+        literals.push((code.len(), reg, value));
+        code.push(0);
+    }
+    load(&mut code, &mut literals, 5, 0x2001b000);
+    load(&mut code, &mut literals, 6, 0x52002000);
+    code.extend([0x2011, 0x6030]);
+    load(&mut code, &mut literals, 0, 0x45670123);
+    code.push(0x6070);
+    load(&mut code, &mut literals, 0, 0xcdef89ab);
+    code.push(0x6070);
+    code.extend([0x2032, 0x60f0]);
+    load(&mut code, &mut literals, 4, 0x0801e100);
+    code.push(0x202a);
+    for word in 0..8 {
+        code.push(0x6020 | (word << 6));
+    }
+    load(&mut code, &mut literals, 6, 0xe0001000);
+    code.extend([0x6820, 0x6028, 0x2055, 0x6068, 0xe7fe]);
+    if !code.len().is_multiple_of(2) {
+        code.push(0xbf00);
+    }
+    for (index, reg, value) in literals {
+        let offset = code.len() * 2 - ((index * 2 + 4) & !3);
+        assert!(offset.is_multiple_of(4) && offset <= 1020);
+        code[index] = 0x4800 | (reg << 8) | (offset as u16 / 4);
+        code.extend([value as u16, (value >> 16) as u16]);
+    }
+    code.resize(0x400, 0xbf00);
+    code.extend([
+        0x20ab, 0x60a8, 0x6870, 0x60e8, 0x6928, 0x3001, 0x6128, 0x4770,
+    ]);
+    code.into_iter().flat_map(u16::to_le_bytes).collect()
+}
+
+pub fn check_interrupt(prefix: &std::path::Path) -> super::Result<()> {
+    super::grade::execution_evidence(prefix)?;
+    let report = super::grade::artifact(prefix, ".interrupt.txt");
+    if report.exists() {
+        std::fs::remove_file(&report)?;
+    }
+    let early = std::fs::read(super::grade::artifact(prefix, ".interrupt-early.bin"))?;
+    let data = std::fs::read(super::grade::artifact(prefix, ".interrupt.bin"))?;
+    if early.len() != 4 || data.len() != 20 {
+        return Err("Truncated ARM interrupt-wait probe".into());
+    }
+    let early = u32::from_le_bytes(early.as_slice().try_into()?);
+    if early != 0xab {
+        return Err(format!("ARM interrupt early marker: expected 0xab, got {early:#x}").into());
+    }
+    let words: Vec<u32> = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
+        .collect();
+    if words[0] != 42 || words[1] != 0x55 || words[2] != 0xab || words[4] != 1 || words[3] >= 6000 {
+        return Err(format!("ARM interrupt/load restart results invalid: {words:?}").into());
+    }
+    std::fs::write(report,format!("normal_memory_wait_preempted=passed\nirq_before_program_complete=passed\nabandoned_load_restarted=passed\nhandler_count=1\nhandler_dwt_cycles={}\n",words[3]))?;
+    Ok(())
+}

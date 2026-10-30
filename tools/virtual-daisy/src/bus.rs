@@ -8,6 +8,7 @@ struct Transaction {
     write: bool,
     service: u64,
     finish: u64,
+    flash: Option<(u32, u64)>,
 }
 /// Event-driven target service and backpressure. 1..7 are AXI targets;
 /// 8..12 are local SRAM slaves on AHB matrices. Service costs are supplied
@@ -23,6 +24,9 @@ pub struct Fabric {
     last_ahb: [usize; 13],
     pub contests: u64,
     pub completed: u64,
+    flash_buffer: Option<u32>,
+    pub flash_buffer_hits: u64,
+    pub flash_buffer_misses: u64,
 }
 impl Fabric {
     fn lane(target: usize, write: bool) -> usize {
@@ -62,8 +66,30 @@ impl Fabric {
             write,
             service,
             finish: 0,
+            flash: None,
         });
         Ok(Some(self.next))
+    }
+    /// Bank-buffer lookup happens when arbitration grants the read, not when
+    /// its master queues it. A previous queued read can replace the buffer.
+    pub fn submit_flash(
+        &mut self,
+        ini: usize,
+        address: u32,
+        cold: u64,
+        hit: u64,
+    ) -> Result<Option<u64>, &'static str> {
+        if !crate::memory::SystemMemory::is_flash(address, 1) || hit == 0 {
+            return Err("invalid flash-buffer transaction");
+        }
+        let id = self.submit(ini, 3, false, cold)?;
+        if id.is_some() {
+            self.waiting.back_mut().unwrap().flash = Some((address & !31, hit));
+        }
+        Ok(id)
+    }
+    pub fn invalidate_flash_buffer(&mut self) {
+        self.flash_buffer = None;
     }
     fn grant_idle(&mut self) -> Result<(), &'static str> {
         if self.waiting.is_empty() {
@@ -105,6 +131,14 @@ impl Fabric {
                 .position(|t| Self::lane(t.target, t.write) == lane && t.ini == winner)
                 .unwrap();
             let mut t = self.waiting.remove(index).unwrap();
+            if let Some((word, hit)) = t.flash {
+                if self.flash_buffer == Some(word) {
+                    t.service = hit;
+                    self.flash_buffer_hits += 1;
+                } else {
+                    self.flash_buffer_misses += 1;
+                }
+            }
             t.finish = self
                 .now
                 .checked_add(t.service)
@@ -129,6 +163,9 @@ impl Fabric {
             while i < self.active.len() {
                 if self.active[i].finish == next {
                     let t = self.active.remove(i);
+                    if t.target == 3 && !t.write {
+                        self.flash_buffer = t.flash.map(|(word, _)| word);
+                    }
                     if t.target <= 7 {
                         self.axi.complete(t.ini, t.write)?;
                     }

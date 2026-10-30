@@ -41,6 +41,10 @@ struct CpuAccess {
     write: bool,
     value: u64,
 }
+struct Writeback {
+    line: CacheLine,
+    ticket: Option<u64>,
+}
 
 pub struct SystemMemory {
     flash: crate::flash::Flash,
@@ -52,6 +56,23 @@ pub struct SystemMemory {
     sdram: Option<crate::bus::SdramTiming>,
     cpu_requests: [Option<(u32, usize, bool, u64)>; 2],
     cpu_debt: u64,
+    pub wait_interruptible: bool,
+    pending_writebacks: Vec<Writeback>,
+    memory_order_fence: bool,
+    entry_stores: std::collections::VecDeque<CpuAccess>,
+    entry_vector: Option<(u32, u32)>,
+    entry_active: bool,
+    pub abandoned_waits: u64,
+    pub abandoned_wait_ns: u64,
+    return_frame: Option<(u32, u32)>,
+    return_reads: Vec<(u32, u32)>,
+    pub bypass_exception_waits: bool,
+    pub entry_wait_yields: u64,
+    pub return_wait_yields: u64,
+    pub exception_stack_words: u64,
+    pub vector_reads: u64,
+    pub vector_cache_hits: u64,
+    pub writeback_drain_yields: u64,
     runtime_progress: Option<(u32, u32, usize)>,
     pub cpu_wait_ns: u64,
     pub cpu_wait_yields: u64,
@@ -93,6 +114,23 @@ impl Default for SystemMemory {
             sdram: None,
             cpu_requests: [None; 2],
             cpu_debt: 0,
+            wait_interruptible: true,
+            pending_writebacks: Vec::new(),
+            memory_order_fence: false,
+            entry_stores: std::collections::VecDeque::new(),
+            entry_vector: None,
+            entry_active: false,
+            abandoned_waits: 0,
+            abandoned_wait_ns: 0,
+            return_frame: None,
+            return_reads: Vec::new(),
+            bypass_exception_waits: false,
+            entry_wait_yields: 0,
+            return_wait_yields: 0,
+            exception_stack_words: 0,
+            vector_reads: 0,
+            vector_cache_hits: 0,
+            writeback_drain_yields: 0,
             runtime_progress: None,
             cpu_wait_ns: 0,
             cpu_wait_yields: 0,
@@ -133,6 +171,14 @@ impl SystemMemory {
             .expect("empty reset fabric");
         self.cpu_requests = [None; 2];
         self.cpu_debt = 0;
+        self.wait_interruptible = true;
+        self.pending_writebacks.clear();
+        self.memory_order_fence = false;
+        self.entry_stores.clear();
+        self.entry_vector = None;
+        self.entry_active = false;
+        self.return_frame = None;
+        self.return_reads.clear();
         self.replay.clear();
         self.begin_cpu_block();
         self.ccr = 0;
@@ -195,7 +241,24 @@ impl SystemMemory {
         }
         self.now_ns = now;
         self.fabric.advance(now)?;
+        let mut index = 0;
+        while index < self.pending_writebacks.len() {
+            if self.pending_writebacks[index]
+                .ticket
+                .is_some_and(|id| self.fabric.take_ready(id))
+            {
+                let line = self.pending_writebacks.remove(index).line;
+                for (offset, value) in line.data.into_iter().enumerate() {
+                    self.store_byte(line.address + offset as u32, value);
+                }
+                self.writebacks += 1;
+            } else {
+                index += 1;
+            }
+        }
+        self.issue_writebacks()?;
         for action in self.flash.advance(now) {
+            self.fabric.invalidate_flash_buffer();
             match action {
                 crate::flash::Action::Program(base, data) => {
                     self.flash_written.insert(base);
@@ -283,6 +346,11 @@ impl SystemMemory {
         self.cpu_wait_ns += ns;
         ns
     }
+    pub fn abandon_wait(&mut self, ns: u64) {
+        self.cpu_wait_ns = self.cpu_wait_ns.saturating_sub(ns);
+        self.abandoned_waits += 1;
+        self.abandoned_wait_ns += ns;
+    }
     pub fn has_cpu_debt(&self) -> bool {
         self.cpu_debt != 0
     }
@@ -306,15 +374,48 @@ impl SystemMemory {
         {
             return Err("invalid CPU transaction");
         }
-        // Native vector reads cannot restart like translated instructions. Keep
-        // their existing functional view explicit; never read through NVM busy.
-        // Exception-entry bus latency still needs a resumable native adapter.
-        if context == u64::MAX {
-            if write || width != 4 || (Self::is_flash(address, width) && self.flash_wait(false) > 0)
-            {
-                return Err("exception vector read during flash busy is unmodeled");
+        if context == u64::MAX - 1 {
+            if !write || width != 4 {
+                return Err("unsupported exception stack transaction");
             }
-            *value = u64::from(self.read_cpu(address, 4)?);
+            self.entry_stores.push_back(CpuAccess {
+                address,
+                width,
+                write,
+                value: *value,
+            });
+            self.exception_stack_words += 1;
+            return Ok(0);
+        }
+        if context == u64::MAX - 2 {
+            if write || width != 4 {
+                return Err("unsupported exception unstack transaction");
+            }
+            *value = u64::from(
+                self.return_reads
+                    .iter()
+                    .find(|&&(ready, _)| ready == address)
+                    .ok_or("unstack access was not prepared")?
+                    .1,
+            );
+            return Ok(0);
+        }
+        if context == u64::MAX {
+            if write || width != 4 {
+                return Err("invalid exception vector access");
+            }
+            if let Some((ready, data)) = self.entry_vector.filter(|&(ready, _)| ready == address) {
+                let _ = ready;
+                *value = u64::from(data);
+            } else {
+                if Self::is_flash(address, width)
+                    && self.flash_wait(false) > 0
+                    && !self.vector_cached(address)
+                {
+                    return Err("vector read bypassed pending flash service");
+                }
+                *value = u64::from(self.read_vector(address)?);
+            }
             return Ok(0);
         }
         if context == 0 && self.hclk.is_some() && self.target(address, width, write)?.is_some() {
@@ -375,15 +476,37 @@ impl SystemMemory {
         write: bool,
         instruction: bool,
     ) -> Result<u64> {
+        self.access_wait_kind(address, width, write, instruction, false)
+    }
+    fn access_wait_kind(
+        &mut self,
+        address: u32,
+        width: usize,
+        write: bool,
+        instruction: bool,
+        vector: bool,
+    ) -> Result<u64> {
         let owner = usize::from(!instruction);
         if self.hclk.is_none() {
             return Ok(0);
         }
-        let policy = self.access_policy(address, instruction)?;
+        if !instruction && self.memory_order_fence {
+            let wait = self.barrier(4)?;
+            if wait != 0 {
+                return Ok(wait);
+            }
+            self.memory_order_fence = false;
+        }
+        self.wait_interruptible = instruction || (!write && self.normal_memory(address));
+        let policy = if vector {
+            self.vector_policy(address)
+        } else {
+            self.access_policy(address, instruction)?
+        };
         let cached = if instruction {
             let base = address & !31;
             let set = ((base / 32) % 256) as usize;
-            self.access_policy(address, true)? != Policy::Noncacheable
+            policy != Policy::Noncacheable
                 && (set * 2..set * 2 + 2)
                     .any(|i| self.instructions[i].valid && self.instructions[i].address == base)
         } else {
@@ -392,6 +515,17 @@ impl SystemMemory {
         if cached && (!write || matches!(policy, Policy::WriteAllocate | Policy::WriteBack)) {
             return Ok(0);
         }
+        // A refill must not fetch older physical bytes while the same line is
+        // still being written back. This scenario serializes that hazard.
+        if !instruction
+            && self
+                .pending_writebacks
+                .iter()
+                .any(|op| op.line.address == address & !31)
+        {
+            let wait = self.fabric.next_event();
+            return Ok(self.cpu_wait(wait));
+        }
         if Self::is_flash(address, width) {
             let wait = self.flash_wait(write);
             if wait > 0 {
@@ -399,7 +533,8 @@ impl SystemMemory {
             }
         }
         let allocate_write = write && policy == Policy::WriteAllocate && !cached;
-        let bytes = if instruction || ((!write || allocate_write) && policy != Policy::Noncacheable)
+        let bytes = if (instruction && !vector)
+            || ((!write || allocate_write) && policy != Policy::Noncacheable)
         {
             32
         } else {
@@ -421,12 +556,175 @@ impl SystemMemory {
         let Some((target, service)) = self.target(address, bytes, bus_write)? else {
             return Ok(0);
         };
-        let Some(id) = self.fabric.submit(2, target, bus_write, service)? else {
+        let Some(id) = self.submit_bus(2, address, bytes, bus_write, target, service)? else {
             let ns = self.fabric.next_event();
             return Ok(self.cpu_wait(ns));
         };
         self.cpu_requests[owner] = Some((key_address, bytes, write, id));
         Ok(self.cpu_wait(1))
+    }
+    fn vector_policy(&self, address: u32) -> Policy {
+        // ARMv7-M MPUCheck: vectors use the default map, ignoring MPU/XN.
+        if self.ccr & (1 << 17) != 0
+            && (address < 0x40000000 || (0x60000000..0xa0000000).contains(&address))
+        {
+            Policy::WriteThrough
+        } else {
+            Policy::Noncacheable
+        }
+    }
+    fn normal_memory(&self, address: u32) -> bool {
+        if self.mpu_ctrl & 1 != 0 {
+            for &(base, attributes) in self.regions.iter().rev() {
+                if attributes & 1 == 0 {
+                    continue;
+                }
+                let size = 1_u64 << (((attributes >> 1) & 31) + 1);
+                if u64::from(address) < u64::from(base)
+                    || u64::from(address) >= u64::from(base) + size
+                {
+                    continue;
+                }
+                let subregion = (u64::from(address - base) * 8 / size) as u32;
+                if size >= 256 && attributes & (1 << (8 + subregion)) != 0 {
+                    continue;
+                }
+                return !matches!(
+                    ((attributes >> 19) & 7, (attributes >> 16) & 3),
+                    (0, 0 | 1) | (2, 0)
+                );
+            }
+        }
+        address < 0x40000000 || (0x60000000..0xa0000000).contains(&address)
+    }
+    fn vector_cached(&self, address: u32) -> bool {
+        let base = address & !31;
+        let set = ((base / 32) % 256) as usize;
+        self.vector_policy(address) != Policy::Noncacheable
+            && (set * 2..set * 2 + 2)
+                .any(|i| self.instructions[i].valid && self.instructions[i].address == base)
+    }
+    fn read_vector(&mut self, address: u32) -> Result<u32> {
+        Self::check(address, 4)?;
+        if address & 3 != 0 {
+            return Err("unaligned exception vector");
+        }
+        self.vector_reads += 1;
+        self.vector_cache_hits += u64::from(self.vector_cached(address));
+        let index = if self.vector_policy(address) != Policy::Noncacheable {
+            Some(self.instruction_index(address & !31))
+        } else {
+            None
+        };
+        Ok((0..4).fold(0, |value, byte| {
+            value
+                | (u32::from(index.map_or_else(
+                    || self.physical_byte(address + byte),
+                    |i| self.instructions[i].data[((address + byte) & 31) as usize],
+                )) << (byte * 8))
+        }))
+    }
+    /// Suspend before handler execution; frame stores and vector fetch can
+    /// progress on separate ports. Entry never drains unrelated writebacks.
+    pub fn exception_entry(&mut self, address: u32) -> Result<u64> {
+        if !self.entry_active {
+            self.entry_active = true;
+            self.runtime_progress = None;
+        }
+        if self.bypass_exception_waits {
+            while let Some(op) = self.entry_stores.pop_front() {
+                self.write_cpu(op.address, op.width, op.value as u32)?;
+            }
+            let data = self.read_vector(address)?;
+            self.entry_vector = Some((address, data));
+            return Ok(0);
+        }
+        let old = self.cpu_debt;
+        self.cpu_debt = 0;
+        let fence = std::mem::take(&mut self.memory_order_fence);
+        let result = (|| {
+            let vector_wait = if self.entry_vector.is_some_and(|(ready, _)| ready == address) {
+                0
+            } else if (0..0x10000).contains(&address) || (0x20000000..0x20020000).contains(&address)
+            {
+                self.entry_vector = Some((address, 0));
+                0
+            } else {
+                let wait = self.access_wait_kind(address, 4, false, true, true)?;
+                if wait == 0 {
+                    let data = self.read_vector(address)?;
+                    self.entry_vector = Some((address, data));
+                }
+                wait
+            };
+            let mut stack_wait = 0;
+            while let Some(op) = self.entry_stores.front().cloned() {
+                stack_wait = self.access_wait(op.address, op.width, true, false)?;
+                if stack_wait != 0 {
+                    break;
+                }
+                self.write_cpu(op.address, op.width, op.value as u32)?;
+                self.entry_stores.pop_front();
+            }
+            Ok(match (vector_wait, stack_wait) {
+                (0, wait) | (wait, 0) => wait,
+                (a, b) => a.min(b),
+            })
+        })();
+        self.memory_order_fence = fence;
+        self.cpu_debt = old;
+        result.map(|wait| {
+            if wait != 0 {
+                self.entry_wait_yields += 1;
+                self.cpu_wait(wait)
+            } else {
+                0
+            }
+        })
+    }
+    pub fn finish_exception_entry(&mut self) -> Result<()> {
+        if !self.entry_stores.is_empty() {
+            return Err("handler started before stack stores completed");
+        }
+        self.entry_vector = None;
+        self.entry_active = false;
+        Ok(())
+    }
+    pub fn exception_return(&mut self, address: u32, bytes: u32) -> Result<u64> {
+        if ![32, 104].contains(&bytes) {
+            return Err("unsupported exception frame size");
+        }
+        if (0x20000000..0x20020000).contains(&address) {
+            return Ok(0);
+        } // Native DTCM.
+        if !Self::is_ram(address, bytes as usize) {
+            return Err("unsupported exception stack memory");
+        }
+        if self.return_frame != Some((address, bytes)) {
+            self.return_frame = Some((address, bytes));
+            self.return_reads.clear();
+        }
+        let fence = std::mem::take(&mut self.memory_order_fence);
+        let result = (|| {
+            while self.return_reads.len() < (bytes / 4) as usize {
+                let current = address + self.return_reads.len() as u32 * 4;
+                let wait = self.access_wait(current, 4, false, false)?;
+                if wait != 0 {
+                    return Ok(wait);
+                }
+                let value = self.read_cpu(current, 4)?;
+                self.return_reads.push((current, value));
+            }
+            Ok(0)
+        })();
+        self.memory_order_fence = fence;
+        result.inspect(|&wait| {
+            self.return_wait_yields += u64::from(wait != 0);
+        })
+    }
+    pub fn finish_exception_return(&mut self) {
+        self.return_frame = None;
+        self.return_reads.clear();
     }
     pub fn dma_submit(&mut self, address: u32, write: bool) -> Result<Option<u64>> {
         if Self::is_flash(address, 4) && self.flash_wait(write) > 0 {
@@ -436,11 +734,30 @@ impl SystemMemory {
         let Some((target, service)) = self.target(address, 4, write)? else {
             return Err("unmodeled DMA bus target");
         };
-        let ticket = self.fabric.submit(1, target, write, service)?;
+        let ticket = self.submit_bus(1, address, 4, write, target, service)?;
         // Submission is asynchronous even when service finishes before the
         // next 1µs poll; the bridge yields without committing NDTR/IRQ yet.
         self.dma_wait_yields += 1;
         Ok(ticket)
+    }
+    fn submit_bus(
+        &mut self,
+        ini: usize,
+        address: u32,
+        bytes: usize,
+        write: bool,
+        target: usize,
+        service: u64,
+    ) -> Result<Option<u64>> {
+        if target == 3 && !write {
+            let beat = Self::ns(
+                self.hclk.ok_or("flash clock stopped")?,
+                (bytes as u64).div_ceil(8),
+            );
+            self.fabric.submit_flash(ini, address, service, beat)
+        } else {
+            self.fabric.submit(ini, target, write, service)
+        }
     }
     pub fn dma_ready(&mut self, id: u64) -> bool {
         let ready = self.fabric.take_ready(id);
@@ -450,8 +767,11 @@ impl SystemMemory {
         ready
     }
     pub fn inject_bus_load(&mut self, target: usize, ns: u64) -> Result<()> {
+        self.inject_bus_load_kind(target, ns, false)
+    }
+    pub fn inject_bus_load_kind(&mut self, target: usize, ns: u64, write: bool) -> Result<()> {
         self.fabric
-            .submit(4, target, false, ns)?
+            .submit(4, target, write, ns)?
             .ok_or("bus injector admission failed")?;
         Ok(())
     }
@@ -459,7 +779,11 @@ impl SystemMemory {
         self.flash.read(offset)
     }
     pub fn flash_write_reg(&mut self, offset: u64, value: u32, width: usize) -> Result<()> {
-        self.flash.write(offset, value, width, self.now_ns)
+        self.flash.write(offset, value, width, self.now_ns)?;
+        if self.flash_wait(false) > 0 {
+            self.fabric.invalidate_flash_buffer();
+        }
+        Ok(())
     }
     pub fn flash_wait(&self, write: bool) -> u64 {
         self.flash.wait(write, self.now_ns)
@@ -495,7 +819,11 @@ impl SystemMemory {
             return Err("reprogramming nonvirgin flash ECC words is unmodeled; erase first");
         }
         self.flash
-            .program(address, width, value, master, self.now_ns)
+            .program(address, width, value, master, self.now_ns)?;
+        if self.flash_wait(false) > 0 {
+            self.fabric.invalidate_flash_buffer();
+        }
+        Ok(())
     }
     /// Firmware image loader, never a CPU/DMA programming operation.
     pub fn load_flash(&mut self, address: u32, width: usize, value: u32) -> Result<()> {
@@ -503,6 +831,7 @@ impl SystemMemory {
         if !Self::is_flash(address, width) {
             return Err("not user flash");
         }
+        self.fabric.invalidate_flash_buffer();
         for byte in 0..width {
             self.flash_written.insert((address + byte as u32) & !31);
             self.store_byte(address + byte as u32, (value >> (byte * 8)) as u8);
@@ -521,14 +850,59 @@ impl SystemMemory {
             Box::new([if Self::is_flash(address, 1) { 0xff } else { 0 }; 4096])
         })[(address & 4095) as usize] = value;
     }
-    fn clean(&mut self, index: usize) {
+    fn clean(&mut self, index: usize) -> Result<()> {
         if self.cache[index].valid && self.cache[index].dirty {
             let line = self.cache[index].clone();
-            for (offset, value) in line.data.into_iter().enumerate() {
-                self.store_byte(line.address + offset as u32, value);
+            if self.hclk.is_some() {
+                self.pending_writebacks
+                    .push(Writeback { line, ticket: None });
+                self.issue_writebacks()?;
+            } else {
+                for (offset, value) in line.data.into_iter().enumerate() {
+                    self.store_byte(line.address + offset as u32, value);
+                }
+                self.writebacks += 1;
             }
             self.cache[index].dirty = false;
-            self.writebacks += 1;
+        }
+        Ok(())
+    }
+    fn issue_writebacks(&mut self) -> Result<()> {
+        for index in 0..self.pending_writebacks.len() {
+            if self.pending_writebacks[index].ticket.is_none() {
+                let address = self.pending_writebacks[index].line.address;
+                let (target, service) = self
+                    .target(address, 32, true)?
+                    .ok_or("unmodeled writeback target")?;
+                let ticket = self.fabric.submit(2, target, true, service)?;
+                self.pending_writebacks[index].ticket = ticket;
+                if ticket.is_none() {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+    /// DSB waits for completion. DMB orders subsequent memory accesses while
+    /// permitting intervening non-memory instructions and exception entry.
+    pub fn barrier(&mut self, kind: u32) -> Result<u64> {
+        match kind {
+            5 => {
+                self.memory_order_fence = true;
+                Ok(0)
+            }
+            4 => {
+                self.wait_interruptible = true;
+                self.issue_writebacks()?;
+                if self.pending_writebacks.is_empty() {
+                    Ok(0)
+                } else {
+                    self.writeback_drain_yields += 1;
+                    let wait = self.fabric.next_event();
+                    Ok(self.cpu_wait(wait))
+                }
+            }
+            _ => Err("unsupported memory barrier"),
         }
     }
     fn find(&self, address: u32) -> Option<usize> {
@@ -537,9 +911,9 @@ impl SystemMemory {
         (set * WAYS..(set + 1) * WAYS)
             .find(|&index| self.cache[index].valid && self.cache[index].address == base)
     }
-    fn allocate(&mut self, address: u32) -> usize {
+    fn allocate(&mut self, address: u32) -> Result<usize> {
         if let Some(index) = self.find(address) {
-            return index;
+            return Ok(index);
         }
         let base = address & !(LINE - 1);
         let set = (base / LINE) as usize % SETS;
@@ -547,7 +921,7 @@ impl SystemMemory {
             .find(|&i| !self.cache[i].valid)
             .unwrap_or(set * WAYS + self.next_way[set]);
         self.next_way[set] = (index % WAYS + 1) % WAYS;
-        self.clean(index);
+        self.clean(index)?;
         let mut data = [0; 32];
         for (offset, byte) in data.iter_mut().enumerate() {
             *byte = self.physical_byte(base + offset as u32);
@@ -559,7 +933,7 @@ impl SystemMemory {
             data,
         };
         self.fills += 1;
-        index
+        Ok(index)
     }
     fn policy(&self, address: u32) -> Result<Policy> {
         self.access_policy(address, false)
@@ -635,7 +1009,7 @@ impl SystemMemory {
         for byte in 0..width {
             let addr = address + byte as u32;
             let b = if self.policy(addr)? != Policy::Noncacheable {
-                let line = self.allocate(addr);
+                let line = self.allocate(addr)?;
                 self.cache[line].data[(addr & 31) as usize]
             } else {
                 self.physical_byte(addr)
@@ -811,7 +1185,7 @@ impl SystemMemory {
             let b = (value >> (byte * 8)) as u8;
             let policy = self.policy(addr)?;
             let line = if policy == Policy::WriteAllocate {
-                Some(self.allocate(addr))
+                Some(self.allocate(addr)?)
             } else if policy != Policy::Noncacheable {
                 self.find(addr)
             } else {
@@ -857,7 +1231,8 @@ impl SystemMemory {
     }
     pub fn stats(&self) -> String {
         let cache=format!("data_cache_enabled={}\ncache_line_fills={}\ncache_line_writebacks={}\ndirty_lines={}\ndma_cacheable_bytes={}\ninstruction_cache_enabled={}\ninstruction_fetch_reads={}\ninstruction_cache_fills={}\nruntime_blocks={}\nruntime_instruction_slots={}\nruntime_retranslations={}\n", u32::from(self.ccr & (1 << 16) != 0), self.fills, self.writebacks, self.cache.iter().filter(|line| line.valid && line.dirty).count(), self.dma_cacheable_bytes,u32::from(self.ccr&(1<<17)!=0),self.instruction_reads,self.instruction_fills,self.runtime_blocks,self.runtime_instructions,self.runtime_retranslations);
-        format!("{cache}cpu_bus_wait_ns={}\ncpu_bus_wait_yields={}\ndma_bus_wait_yields={}\nfabric_completed={}\nfabric_contests={}\nbus_stall_scope=COUPLED_FUNCTIONAL_SERVICE_SCENARIO\ndma_service_grid_ns=1000\nwriteback_and_pipeline_overlap=UNMODELED\n{}",self.cpu_wait_ns,self.cpu_wait_yields,self.dma_wait_yields,self.fabric.completed,self.fabric.contests,self.flash.stats())
+        let timing=format!("abandoned_cpu_waits={}\nabandoned_cpu_wait_ns={}\nflash_buffer_hits={}\nflash_array_reads={}\nwriteback_pending_lines={}\nwriteback_drain_yields={}\nexception_entry_wait_yields={}\nexception_return_wait_yields={}\nexception_stack_words={}\nvector_reads={}\nvector_cache_hits={}\ncache_writeback_timing=DEFERRED_FABRIC_COMPLETION\nexception_bus_timing=RESUMABLE_PORT_SERVICE_SCENARIO\nstore_buffer_and_pipeline_overlap=UNMODELED\n",self.abandoned_waits,self.abandoned_wait_ns,self.fabric.flash_buffer_hits,self.fabric.flash_buffer_misses,self.pending_writebacks.len(),self.writeback_drain_yields,self.entry_wait_yields,self.return_wait_yields,self.exception_stack_words,self.vector_reads,self.vector_cache_hits);
+        format!("{cache}{timing}cpu_bus_wait_ns={}\ncpu_bus_wait_yields={}\ndma_bus_wait_yields={}\nfabric_completed={}\nfabric_contests={}\nbus_stall_scope=COUPLED_FUNCTIONAL_SERVICE_SCENARIO\ndma_service_grid_ns=1000\n{}",self.cpu_wait_ns,self.cpu_wait_yields,self.dma_wait_yields,self.fabric.completed,self.fabric.contests,self.flash.stats())
     }
     pub fn write_scb(&mut self, offset: u64, value: u32) -> Result<()> {
         self.blocks.clear();
@@ -887,7 +1262,7 @@ impl SystemMemory {
             }
             0xf68 => {
                 if let Some(index) = self.find(value) {
-                    self.clean(index);
+                    self.clean(index)?;
                 }
             }
             0xf5c => {
@@ -897,14 +1272,14 @@ impl SystemMemory {
             }
             0xf70 => {
                 if let Some(index) = self.find(value) {
-                    self.clean(index);
+                    self.clean(index)?;
                     self.cache[index].valid = false;
                 }
             }
             0xf60 | 0xf6c | 0xf74 => {
                 let index = (((value >> 5) & 127) as usize) * WAYS + ((value >> 30) as usize);
                 if offset != 0xf60 {
-                    self.clean(index);
+                    self.clean(index)?;
                 }
                 if offset != 0xf6c {
                     self.cache[index].valid = false;
@@ -912,7 +1287,7 @@ impl SystemMemory {
             }
             0xf64 => {
                 if let Some(index) = self.find(value) {
-                    self.clean(index);
+                    self.clean(index)?;
                 }
             }
             0xf50 => self.instructions.fill(CacheLine::default()),
