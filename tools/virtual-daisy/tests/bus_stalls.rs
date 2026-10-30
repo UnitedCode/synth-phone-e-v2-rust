@@ -160,3 +160,18 @@ fn native_vector_reads_are_explicit_and_busy_flash_never_returns_an_old_vector()
         .cpu_access(0, 0x24000000, 4, false, &mut value)
         .is_err());
 }
+
+#[test]
+fn live_flash_read_commands_share_the_banks_three_command_capacity() {
+    let mut fabric = Fabric::default();
+    let first = fabric.submit(2, 3, false, 25).unwrap().unwrap();
+    fabric.advance(0).unwrap();
+    fabric.submit(1, 3, false, 25).unwrap().unwrap();
+    fabric.submit(4, 3, false, 25).unwrap().unwrap();
+    assert_eq!(fabric.submit(2, 3, false, 25).unwrap(), None);
+    // The independent write-command channel is not a fourth read slot.
+    assert!(fabric.submit(1, 3, true, 5).unwrap().is_some());
+    fabric.advance(25).unwrap();
+    assert!(fabric.take_ready(first));
+    assert!(fabric.submit(2, 3, false, 25).unwrap().is_some());
+}

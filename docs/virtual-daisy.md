@@ -266,6 +266,8 @@ H750 bank latency is uncalibrated. Voltage, wear and temperature are not modeled
 The separately tested read pipeline retains one active plus two waiting reads
 and 256-bit buffer reuse. The live CPU currently serializes its instruction/data
 requests; it does not reproduce that pipeline's full speculative overlap.
+The shared fabric enforces the same three-command read capacity. Live scheduling
+does not yet reuse the interface read buffer between uncached transactions.
 
 The AXI GPV's six initiators expose read/write QoS and issuing overrides. The
 live arbitration model implements higher QoS first, least-recently-served

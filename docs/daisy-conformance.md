@@ -234,6 +234,9 @@ bound; per-run reports retain the actual register and clock. It does not model
 AXI handshakes, ECC or pipeline overlap. Live CPU instruction/data requests are
 serialized functional transactions; the standalone read-pipeline test does not
 prove that the CPU issues overlapping flash commands correctly.
+The live fabric now enforces one active plus two waiting flash reads across
+masters. Reusing the interface buffer between live uncached reads still needs
+implementation; the standalone buffer test is not claimed as runtime coverage.
 
 ### Coupled stalls and nonvolatile operations
 

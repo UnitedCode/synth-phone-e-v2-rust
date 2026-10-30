@@ -38,6 +38,19 @@ impl Fabric {
         if !(1..=6).contains(&ini) || !(1..=13).contains(&target) || service == 0 {
             return Err("invalid fabric transaction");
         }
+        // RM0433 4.3.8: one active and two waiting reads per flash bank.
+        if target == 3
+            && !write
+            && self
+                .waiting
+                .iter()
+                .chain(&self.active)
+                .filter(|t| t.target == 3 && !t.write)
+                .count()
+                >= 3
+        {
+            return Ok(None);
+        }
         if target <= 7 && !self.axi.reserve(ini, write)? {
             return Ok(None);
         }
