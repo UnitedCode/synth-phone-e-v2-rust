@@ -1,4 +1,5 @@
 //! Run the unmodified production ELF on a functional virtual Daisy.
+mod conformance;
 mod grade;
 mod platform;
 use sha2::{Digest, Sha256};
@@ -12,6 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use virtual_daisy::board::Board;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const RATE: u32 = 48014;
 
@@ -97,6 +99,7 @@ struct Host<'a> {
     managed: &'a Path,
     renode: &'a Path,
     directory: &'a Path,
+    board: Board,
 }
 impl Host<'_> {
     fn boot(&self, label: &str, input: &Path, fault: &str) -> Result<PathBuf> {
@@ -110,6 +113,8 @@ impl Host<'_> {
             .arg(&capture)
             .arg(input)
             .arg(fault)
+            .arg(self.board.id())
+            .arg(self.board.grounded_straps().to_string())
             .env(
                 "VIRTUAL_DAISY_INFRASTRUCTURE",
                 self.managed.join("Infrastructure.dll"),
@@ -123,7 +128,7 @@ impl Host<'_> {
     }
 }
 
-fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>) -> Result<()> {
+fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>, board: Board) -> Result<()> {
     fs::create_dir_all(directory)?;
     let directory = directory.canonicalize()?;
     // Reusing an output directory must not leave an old success report behind
@@ -204,7 +209,8 @@ fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>) -> Result<()> 
         directory.join("firmware.sha256"),
         format!("{sha}  firmware.elf\nsource={}\n", elf.display()),
     )?;
-    platform::prepare(&renode, &directory, &library)?;
+    platform::prepare(&renode, &directory, &library, board)?;
+    conformance::write(&directory, board, &sha, &library)?;
     let managed = directory.join("managed");
     fs::create_dir_all(&managed)?;
     checked(
@@ -243,6 +249,7 @@ fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>) -> Result<()> 
         managed: &managed,
         renode: &renode,
         directory: &directory,
+        board,
     };
     let baseline = host.boot("baseline", &tone, "none")?;
     let report = grade::check(&baseline)?;
@@ -270,7 +277,7 @@ fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>) -> Result<()> 
     if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
         return Err("Firmware changed during the run".into());
     }
-    let summary = format!("Production firmware ELF SHA256: {sha}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nModel: functional STM32H750/Daisy Seed 1.1; timing is not cycle accurate\n");
+    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nHardware equivalence: UNVERIFIED\nTiming/cache/bus and analog codec behavior require independent hardware evidence\n", board.description());
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())
@@ -278,16 +285,65 @@ fn run(renode: &Path, directory: &Path, input_wav: Option<&Path>) -> Result<()> 
 
 fn main() -> Result<()> {
     let args: Vec<_> = env::args_os().skip(1).collect();
+    if args.len() == 1 && args[0] == "profiles" {
+        for board in virtual_daisy::board::Board::ALL {
+            println!("{}", board.description());
+        }
+        return Ok(());
+    }
     if args.len() == 2 && args[0] == "grade" {
         println!("{}", grade::check(Path::new(&args[1]))?);
         return Ok(());
     }
-    if (3..=4).contains(&args.len()) && args[0] == "run" {
-        return run(
-            Path::new(&args[1]),
-            Path::new(&args[2]),
-            args.get(3).map(Path::new),
-        );
+    if args.len() >= 3 && args[0] == "run" {
+        let mut board = None;
+        let mut codec = None;
+        let mut input = None;
+        let mut require_hardware = false;
+        let mut options = args[3..].iter();
+        while let Some(option) = options.next() {
+            if option == "--board" {
+                if board.is_some() {
+                    return Err("Duplicate --board".into());
+                }
+                board = Some(
+                    options
+                        .next()
+                        .and_then(|v| v.to_str())
+                        .ok_or("--board requires rev4/rev5/rev7")?
+                        .parse::<Board>()?,
+                );
+            } else if option == "--codec" {
+                if codec.is_some() {
+                    return Err("Duplicate --codec".into());
+                }
+                codec = Some(
+                    options
+                        .next()
+                        .and_then(|v| v.to_str())
+                        .ok_or("--codec requires a name")?,
+                );
+            } else if option == "--require-hardware-match" {
+                require_hardware = true;
+            } else if option.to_string_lossy().starts_with('-') {
+                return Err(format!("Unknown option {}", option.to_string_lossy()).into());
+            } else {
+                if input.is_some() {
+                    return Err("Only one input WAV is allowed".into());
+                }
+                input = Some(Path::new(option));
+            }
+        }
+        let board = board.ok_or(
+            "Select the physical board with --board rev4/rev5/rev7; there is no implicit codec",
+        )?;
+        if let Some(codec) = codec {
+            board.validate_codec(codec)?;
+        }
+        if require_hardware {
+            return Err(conformance::UNVERIFIED.into());
+        }
+        return run(Path::new(&args[1]), Path::new(&args[2]), input, board);
     }
-    Err("Usage: virtual-daisy run RENODE_RUNTIME OUTPUT_DIRECTORY [INPUT.wav]\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

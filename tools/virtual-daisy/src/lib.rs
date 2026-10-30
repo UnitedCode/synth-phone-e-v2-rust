@@ -1,5 +1,6 @@
 //! Rust register models hosted by Renode through a small native bridge.
 use std::collections::BTreeMap;
+pub mod board;
 mod dma;
 mod gpio;
 mod qspi;
@@ -14,9 +15,36 @@ pub struct Peripheral {
     sai: sai::Sai,
     qspi: qspi::Qspi,
     gpio: gpio::Gpio,
+    codec_reset_high: bool,
 }
 
 impl Peripheral {
+    pub fn configure_revision_straps(&mut self, grounded: u32) -> Result<(), &'static str> {
+        if self.kind != 103 || grounded > 7 {
+            return Err("invalid port D revision straps");
+        }
+        for bit in 0..3 {
+            self.gpio.release(3 + bit);
+            if grounded & (1 << bit) != 0 {
+                self.gpio.drive(3 + bit, false);
+            }
+        }
+        Ok(())
+    }
+    pub fn codec_control(&mut self, high: bool) -> Result<(), &'static str> {
+        if self.kind != 9 {
+            return Err("this codec has no modeled GPIO reset connection");
+        }
+        self.codec_reset_high = high;
+        Ok(())
+    }
+    pub fn configure_audio(&mut self, rx_channel: u32) -> Result<(), &'static str> {
+        if self.kind != 7 || rx_channel > 1 {
+            return Err("invalid SAI wiring");
+        }
+        self.sai.rx_channel = rx_channel as usize;
+        Ok(())
+    }
     pub fn new(kind: u32) -> Self {
         let mut result = Self {
             kind,
@@ -25,6 +53,7 @@ impl Peripheral {
             sai: sai::Sai::default(),
             qspi: qspi::Qspi::default(),
             gpio: gpio::Gpio::default(),
+            codec_reset_high: false,
         };
         result.reset();
         result
@@ -37,11 +66,23 @@ impl Peripheral {
             self.gpio.reset(self.kind - 100);
         }
         let input = std::mem::take(&mut self.sai.input);
+        let rx_channel = self.sai.rx_channel;
+        let drop_rx = self.sai.drop_rx;
         self.sai = sai::Sai::default();
         self.sai.input = input;
+        self.sai.rx_channel = rx_channel;
+        self.sai.drop_rx = drop_rx;
         if self.kind == 0 {
             self.registers
                 .extend([(0, 0xF000_C000), (0x0c, 2), (0x18, 0xc000)]);
+        }
+        if self.kind == 4 {
+            self.registers.extend(
+                [0x97, 0x97, 0x79, 0x79, 0x0a, 8, 0x9f, 0x0a, 0, 0]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| (index as u64, value)),
+            );
         }
     }
     pub fn read(&mut self, offset: u64) -> Result<u32, &'static str> {
@@ -91,14 +132,21 @@ impl Peripheral {
                 if reg(9) & 1 == 0 {
                     return Ok(0);
                 }
-                if reg(7) & 0x4f != 9 {
+                if reg(7) != 9 {
                     return Err("unsupported active WM8731 digital format");
                 }
-                Ok(u32::from(reg(6) & 0x9d == 0 && reg(5) & 8 == 0))
+                if reg(6) & 0x80 != 0 {
+                    return Ok(0);
+                }
+                let adc = u32::from(reg(6) & 5 == 0);
+                let dac = u32::from(reg(6) & 0x18 == 0 && reg(5) & 8 == 0 && reg(4) & 0x10 != 0);
+                Ok(adc | (dac << 1) | ((reg(0) & 0x80) >> 5) | ((reg(1) & 0x80) >> 4))
             }
             6 => self.dma.read(offset),
             7 => self.sai.read(offset),
             8 => self.qspi.read(offset, 4),
+            9 if offset == 0x100 => Ok(if self.codec_reset_high { 3 } else { 0 }),
+            10 if offset == 0x100 => Ok(3), // Rev7 hardware mode, fixed LJ24, no I2C.
             100..=110 => self.gpio.read(offset),
             _ => Err("unsupported peripheral"),
         }
@@ -114,12 +162,16 @@ impl Peripheral {
                     return Err("unsupported WM8731 register");
                 }
                 if register == 15 {
-                    self.registers.clear();
+                    self.reset();
                 } else {
-                    self.registers.insert(
-                        register as u64,
-                        ((bytes[0] as u32 & 1) << 8) | bytes[1] as u32,
-                    );
+                    let value = ((bytes[0] as u32 & 1) << 8) | bytes[1] as u32;
+                    self.registers.insert(register as u64, value);
+                    if register <= 3 && value & 0x100 != 0 {
+                        let opposite = u64::from(register ^ 1);
+                        let previous = self.registers.get(&opposite).copied().unwrap_or(0);
+                        self.registers
+                            .insert(opposite, (previous & 0x100) | (value & 0xff));
+                    }
                 }
             }
             5 => {
@@ -241,7 +293,28 @@ pub unsafe extern "C" fn daisy_dma_irqs(state: *mut Peripheral) -> u32 {
 /// # Safety
 /// `state` must be live and exclusively accessed for this call.
 pub unsafe extern "C" fn daisy_sai_tick(state: *mut Peripheral, codec_active: u32) {
-    (*state).sai.tick(codec_active != 0);
+    (*state).sai.tick_mask(codec_active);
+}
+
+/// # Safety
+/// `state` must be a live, exclusive SAI state. Configure before CPU execution.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_sai_configure(state: *mut Peripheral, rx_channel: u32) -> u32 {
+    u32::from((*state).configure_audio(rx_channel).is_err())
+}
+
+/// # Safety
+/// `state` must be a live, exclusively accessed codec state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_codec_control(state: *mut Peripheral, high: u32) -> u32 {
+    u32::from((*state).codec_control(high != 0).is_err())
+}
+
+/// # Safety
+/// `state` must be a live, exclusively accessed GPIO port D state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_revision_straps(state: *mut Peripheral, grounded: u32) -> u32 {
+    u32::from((*state).configure_revision_straps(grounded).is_err())
 }
 
 /// # Safety

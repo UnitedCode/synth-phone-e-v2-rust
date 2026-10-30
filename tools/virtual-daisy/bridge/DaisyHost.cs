@@ -68,9 +68,10 @@ public static class DaisyHost
         new CreationDriver(machine, resolver, new NoScripts()).ProcessFile(args[1]);
         var bus = machine.SystemBus;
         bus.LoadELF(args[2]);
-        foreach(var entry in new[] { Tuple.Create("gpioPortA", new[] {0, 3, 7}), Tuple.Create("gpioPortB", new[] {1}), Tuple.Create("gpioPortC", new[] {0, 7, 9, 10, 11}), Tuple.Create("gpioPortD", new[] {4}) })
+        foreach(var entry in new[] { Tuple.Create("gpioPortA", new[] {0, 3, 7}), Tuple.Create("gpioPortB", new[] {1}), Tuple.Create("gpioPortC", new[] {0, 7, 9, 10, 11}) })
             foreach(int pin in entry.Item2) ((IGPIOReceiver)machine["sysbus." + entry.Item1]).OnGPIO(pin, true);
-        ((IGPIOReceiver)machine["sysbus.gpioPortD"]).OnGPIO(3, false);
+        ((DaisyGpio)machine["sysbus.gpioPortD"]).ConfigureStraps(uint.Parse(args[7]));
+        Console.WriteLine("Board: " + args[6]);
         var cpu = (CortexM)machine["sysbus.cpu"];
         cpu.VectorTableOffset = 0x08000000;
         cpu.SP = bus.ReadDoubleWord(0x08000000);

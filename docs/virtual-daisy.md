@@ -2,14 +2,18 @@
 
 The virtual Daisy runs the **actual release `app` ELF**, including reset startup,
 STM32 HAL initialization, RTIC tasks, interrupt handlers, UI startup and vocal
-processing. It feeds PCM through a modeled WM8731/SAI/DMA path and records the
+processing. It feeds PCM through the selected codec/SAI/DMA path and records the
 firmware's stereo output to WAV. No board, debug probe, audio interface, flashed
 test image, or host replacement for the firmware DSP is required.
 
-This is a functional Daisy Seed **1.1 / STM32H750** model, built on
+This is a functional STM32H750 model with explicit **Rev4/AK4556, Rev5/WM8731 and
+Rev7/PCM3060** profiles, built on
 [Renode 1.17.0](https://github.com/renode/renode/releases/tag/v1.17.0).
 It is a substantial step toward a full virtual board, with explicit limits below.
 It does **not** establish real-hardware timing or analog fidelity.
+The [conformance ledger](daisy-conformance.md) records sources, corrected model
+defects and the evidence still required. Every run reports hardware equivalence
+as **UNVERIFIED**; a functional pass cannot certify it.
 
 ## Run
 
@@ -24,7 +28,7 @@ From this repository:
 rustup target add thumbv7em-none-eabihf
 LAB_HOST=$(rustc -vV | sed -n 's/^host: //p')
 cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml \
-  --target "$LAB_HOST" -- run /absolute/path/to/renode-runtime audio-lab-results/daisy
+  --target "$LAB_HOST" -- run /absolute/path/to/renode-runtime audio-lab-results/daisy --board rev5
 ```
 
 The runtime directory contains `Infrastructure.dll`, `platform-lib/` and
@@ -34,6 +38,19 @@ CI pins and verifies the Linux archive SHA256. The command builds the native
 Rust peripherals, the unchanged production firmware with its existing lockfile,
 and the mandatory C# Renode API bridge. `dotnet` must resolve to an SDK, not just
 a runtime. Set `VIRTUAL_DAISY_DOTNET` to an SDK executable if needed.
+
+`--board` is required. `rev4`, `rev5`, and `rev7` select physical wiring,
+revision GPIO straps and codec control together. An optional `--codec ak4556`,
+`--codec wm8731` or `--codec pcm3060` asserts the expected part and rejects a
+mismatch. `virtual-daisy profiles` lists the combinations. Seed2 DFM and Seed3
+are separate boards and currently fail explicitly. Rev7's PD5 strap is distinct
+from Seed2 DFM's PD4 strap; the pinned older HAL follows its compatible default
+audio initialization path for Rev7.
+
+`--require-hardware-match` refuses to run while equivalence is unverified. It is
+a strict evidence requirement, not a way to enable additional emulation. There
+is currently no independent hardware reference dataset, calibrated timing model
+or validated analog/filter implementation capable of satisfying it.
 
 To boot an existing firmware build, set `VIRTUAL_DAISY_ELF` to its absolute path.
 The runner copies it byte-for-byte, records its SHA256, and verifies the original
@@ -48,7 +65,7 @@ the standard regression tests:
 
 ```sh
 cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml \
-  --target "$LAB_HOST" -- run /absolute/path/to/renode-runtime audio-lab-results/daisy /absolute/path/to/voice.wav
+  --target "$LAB_HOST" -- run /absolute/path/to/renode-runtime audio-lab-results/daisy --board rev5 /absolute/path/to/voice.wav
 ```
 
 Input must be mono/stereo PCM or float WAV at **48014 Hz**, at least one second
@@ -104,13 +121,15 @@ the additional behavior needed by this firmware:
 
 - Request-paced DMA1, 32-bit transfers, circular reload, double buffering,
   separate half/full interrupt flags and write-one-to-clear behavior.
-- SAI A receive / B transmit FIFOs with signed 24-bit stereo samples, DMA request
+- Revision-specific SAI receive/transmit FIFOs with signed 24-bit stereo samples, DMA request
   connections through DMAMUX and explicit under/overrun counters. TX prefill works
   before channel enable, matching the firmware's startup wait.
 - GPIO input/output, pulls, BSRR and selected alternate-function signals.
   External board-version straps and idle controls survive peripheral reset.
-- WM8731 register writes/reset, digital-format validation and active/power/mute
-  gating; SSD1306 write acceptance. The OLED has no rendered framebuffer yet.
+- WM8731 register writes, documented reset values, both-channel loads and separate
+  ADC/DAC/channel mute gating; AK4556 GPIO reset; PCM3060 hardware control;
+  digital-format/direction validation; SSD1306 write acceptance. The OLED has no
+  rendered framebuffer yet.
 - PWR readiness, FMC SDRAM configuration, missing SYSCFG/ADC2 startup registers,
   and IS25LP064 QSPI startup commands: JEDEC ID, status, write-enable, register
   writes, QPI entry/exit and instruction lane validation.
@@ -119,7 +138,7 @@ The memory map constrains internal flash to 128 KiB and SDRAM to 64 MiB; it
 retains the actual SRAM/DTCM regions. Generic H743 extra flash and huge unused FMC
 windows are removed. The unused second flash-controller backing object is not
 mapped onto the bus. QSPI memory-mapped reads, general flash read/program/erase,
-other codecs/Seed revisions, USB audio, MIDI input injection, full ADC simulation,
+Seed2 DFM/Seed3 codecs, USB audio, MIDI input injection, full ADC simulation,
 and complete alternate-function electrical behavior are not implemented. Unknown
 Rust-model registers/commands throw instead of returning invented success.
 
@@ -153,6 +172,7 @@ test runner, helper script or fallback is used.
 
 `summary.txt` contains measurements and negative-control results. Other artifacts
 include the exact `firmware.elf` and `firmware.sha256`, generated `daisy.repl`,
+`conformance.txt` with model/firmware/platform hashes and explicit evidence gaps,
 `baseline.wav`, fault WAVs, `.wav.stats`, host/peripheral logs, RTT logs and DTCM
 captures. CI uploads these on both success and failure. Replay the WAVs to judge
 timbre; objective pitch gates are only part of listening quality.
