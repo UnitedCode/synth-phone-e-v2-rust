@@ -127,6 +127,14 @@ impl Default for SystemMemory {
 impl SystemMemory {
     pub fn reset_registers(&mut self) {
         self.flash.reset();
+        self.fabric = crate::bus::Fabric::default();
+        self.fabric
+            .advance(self.now_ns)
+            .expect("empty reset fabric");
+        self.cpu_requests = [None; 2];
+        self.cpu_debt = 0;
+        self.replay.clear();
+        self.begin_cpu_block();
         self.ccr = 0;
         self.mpu_ctrl = 0;
         self.region_number = 0;

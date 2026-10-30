@@ -175,3 +175,49 @@ fn live_flash_read_commands_share_the_banks_three_command_capacity() {
     assert!(fabric.take_ready(first));
     assert!(fabric.submit(2, 3, false, 25).unwrap().is_some());
 }
+
+#[test]
+fn architecture_reset_clears_shared_bus_configuration_and_abandoned_cpu_retries() {
+    use virtual_daisy::{clock::Rate, memory::SystemMemory};
+    let mut memory = SystemMemory::default();
+    let rate = Rate {
+        numerator: 200_000_000,
+        denominator: 1,
+    };
+    memory.configure_bus(rate, rate, None);
+    memory.advance_time(100).unwrap();
+    memory.fabric.axi.write(0x42100, 15).unwrap();
+    let mut word = 42;
+    assert!(
+        memory
+            .cpu_access(0x10002001f000, 0x30000000, 4, true, &mut word)
+            .unwrap()
+            > 0
+    );
+    memory.reset_registers();
+    assert_eq!(memory.fabric.axi.read(0x42100).unwrap(), 0);
+    assert_eq!(memory.take_cpu_debt(), 0);
+    assert!(
+        memory
+            .cpu_access(0x10002001f000, 0x30000000, 4, true, &mut word)
+            .unwrap()
+            > 0
+    );
+    memory.advance_time(104).unwrap();
+    memory.begin_cpu_block();
+    assert!(
+        memory
+            .cpu_access(0x10002001f000, 0x30000000, 4, true, &mut word)
+            .unwrap()
+            > 0
+    );
+    memory.advance_time(105).unwrap();
+    memory.begin_cpu_block();
+    assert_eq!(
+        memory
+            .cpu_access(0x10002001f000, 0x30000000, 4, true, &mut word)
+            .unwrap(),
+        0
+    );
+    assert_eq!(memory.read_dma(0x30000000, 4).unwrap(), 42);
+}
