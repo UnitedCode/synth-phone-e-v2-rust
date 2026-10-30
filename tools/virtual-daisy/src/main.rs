@@ -123,6 +123,13 @@ impl Host<'_> {
             } else {
                 "serial"
             })
+            .arg(
+                if env::var_os("VIRTUAL_DAISY_FLASH_MAXIMUM").is_some_and(|v| v == "1") {
+                    "maximum"
+                } else {
+                    "typical"
+                },
+            )
             .env(
                 "VIRTUAL_DAISY_INFRASTRUCTURE",
                 self.managed.join("Infrastructure.dll"),
@@ -131,7 +138,7 @@ impl Host<'_> {
             &mut command,
             &self.directory.join(format!("{label}.host.log")),
         )?;
-        if fault != "architecture" && fault != "runtime-fault" {
+        if !["architecture", "runtime-fault", "flash", "flash-wait-fault"].contains(&fault) {
             grade::boot_evidence(&capture)?;
         }
         Ok(capture)
@@ -144,6 +151,7 @@ fn run(
     input_wav: Option<&Path>,
     board: Board,
     ideal_line: bool,
+    probes_only: bool,
 ) -> Result<()> {
     if ideal_line && board != Board::Rev5 {
         return Err(
@@ -155,9 +163,11 @@ fn run(
     let directory = directory.canonicalize()?;
     // Reusing an output directory must not leave an old success report behind
     // if a new build, boot or quality gate fails.
-    let summary = directory.join("summary.txt");
-    if summary.exists() {
-        fs::remove_file(summary)?;
+    for name in ["summary.txt", "probe-summary.txt"] {
+        let summary = directory.join(name);
+        if summary.exists() {
+            fs::remove_file(summary)?;
+        }
     }
     let renode = renode.canonicalize()?;
     if !renode.join("Infrastructure.dll").is_file()
@@ -267,7 +277,6 @@ fn run(
         board,
         ideal_line,
     };
-    let baseline = host.boot("baseline", &tone, "none")?;
     fs::write(directory.join("architecture-probe.bin"), probe::image())?;
     let probes = host.boot("architecture-probes", &tone, "architecture")?;
     probe::check(&probes)?;
@@ -292,7 +301,53 @@ fn run(
             return Err(format!("ARM probe did not exercise {counter}").into());
         }
     }
+    fs::write(directory.join("flash-probe.bin"), probe::flash_image())?;
+    let flash = host.boot("flash-probes", &tone, "flash")?;
+    probe::check_flash(&flash)?;
+    let flash_stats = grade::artifact(&flash, ".memory.txt");
+    for counter in ["flash_programs", "flash_erases"] {
+        if grade::counter(&flash_stats, counter)? != 1 {
+            return Err(format!("ARM flash probe did not complete exactly one {counter}").into());
+        }
+    }
+    let minimum_wait = if env::var_os("VIRTUAL_DAISY_FLASH_MAXIMUM").is_some_and(|v| v == "1") {
+        2_000_000_000
+    } else {
+        1_000_000_000
+    };
+    if grade::counter(&flash_stats, "cpu_bus_wait_ns")? < minimum_wait {
+        return Err("ARM flash probe did not consume the declared erase stall".into());
+    }
+    let broken_flash = host.boot("flash-wait-fault", &tone, "flash-wait-fault")?;
+    let error = probe::check_flash(&broken_flash)
+        .err()
+        .ok_or("Bypassed flash bus waits were not caught")?
+        .to_string();
+    if !error.contains("ARM flash result 2: expected 0xffffffff, got 0x47702009") {
+        return Err(format!("Unexpected flash wait negative-control failure: {error}").into());
+    }
+    fs::write(
+        grade::artifact(&broken_flash, ".flash-negative.txt"),
+        format!("flash_wait_bypass=caught\n{error}\n"),
+    )?;
+    if probes_only {
+        if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
+            return Err("Firmware changed during the probe run".into());
+        }
+        fs::write(
+            directory.join("probe-summary.txt"),
+            "ARM cache and flash probes passed; production firmware/audio NOT RUN\n",
+        )?;
+        println!("ARM cache and flash probes passed; production firmware/audio NOT RUN");
+        return Ok(());
+    }
+    let baseline = host.boot("baseline", &tone, "none")?;
     let report = grade::check(&baseline)?;
+    for counter in ["cpu_bus_wait_ns", "fabric_completed", "dma_bus_wait_yields"] {
+        if grade::counter(&grade::artifact(&baseline, ".memory.txt"), counter)? == 0 {
+            return Err(format!("Production boot did not exercise {counter}").into());
+        }
+    }
     if grade::counter(&grade::artifact(&baseline, ".dma.txt"), "contested_grants")? == 0 {
         return Err("Production boot did not exercise simultaneous DMA arbitration".into());
     }
@@ -336,6 +391,20 @@ fn run(
     {
         return Err("DMA bus fault missing TEIF or EN-clear evidence".into());
     }
+    let contention = host.boot("bus-contention", &tone, "bus-contention")?;
+    if grade::failures(&contention)?.is_empty()
+        || (grade::stat(&contention, "overruns")? == 0
+            && grade::stat(&contention, "underruns")? == 0)
+    {
+        return Err("Competing bus traffic did not disrupt DMA/audio service".into());
+    }
+    if grade::counter(
+        &grade::artifact(&contention, ".memory.txt"),
+        "dma_bus_wait_yields",
+    )? == 0
+    {
+        return Err("Bus contention did not delay DMA completion".into());
+    }
     if let Some(source) = input_wav {
         let raw = directory.join("user.f32le");
         wav_input(source, &raw)?;
@@ -344,7 +413,7 @@ fn run(
     if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
         return Err("Firmware changed during the run".into());
     }
-    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nDMA ordering: single-beat priority arbitration; no cycle-accurate bus stalls\nSDRAM timing: programmed lower bounds saved; CPU stalls/contention unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, calibrated CPU timing, bus stalls and complete codec response remain unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
+    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nBus-contention negative control: caught by audio/FIFO gates and delayed DMA\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nARM flash programming/erase: status, deferred completion, STM/STRD retries and stale I-cache checks passed\nFlash wait-bypass negative control: caught by CPU result gate\nCPU/DMA stalls: coupled functional service scenario; not cycle accurate\nSDRAM timing: open-row read/transfer service scenario; row/refresh scheduling unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, exception-entry stalls, dirty writeback traffic, pipeline overlap, calibrated CPU timing and complete codec response remain unfinished or unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())
@@ -362,7 +431,7 @@ fn main() -> Result<()> {
         println!("{}", grade::check(Path::new(&args[1]))?);
         return Ok(());
     }
-    if args.len() >= 3 && args[0] == "run" {
+    if args.len() >= 3 && (args[0] == "run" || args[0] == "probe") {
         let mut board = None;
         let mut codec = None;
         let mut input = None;
@@ -425,7 +494,8 @@ fn main() -> Result<()> {
             input,
             board,
             ideal_line,
+            args[0] == "probe",
         );
     }
-    Err("Usage: virtual-daisy run RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run|probe RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

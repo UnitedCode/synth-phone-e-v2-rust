@@ -68,6 +68,7 @@ public static class DaisyHost
         new CreationDriver(machine, resolver, new NoScripts()).ProcessFile(args[1]);
         var bus = machine.SystemBus;
         var imageArchitecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
+        imageArchitecture.Register(2,0,args[9]=="maximum" ? 1U:0U,true);
         imageArchitecture.ImageLoading=true;
         try { bus.LoadELF(args[2]); } finally { imageArchitecture.ImageLoading=false; }
         foreach(var entry in new[] { Tuple.Create("gpioPortA", new[] {0, 3, 7}), Tuple.Create("gpioPortB", new[] {1}), Tuple.Create("gpioPortC", new[] {0, 7, 9, 10, 11}) })
@@ -75,7 +76,7 @@ public static class DaisyHost
         ((DaisyGpio)machine["sysbus.gpioPortD"]).ConfigureStraps(uint.Parse(args[7]));
         Console.WriteLine("Board: " + args[6]);
         var cpu = (CortexM)machine["sysbus.cpu"];
-        if(((DaisyCortexM)cpu).FetchTagVersion!=3) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
+        if(((DaisyCortexM)cpu).FetchTagVersion!=5) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
         Console.WriteLine("Native instruction-fetch tag verified");
         cpu.VectorTableOffset = 0x08000000;
         cpu.SP = bus.ReadDoubleWord(0x08000000);
@@ -83,6 +84,7 @@ public static class DaisyHost
         cpu.PerformanceInMips = 480;
         emulation.MasterTimeSource.Quantum = TimeInterval.FromMicroseconds(1);
         if(args[5]=="architecture" || args[5]=="runtime-fault") { ArchitectureProbes(emulation,machine,args[3],args[5]=="runtime-fault"); emulation.Dispose(); return; }
+        if(args[5]=="flash" || args[5]=="flash-wait-fault") {FlashProbes(emulation,machine,args[3],args[5]=="flash-wait-fault");emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -99,6 +101,7 @@ public static class DaisyHost
             for(int step = 0; step < 100; step++)
             {
                 emulation.RunFor(TimeInterval.FromSeconds(0.01));
+                if(step%10==0) {Console.WriteLine($"Audio progress: {(step+1)*10} ms, PC={cpu.PC}");imageArchitecture.Save(args[3]+".progress.txt");}
                 if(step == 20 && args[5] == "cacheable-dma") {
                     uint selected = bus.ReadDoubleWord(0xE000ED98);
                     bus.WriteDoubleWord(0xE000ED98, 0);
@@ -109,10 +112,13 @@ public static class DaisyHost
                 if(step == 20 && args[5] == "dtcm-dma") {
                     uint cr=bus.ReadDoubleWord(0x40020010);
                     bus.WriteDoubleWord(0x40020010,cr&~1U);
+                    emulation.RunFor(TimeInterval.FromMicroseconds(20));
+                    if((bus.ReadDoubleWord(0x40020010)&1)!=0) throw new InvalidOperationException("DMA did not finish its active transfer before reconfiguration");
                     bus.WriteDoubleWord(0x4002001c,0x20000000);
                     bus.WriteDoubleWord(0x40020020,0x20000000);
                     bus.WriteDoubleWord(0x40020010,cr|1U);
                 }
+                if(step==20 && args[5]=="bus-contention") ((DaisyNvic)machine["sysbus.nvic"]).Architecture.InjectBusLoad(8,2000000);
                 uint buffer = bus.ReadDoubleWord(rtt + 28);
                 uint capacity = bus.ReadDoubleWord(rtt + 32);
                 uint write = bus.ReadDoubleWord(rtt + 36);
@@ -126,7 +132,7 @@ public static class DaisyHost
         File.WriteAllBytes(args[3], bus.ReadBytes(0x20000000UL, 0x20000));
         sai.Save(args[3] + ".wav");
         ((DaisyFmc)machine["sysbus.fmc"]).Save(args[3]+".sdram.txt");
-        ((DaisyReadOnlyFlashController)machine["sysbus.flashController"]).Save(args[3]+".flash.txt");
+        ((DaisyFlashController)machine["sysbus.flashController"]).Save(args[3]+".flash.txt");
         ((DaisyDma)machine["sysbus.dma1"]).Save(args[3]+".dma.txt");
         ((DaisyNvic)machine["sysbus.nvic"]).SaveMemory(args[3] + ".memory.txt");
         File.WriteAllText(args[3]+".bus.txt",$"dma1_lisr={bus.ReadDoubleWord(0x40020000)}\ndma1_s0cr={bus.ReadDoubleWord(0x40020010)}\ndma1_s0ndtr={bus.ReadDoubleWord(0x40020014)}\n");
@@ -151,6 +157,19 @@ public static class DaisyHost
         File.WriteAllBytes(prefix+".architecture.bin",bus.ReadBytes(0x2001e000UL,60));
         architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM instruction-cache probe executed; results require Rust grading");
+    }
+    private static void FlashProbes(Emulation emulation,Machine machine,string prefix,bool bypassWait) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        var architecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
+        architecture.LoadFlash(0x0801e000,4,0x47702009);
+        bus.WriteBytes(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(prefix),"flash-probe.bin")),0x2000);
+        bus.WriteDoubleWord(0xe000ed14,1U<<17);
+        architecture.CpuWaitBypass=bypassWait;
+        cpu.PC=0x2001;
+        emulation.RunFor(TimeInterval.FromMilliseconds(Environment.GetEnvironmentVariable("VIRTUAL_DAISY_FLASH_MAXIMUM")=="1" ? 2003UL:1002UL));
+        File.WriteAllBytes(prefix+".flash.bin",bus.ReadBytes(0x2001d000UL,40));
+        architecture.Save(prefix+".memory.txt");
+        Console.WriteLine("ARM flash programming probe executed; results require Rust grading");
     }
     private static void VerifyPythonGuard()
     {

@@ -5,6 +5,7 @@ pub mod bus;
 pub mod clock;
 mod codec;
 mod dma;
+mod flash;
 mod gpio;
 pub mod memory;
 mod qspi;
@@ -386,16 +387,165 @@ pub unsafe extern "C" fn daisy_runtime_fetch(
     address: u32,
     count: u32,
 ) -> u32 {
-    match (*state)
-        .memory
-        .lock()
-        .unwrap()
-        .runtime_fetch(address, count)
-    {
-        Ok(false) => 0,
+    let mut memory = (*state).memory.lock().unwrap();
+    memory.begin_cpu_block();
+    match memory.runtime_fetch(address, count) {
+        Ok(false) => {
+            if memory.has_cpu_debt() {
+                2
+            } else {
+                0
+            }
+        }
         Ok(true) => 1,
-        Err(_) => 2,
+        Err(_) => 3,
     }
+}
+
+/// # Safety
+/// Live architecture state and a valid mutable u64 value. Context is guest PC+SP.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_cpu_access(
+    state: *mut Peripheral,
+    context: u64,
+    address: u32,
+    width: u32,
+    value: *mut u64,
+    write: u32,
+) -> u64 {
+    match (*state).memory.lock().unwrap().cpu_access(
+        context,
+        address,
+        width as usize,
+        write != 0,
+        &mut *value,
+    ) {
+        Ok(wait) => wait,
+        Err(error) => {
+            eprintln!("CPU bus error: context={context:#x} address={address:#x} width={width} write={write}: {error}");
+            u64::MAX
+        }
+    }
+}
+
+/// # Safety
+/// Live architecture/RCC/FMC states; callers serialize clock/configuration writes.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_bus_sync(
+    state: *mut Peripheral,
+    clock: *mut Peripheral,
+    fmc: *mut Peripheral,
+    now: u64,
+) -> u32 {
+    let result = (|| -> Result<(), &'static str> {
+        let hclk = (*clock).clock.domain_rate(1)?.ok_or("HCLK stopped")?;
+        let pclk = (*clock).clock.domain_rate(3)?.ok_or("PCLK2 stopped")?;
+        let reg = |offset| (*fmc).registers.get(&offset).copied().unwrap_or(0);
+        let timing = (*clock)
+            .clock
+            .fmc_rate()?
+            .and_then(|r| bus::SdramTiming::decode(reg(0x140), reg(0x148), reg(0x154), r).ok());
+        let mut memory = (*state).memory.lock().unwrap();
+        memory.configure_bus(hclk, pclk, timing);
+        let now = now.max(memory.now());
+        memory.advance_time(now)
+    })();
+    u32::from(result.is_err())
+}
+
+/// # Safety
+/// Live architecture state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_cpu_debt(state: *mut Peripheral) -> u64 {
+    (*state).memory.lock().unwrap().take_cpu_debt()
+}
+
+/// # Safety
+/// Live architecture state; time comes from the emulator's virtual clock.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_time_sync(state: *mut Peripheral, now: u64) -> u32 {
+    let mut memory = (*state).memory.lock().unwrap();
+    let now = now.max(memory.now());
+    u32::from(memory.advance_time(now).is_err())
+}
+/// # Safety
+/// Live architecture state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_flash_irq(state: *mut Peripheral) -> u32 {
+    u32::from((*state).memory.lock().unwrap().flash_irq())
+}
+/// # Safety
+/// Live architecture state. Space0=flash, space1=AXI; widths1/2/4 for flash keys.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_shared_reg(
+    state: *mut Peripheral,
+    space: u32,
+    offset: u64,
+    value: u32,
+    write: u32,
+    width: u32,
+) -> u64 {
+    let mut memory = (*state).memory.lock().unwrap();
+    let result = if space == 0 {
+        if write != 0 {
+            memory
+                .flash_write_reg(offset, value, width as usize)
+                .map(|_| 0)
+        } else {
+            memory.flash_read_reg(offset)
+        }
+    } else if space == 1 {
+        if write != 0 {
+            memory.fabric.axi.write(offset, value).map(|_| 0)
+        } else {
+            memory.fabric.axi.read(offset)
+        }
+    } else if space == 2 && offset == 0 && write != 0 {
+        memory.set_flash_maximum(value != 0).map(|_| 0)
+    } else {
+        Err("invalid shared register space")
+    };
+    match result {
+        Ok(v) => u64::from(v),
+        Err(_) => 1 << 32,
+    }
+}
+/// # Safety
+/// Live architecture state. token0 issues a new DMA port operation, other tokens
+/// poll completion. 0=ready, 1=admission blocked, other values are live tokens.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_dma_port(
+    state: *mut Peripheral,
+    address: u32,
+    write: u32,
+    token: u64,
+) -> u64 {
+    let mut memory = (*state).memory.lock().unwrap();
+    if token != 0 {
+        return if memory.dma_ready(token - 2) {
+            0
+        } else {
+            token
+        };
+    }
+    match memory.dma_submit(address, write != 0) {
+        Ok(Some(id)) => id + 2,
+        Ok(None) => 1,
+        Err(_) => u64::MAX,
+    }
+}
+/// # Safety
+/// Live architecture state; deterministic synthetic competing-master traffic.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_bus_load(state: *mut Peripheral, target: u32, ns: u64) -> u32 {
+    u32::from(
+        (*state)
+            .memory
+            .lock()
+            .unwrap()
+            .inject_bus_load(target as usize, ns)
+            .is_err(),
+    )
 }
 
 #[no_mangle]
@@ -510,30 +660,6 @@ pub unsafe extern "C" fn daisy_fmc_save(
 }
 
 /// # Safety
-/// Live serialized RCC state and NUL-terminated UTF-8 destination path.
-#[no_mangle]
-pub unsafe extern "C" fn daisy_flash_bus_save(
-    clock: *mut Peripheral,
-    acr: u32,
-    path: *const std::ffi::c_char,
-) -> u32 {
-    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let path = std::ffi::CStr::from_ptr(path).to_str()?;
-        let rate = (*clock)
-            .clock
-            .domain_rate(1)?
-            .ok_or("flash interface clock stopped")?;
-        let latency = acr & 15;
-        let _pipeline = bus::FlashReadPipeline::new(latency)?;
-        let ns = (u128::from(latency + 1) * u128::from(rate.denominator) * 1_000_000_000)
-            .div_ceil(u128::from(rate.numerator));
-        std::fs::write(path,format!("scope=PROGRAMMED_FLASH_READ_LOWER_BOUND\nflash_acr={acr}\nflash_interface_hz={}\nlatency_wait_states={latency}\nnonvolatile_word_service_clocks={}\nnonvolatile_word_service_min_ns={ns}\nread_buffer_bytes=32\nactive_read_commands=1\nwaiting_read_commands=2\ncommand_model=STANDALONE_TESTED\ncpu_stalls_and_queue_arrival_times=NOT_CONNECTED\n",rate.hz(),latency+1))?;
-        Ok(())
-    })();
-    u32::from(result.is_err())
-}
-
-/// # Safety
 /// `state` must be the live pointer returned by daisy_new, with serialized access.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_read(state: *mut Peripheral, offset: u64) -> u64 {
@@ -581,6 +707,17 @@ pub unsafe extern "C" fn daisy_i2c_write(
 pub unsafe extern "C" fn daisy_dma_request(state: *mut Peripheral, channel: u32) -> u64 {
     match (*state).dma.request(channel as usize) {
         Ok(Some((src, dst))) => ((src as u64) << 32) | dst as u64,
+        Ok(None) => 0,
+        Err(_) => u64::MAX,
+    }
+}
+
+/// # Safety
+/// Live serialized DMA state; peek does not advance NDTR or IRQ state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_dma_peek(state: *mut Peripheral, stream: u32) -> u64 {
+    match (*state).dma.clone().request(stream as usize) {
+        Ok(Some((source, destination))) => (u64::from(source) << 32) | u64::from(destination),
         Ok(None) => 0,
         Err(_) => u64::MAX,
     }

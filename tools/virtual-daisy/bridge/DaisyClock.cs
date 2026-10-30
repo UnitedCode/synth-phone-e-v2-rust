@@ -69,6 +69,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void Reset() { lock(sync) { original.Reset(); native.Reset(); } }
         public long Size => 0x400;
         public IntPtr NativeState => native.State;
+        public uint WithState(Func<IntPtr,uint> operation) {lock(sync) return operation(native.State);}
         private readonly object sync=new object();
         private readonly IMachine machine;
         private readonly STM32H7_RCC original;

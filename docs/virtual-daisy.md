@@ -69,6 +69,12 @@ The CPU starts with the SP/PC from the flash vector table, as the chip does.
 The ELF header's entry point is currently zero because of a pre-existing linker
 entry-symbol warning; it is not used as the reset vector.
 
+Use `probe` in place of `run` to execute just the generated ARM cache and flash
+programs, including their negative controls. `probe-summary.txt` explicitly says
+that production audio was not run. Set `VIRTUAL_DAISY_FLASH_MAXIMUM=1` to select
+the datasheet maximum-duration flash scenario; the default uses typical values.
+These are timing scenarios, not measured or guaranteed board latencies.
+
 An optional fourth argument replays the first second of a user WAV after running
 the standard regression tests:
 
@@ -112,10 +118,12 @@ thresholds test this steady fixture; they do not establish musical quality for
 all singers or settings. Keep using the desktop 720-setting sweep and QEMU DSP
 parity tests for that wider coverage.
 
-The same ELF is booted with four deliberate faults. Silent input must fail the RMS criterion.
+The same ELF is booted with five deliberate faults. Silent input must fail the RMS criterion.
 Suppressing RX DMA requests must fail RMS **and** produce SAI overrun evidence.
 Making the DMA MPU region cacheable must corrupt audio and record cacheable DMA
 traffic. Redirecting RX into DTCM must corrupt audio, set TEIF, and clear stream EN.
+Holding its SRAM target busy with synthetic competing traffic must delay DMA
+completion and disrupt audio with FIFO under/overrun evidence.
 Faults are MMIO writes after startup; the ELF is never patched. Every fault run
 must still complete startup and produce a valid capture. Unit
 tests also check that the grader catches bypass, clipping, NaNs and missing audio.
@@ -126,6 +134,13 @@ return values when either clean or invalidate is omitted, and records the new
 value after DCCMVAU/ICIMVAU plus DSB/ISB. A second phase overwrites code through
 the DMA/physical memory path and checks stale instructions until ICIALLU. The
 production ELF is unchanged; the probe has its own process and results buffer.
+
+A separate ARM flash probe runs from ITCM. It unlocks the controller, erases
+sector zero, waits through a flash data read, programs a 256-bit word using
+STRD/STMIA stores, and executes the new function only after I-cache maintenance.
+It checks BSY/QW, EOP and the absence of accidental duplicate strobes on retried
+instructions. Bypassing CPU data waits must return the old word before erase
+completion and fail the result gate. Exceptions and timeouts cannot pass it.
 
 With the derived clock, the macOS production fixture measures about **220.90Hz,
 7.05 cents error**, RMS 0.1585, matching left/right output, no silent steady hops,
@@ -206,8 +221,13 @@ The memory map constrains internal flash to 128 KiB and SDRAM to 64 MiB; it
 retains the actual SRAM/DTCM regions. Generic H743 extra flash and huge unused FMC
 windows are removed. The unused second flash-controller backing object is not
 mapped onto the bus. Unloaded user flash reads as erased ones and survives CPU
-reset. CPU programming stores, erase and option commands explicitly fail because
-those operations are not implemented. QSPI memory-mapped reads,
+reset. CPU and DMA programming stores use the same flash controller. It models
+the key sequence/lock, PG, the 256-bit write buffer, duplicate/inconsistent-write
+flags, forced partial-word programming, two queued operations, sector/bank erase,
+busy flags, EOP, interrupt enables and W1C clearing. Physical changes occur at
+completion; programming never invents a 0-to-1 transition. Reprogramming an ECC
+word without erase, option/security commands and flash CRC fail explicitly.
+QSPI memory-mapped reads,
 Seed2 DFM/Seed3 codecs, USB audio, MIDI input injection, full ADC simulation,
 and complete alternate-function electrical behavior are not implemented. Unknown
 Rust-model registers/commands throw instead of returning invented success.
@@ -216,8 +236,8 @@ Rust-model registers/commands throw instead of returning invented success.
 pacing. The SAI phase accumulator preserves fractional clock rate over time,
 but events have 1-microsecond resolution. CYCCNT counts core-clock periods of
 virtual elapsed time; it cannot measure true M7 instruction costs. PLL lock,
-oscillator tolerance, flash/SDRAM wait states, write buffers, SDRAM refresh and
-DMA/bus stall timing remains unmodeled. Data-cache replacement uses deterministic
+oscillator tolerance, CPU write buffers, dirty cache writeback timing and SDRAM
+refresh contention remain unmodeled. Data-cache replacement uses deterministic
 round-robin, not the silicon's replacement sequence, and the M7 dynamic
 read-allocation optimization is not reproduced. Cache barriers are effectively
 synchronous in this model. Flash and RAM are fetched through Rust when translated
@@ -234,23 +254,40 @@ TRCD/TRP/TRC/TMRD and refresh COUNT. It reports analytical lower bounds for an
 open/precharged/conflicting-row read, a 32-byte line, refresh occupancy and mode
 register quiet time. Field encodings include the specified plus-one timing
 conversion; refresh periods use COUNT directly, without adding the software's
-20-cycle safety margin. These bounds do not impose guessed stalls on the CPU
-or claim to model AXI arbitration, FMC queues, row state or SDRAM retention.
+20-cycle safety margin. Live SDRAM reads use the open-row lower bound as a
+declared service scenario; writes use transfer clocks. FMC queues, row state,
+refresh scheduling and SDRAM retention still need implementation.
 
-`*.flash.txt` reports FLASH_ACR's programmed wait states and the flash-interface
-clock. The standalone Rust flash command model covers one active read plus two
-waiting reads, backpressure at capacity, and reuse of the current 256-bit data
-buffer. Its completion schedule is an optimistic service bound; AXI beat timing,
-programming, ECC and CPU stall injection are not connected to that model.
+`*.flash.txt` and `*.memory.txt` report completed flash operations, the selected
+timing scenario and coupled CPU/DMA wait counters. DS12556's typical/maximum
+program times depend on PSIZE; x64 uses 100/200µs and sector erase uses 1/2s.
+Bank erase uses the published mass-erase timing scenario (x64 5/10s); exact
+H750 bank latency is uncalibrated. Voltage, wear and temperature are not modeled.
+The separately tested read pipeline retains one active plus two waiting reads
+and 256-bit buffer reuse. The live CPU currently serializes its instruction/data
+requests; it does not reproduce that pipeline's full speculative overlap.
+The shared fabric enforces the same three-command read capacity. Live scheduling
+does not yet reuse the interface read buffer between uncached transactions.
 
 The AXI GPV's six initiators expose read/write QoS and issuing overrides. The
-standalone arbitration model implements higher QoS first, least-recently-served
+live arbitration model implements higher QoS first, least-recently-served
 equal-priority requests per target/channel, and Table4's outstanding limits.
-Callers supply pending transactions and completions; the firmware runner does
-not infer an AXI timeline from instruction pacing. Reset ties use a deterministic
+CPU cache misses/uncached transfers and DMA source/destination ports submit
+transactions to a shared event-driven fabric. Target costs use HCLK/PCLK/FMC
+registers and explicit lower-bound service assumptions. Busy targets and issuing
+limits delay requests. CPU wait debt consumes virtual time without retiring
+instructions; stalled multi-access instructions replay accepted accesses so
+they cannot write flash twice. DMA preserves NDTR and IRQ state until the
+destination completes, including deferred EN clear. Reset ties use a deterministic
 port order because the initial hardware ranking is not specified.
 `*.dma.txt` separately records live DMA grants and simultaneous-request contests.
-Neither these ordering models nor the flash queue certify whole-system bus stalls.
+DMA service is polled on the 1µs event grid. Separate AXI read/write service lanes,
+AHB round-robin service and request arrival times are explicit model choices;
+pipeline/target overlap and dirty-writeback traffic remain incomplete. Coupled
+stalls are functional scenarios, not cycle-accurate hardware deadline estimates.
+Native exception-vector reads retain a functional memory view without bus delay;
+reads during flash busy fail explicitly. External stack/vector stalls and reset
+during nonvolatile operations still require implementation and validation.
 
 `tools/virtual-daisy/known-warnings.txt` contains exact observed warnings for these
 I2C timing fields, ADC calibration tags, UART fields and flash latency.
@@ -289,6 +326,8 @@ conflict-victim expectation tests the declared replacement approximation.
 `runtime-cache-fault.architecture-negative.txt` must confirm that disabling the
 runtime hook produces the wrong ARM return value. Exceptions and timeouts cannot
 count as that negative control passing.
+`flash-probe.bin`, `*.flash.bin`, `*.flash-probe.txt` and `*.flash-negative.txt`
+preserve the flash program, CPU-written results and wait-bypass rejection.
 Replay the WAVs to judge
 timbre; objective pitch gates are only part of listening quality.
 

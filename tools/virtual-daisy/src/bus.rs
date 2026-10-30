@@ -1,6 +1,169 @@
 //! RM0433 programmed SDRAM timing bounds. These are not CPU stall estimates.
 use crate::clock::Rate;
 
+struct Transaction {
+    id: u64,
+    ini: usize,
+    target: usize,
+    write: bool,
+    service: u64,
+    finish: u64,
+}
+/// Event-driven target service and backpressure. 1..7 are AXI targets;
+/// 8..12 are local SRAM slaves on AHB matrices. Service costs are supplied
+/// explicitly; this does not reconstruct an unpublished M7 pipeline.
+#[derive(Default)]
+pub struct Fabric {
+    pub axi: Axi,
+    now: u64,
+    next: u64,
+    waiting: std::collections::VecDeque<Transaction>,
+    active: Vec<Transaction>,
+    done: std::collections::BTreeSet<u64>,
+    last_ahb: [usize; 13],
+    pub contests: u64,
+    pub completed: u64,
+}
+impl Fabric {
+    fn lane(target: usize, write: bool) -> usize {
+        (target - 1) * 2 + usize::from(write && target <= 7)
+    }
+    pub fn submit(
+        &mut self,
+        ini: usize,
+        target: usize,
+        write: bool,
+        service: u64,
+    ) -> Result<Option<u64>, &'static str> {
+        if !(1..=6).contains(&ini) || !(1..=13).contains(&target) || service == 0 {
+            return Err("invalid fabric transaction");
+        }
+        // RM0433 4.3.8: one active and two waiting reads per flash bank.
+        if target == 3
+            && !write
+            && self
+                .waiting
+                .iter()
+                .chain(&self.active)
+                .filter(|t| t.target == 3 && !t.write)
+                .count()
+                >= 3
+        {
+            return Ok(None);
+        }
+        if target <= 7 && !self.axi.reserve(ini, write)? {
+            return Ok(None);
+        }
+        self.next += 1;
+        self.waiting.push_back(Transaction {
+            id: self.next,
+            ini,
+            target,
+            write,
+            service,
+            finish: 0,
+        });
+        Ok(Some(self.next))
+    }
+    fn grant_idle(&mut self) -> Result<(), &'static str> {
+        if self.waiting.is_empty() {
+            return Ok(());
+        }
+        for lane in 0..26 {
+            if self
+                .active
+                .iter()
+                .any(|t| Self::lane(t.target, t.write) == lane)
+            {
+                continue;
+            }
+            let candidates: Vec<_> = self
+                .waiting
+                .iter()
+                .filter(|t| Self::lane(t.target, t.write) == lane)
+                .collect();
+            let Some(first) = candidates.first() else {
+                continue;
+            };
+            let target = first.target;
+            let write = first.write;
+            let mask = candidates.iter().fold(0, |m, t| m | (1 << (t.ini - 1)));
+            if candidates.len() > 1 {
+                self.contests += 1;
+            }
+            let winner = if target <= 7 {
+                self.axi.grant(target, write, mask)?.unwrap()
+            } else {
+                (1..=6)
+                    .map(|step| (self.last_ahb[target - 1] + step - 1) % 6 + 1)
+                    .find(|&ini| mask & (1 << (ini - 1)) != 0)
+                    .unwrap()
+            };
+            let index = self
+                .waiting
+                .iter()
+                .position(|t| Self::lane(t.target, t.write) == lane && t.ini == winner)
+                .unwrap();
+            let mut t = self.waiting.remove(index).unwrap();
+            t.finish = self
+                .now
+                .checked_add(t.service)
+                .ok_or("fabric time overflow")?;
+            self.last_ahb[target - 1] = winner;
+            self.active.push(t);
+        }
+        Ok(())
+    }
+    pub fn advance(&mut self, now: u64) -> Result<(), &'static str> {
+        if now < self.now {
+            return Err("fabric clock moved backwards");
+        }
+        loop {
+            self.grant_idle()?;
+            let next = self.active.iter().map(|t| t.finish).min();
+            let Some(next) = next.filter(|&t| t <= now) else {
+                break;
+            };
+            self.now = next;
+            let mut i = 0;
+            while i < self.active.len() {
+                if self.active[i].finish == next {
+                    let t = self.active.remove(i);
+                    if t.target <= 7 {
+                        self.axi.complete(t.ini, t.write)?;
+                    }
+                    self.done.insert(t.id);
+                    self.completed += 1;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        self.now = now;
+        Ok(())
+    }
+    pub fn take_ready(&mut self, id: u64) -> bool {
+        self.done.remove(&id)
+    }
+    pub fn wait(&self, id: u64) -> u64 {
+        if self.done.contains(&id) {
+            return 0;
+        }
+        self.active.iter().find(|t| t.id == id).map_or_else(
+            || self.next_event(),
+            |t| t.finish.saturating_sub(self.now).max(1),
+        )
+    }
+    pub fn next_event(&self) -> u64 {
+        self.active
+            .iter()
+            .map(|t| t.finish.saturating_sub(self.now))
+            .min()
+            .unwrap_or(1)
+            .max(1)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum FlashAdmission {
     Queued,
@@ -169,6 +332,9 @@ pub struct SdramTiming {
     refresh: u64,
 }
 impl SdramTiming {
+    pub fn write_min_ns(&self, bytes: u64) -> u64 {
+        self.ns(bytes.div_ceil(self.width))
+    }
     pub fn decode(
         control: u32,
         timing: u32,
