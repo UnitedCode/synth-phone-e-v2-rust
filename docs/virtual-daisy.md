@@ -89,7 +89,7 @@ channels must satisfy:
 
 | Measurement | Gate |
 | --- | --- |
-| Capture size | 46,000–48,100 stereo frames; WAV length equals model counter |
+| Capture size | 95–100% of one second at the derived SAI rate; WAV length equals model counter |
 | Steady RMS, after 200 ms | 0.05–0.4 |
 | Pitch, independent autocorrelation | Within 15 cents of 220 Hz |
 | Peak / absolute DC / largest adjacent step | At most 0.4 / 0.02 / 0.05 |
@@ -103,15 +103,20 @@ thresholds test this steady fixture; they do not establish musical quality for
 all singers or settings. Keep using the desktop 720-setting sweep and QEMU DSP
 parity tests for that wider coverage.
 
-The same ELF is then booted twice more. Silent input must fail the RMS criterion.
+The same ELF is booted with four deliberate faults. Silent input must fail the RMS criterion.
 Suppressing RX DMA requests must fail RMS **and** produce SAI overrun evidence.
-Both fault runs must still complete startup and produce valid captures. Unit
+Making the DMA MPU region cacheable must corrupt audio and record cacheable DMA
+traffic. Redirecting RX into DTCM must corrupt audio, set TEIF, and clear stream EN.
+Faults are MMIO writes after startup; the ELF is never patched. Every fault run
+must still complete startup and produce a valid capture. Unit
 tests also check that the grader catches bypass, clipping, NaNs and missing audio.
+Rev5 also boots through the WM8731 ideal line stage and checks its audio output.
 
-The initial macOS production run measured **220.11 Hz, 0.9 cents error**, RMS
-0.1583, 47,863 frames, matching left/right output, no silent steady hops, and no
-FIFO underruns/overruns. Treat the generated report as the evidence for any
-particular build; these numbers are not golden output samples.
+With the derived clock, the macOS production fixture measures about **220.90Hz,
+7.05 cents error**, RMS 0.1585, matching left/right output, no silent steady hops,
+and no FIFO underruns/overruns. Earlier 220.11Hz results used the fixed timer and
+are superseded. Treat the generated report as evidence for a particular build;
+these numbers are not golden output samples.
 
 ## Model coverage and limits
 
@@ -120,7 +125,11 @@ bus accesses and much of the STM32 peripheral initialization. Rust implements
 the additional behavior needed by this firmware:
 
 - Request-paced DMA1, 32-bit transfers, circular reload, double buffering,
-  separate half/full interrupt flags and write-one-to-clear behavior.
+  separate half/full/error interrupt flags and write-one-to-clear behavior.
+  DMA1 cannot access ITCM/DTCM or RAM holes; illegal transfers set TEIF and clear EN.
+  Configuration writes are protected while enabled; double-buffer inactive
+  pointers remain writable. Other DMA widths, bursts, FIFO packing, memory-to-memory
+  and non-audio request paths are not implemented.
 - Revision-specific SAI receive/transmit FIFOs with signed 24-bit stereo samples, DMA request
   connections through DMAMUX and explicit under/overrun counters. TX prefill works
   before channel enable, matching the firmware's startup wait.
@@ -133,6 +142,32 @@ the additional behavior needed by this firmware:
 - PWR readiness, FMC SDRAM configuration, missing SYSCFG/ADC2 startup registers,
   and IS25LP064 QSPI startup commands: JEDEC ID, status, write-enable, register
   writes, QPI entry/exit and instruction lane validation.
+- Shared physical RAM with a separate CPU data-cache view: 16KiB, four ways,
+  32-byte lines, MPU memory attributes/priority/subregions, write-through and
+  write-back policies, MVA and set/way clean/invalidate operations. DMA bypasses
+  both the CPU cache and CPU MPU permissions. CMSIS can enumerate all sets/ways.
+- Daisy's 16MHz HSE, rational PLL/SAI clock calculation, fractional shadow-register
+  latching, PLL write protection, SAI divider/oversampling selection, and clock
+  gates. APB timer kernels and SysTick follow their prescalers. DWT CYCCNT follows
+  the core clock with 32-bit wrap, trace enable, software lock and writable count.
+
+The default input boundary remains **serial PCM**, after ADC processing. Raw input
+is timestamped at 48014Hz and linearly interpolated at the derived SAI clock.
+WAV output uses the rounded derived rate; `.wav.clock.txt` retains its exact ratio.
+The production PLL/SAI register sequence currently derives **48187.487053Hz**:
+16MHz / 3 × (178 + 827/8192) / 77 / 256. This is a register-derived expectation,
+not a physical measurement; firmware sample-rate constants deserve a separate
+audit. The runner no longer hides this difference behind a fixed 48014Hz timer.
+Captures that change rate after audio starts fail instead of mislabeling a WAV.
+
+For **Rev5 only**, add `--audio-boundary ideal-line` to place normalized input
+before the WM8731 nominal line gain and digital DC-removal stage. This implements
+1.5dB gain steps (-34.5..+12dB), individual line mutes, and the published
+H(z)=(1-z^-1)/(1-0.9995z^-1), including ADCHPD/HPOR offset retention. It is an
+idealized floating-point stage, not a complete ADC: gain tolerance, internal
+rounding, decimation/interpolation filters, group delay and analog circuitry are
+unmodeled. Rev4/Rev7 reject this option. Unsupported active WM8731 sample-clock
+ratios, de-emphasis, microphone and analog-bypass paths fail explicitly.
 
 The memory map constrains internal flash to 128 KiB and SDRAM to 64 MiB; it
 retains the actual SRAM/DTCM regions. Generic H743 extra flash and huge unused FMC
@@ -142,18 +177,23 @@ Seed2 DFM/Seed3 codecs, USB audio, MIDI input injection, full ADC simulation,
 and complete alternate-function electrical behavior are not implemented. Unknown
 Rust-model registers/commands throw instead of returning invented success.
 
-**Timing is nominal, not cycle accurate.** The CPU uses Renode's 480 MIPS setting,
-SAI advances at a nominal 48014 stereo frames/second, and the scheduler quantum
-is 1 microsecond. PLL fractional routing, flash wait states, cache coherence,
-DMA/bus contention, SDRAM refresh and DWT cycle timing are not calibrated. Passing
-this test cannot prove deadline compliance, performance gains, or freedom from
-cache-related hardware bugs. Analog codec gain/filtering/noise and physical
-signal integrity are also outside this model. A future hardware comparison is
-needed to calibrate those behaviors.
+**Instruction timing is not cycle accurate.** The CPU retains Renode's 480 MIPS
+pacing. The SAI phase accumulator preserves fractional clock rate over time,
+but events have 1-microsecond resolution. CYCCNT counts core-clock periods of
+virtual elapsed time; it cannot measure true M7 instruction costs. PLL lock,
+oscillator tolerance, flash/SDRAM wait states, write buffers, SDRAM refresh and
+DMA/bus contention remain unmodeled. Data-cache replacement uses deterministic
+round-robin, not the silicon's replacement sequence, and the M7 dynamic
+read-allocation optimization is not reproduced. Cache barriers are effectively
+synchronous in this model. Instruction-cache fetch/coherence (including code
+executed from RAM), memory speculation, full MPU fault semantics and general
+peripheral kernel-clock muxes are not covered by these tests. Passing cannot
+certify deadline compliance, CPU headroom or complete cache correctness.
 
 `tools/virtual-daisy/known-warnings.txt` contains exact observed warnings for these
-specific clock/cache/I2C timing fields, ADC calibration tags, UART fields, flash
-latency and DWT unlock. It also allows the exact observed two-wakeup diagnostic
+I2C timing fields, ADC calibration tags, UART fields and flash latency.
+The obsolete PLL/cache/DWT warnings have been removed as those paths gained
+models. It also allows the exact observed two-wakeup diagnostic
 from Renode's [host-thread condition loop](https://github.com/renode/renode-infrastructure/blob/master/src/Emulator/Main/Utilities/MonitorCondition.cs),
 which rechecks its wait predicate after a redundant wakeup; it does not indicate
 a dropped virtual interrupt. The grader permits only those exact messages, without
@@ -174,7 +214,10 @@ test runner, helper script or fallback is used.
 include the exact `firmware.elf` and `firmware.sha256`, generated `daisy.repl`,
 `conformance.txt` with model/firmware/platform hashes and explicit evidence gaps,
 `baseline.wav`, fault WAVs, `.wav.stats`, host/peripheral logs, RTT logs and DTCM
-captures. CI uploads these on both success and failure. Replay the WAVs to judge
+captures. `.memory.txt` reports cache fills/writebacks and cacheable DMA traffic;
+`.bus.txt` records DMA status/control/count, and `.wav.clock.txt` records clock
+rates and the programmed PLL/SAI fields. CI uploads these on success and failure.
+Replay the WAVs to judge
 timbre; objective pitch gates are only part of listening quality.
 
 Next useful additions are event-driven virtual controls/MIDI, longer annotated

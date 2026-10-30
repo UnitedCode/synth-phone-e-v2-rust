@@ -10,6 +10,25 @@ pub fn prepare(
     fs::create_dir_all(directory)?;
     let directory = fs::canonicalize(directory)?;
     let mut platform = fs::read_to_string(renode.join("platforms/cpus/stm32h7.repl"))?;
+    platform = platform.replace(
+        "rcc: Miscellaneous.STM32H7_RCC @ sysbus 0x58024400",
+        &format!(
+            "rcc: Miscellaneous.DaisyRcc @ sysbus 0x58024400\n    libraryPath: \"{}\"",
+            library.display()
+        ),
+    );
+    platform = platform.replace(
+        "dwt: Miscellaneous.DWT @ sysbus 0xE0001000\n    frequency: 250000000",
+        "dwt: Miscellaneous.DaisyDwt @ sysbus 0xE0001000\n    rcc: rcc",
+    );
+    platform = platform.replace(
+        "nvic: IRQControllers.NVIC @",
+        "nvic: Miscellaneous.DaisyNvic @",
+    );
+    platform = platform.replace(
+        "    priorityMask: 0xF0",
+        "    priorityMask: 0xF0\n    architecture: architecture",
+    );
     // STM32H750/Daisy memory limits: do not inherit H743's extra flash or
     // the generic board's unbounded FMC windows. Bank2 only backs the unused
     // flash-controller object and is deliberately not on the system bus.
@@ -35,6 +54,18 @@ pub fn prepare(
             &format!("{name}: Memory.MappedMemory @ sysbus {address}\n    size: 0x10000000"),
             "",
         );
+    }
+    for (name, address) in [
+        ("axiSram", 0x24000000_u32),
+        ("sram1", 0x30000000),
+        ("sram2", 0x30020000),
+        ("sram3", 0x30040000),
+        ("sram4", 0x38000000),
+        ("backupSram", 0x38800000),
+        ("sdramBank1", 0xc0000000),
+    ] {
+        let marker = format!("{name}: Memory.MappedMemory @ sysbus 0x{address:08X}");
+        platform = platform.replace(&marker, &format!("{name}: Miscellaneous.DaisyMemory @ sysbus 0x{address:08X}\n    architecture: architecture\n    baseAddress: 0x{address:08X}"));
     }
     let start = platform
         .find("pwr: Python.PythonPeripheral")
@@ -73,6 +104,10 @@ pub fn prepare(
         "adcM1S2: Miscellaneous.DaisyAdc @",
     );
     platform = platform.replace("dma1: DMA.STM32DMA @", "dma1: Miscellaneous.DaisyDma @");
+    platform = platform.replace(
+        "rcc RegistrationPeripheralAlias.DMA1\n    }",
+        "rcc RegistrationPeripheralAlias.DMA1\n    }\n    architecture: architecture",
+    );
     platform = platform.replace(
         "qspi: SPI.STM32H7_QuadSPI @",
         "qspi: Miscellaneous.DaisyQspi @",
@@ -133,13 +168,17 @@ pub fn prepare(
     if platform.contains("Python.") || platform.contains("`py ") {
         return Err("Python platform code remains".into());
     }
+    platform.push_str(&format!(
+        "\narchitecture: Miscellaneous.DaisyArchitecture @ none\n    libraryPath: \"{}\"\n",
+        library.display()
+    ));
     let registration = if board == Board::Rev5 {
         "i2c2 0x1a"
     } else {
         "none"
     };
     platform.push_str(&format!("\n\ncodec: Miscellaneous.DaisyI2c @ {registration}\n    libraryPath: \"{}\"\n    kind: {}\n\noled: Miscellaneous.DaisyI2c @ i2c1 0x3c\n    libraryPath: \"{}\"\n    kind: 5\n", library.display(), board.codec_kind(), library.display()));
-    platform.push_str(&format!("\nsai1: Miscellaneous.DaisySai @ sysbus 0x40015800\n    libraryPath: \"{}\"\n    codec: codec\n    rxChannel: {}\n    DmaA -> dmamux1@87\n    DmaB -> dmamux1@88\n", library.display(), board.rx_channel()));
+    platform.push_str(&format!("\nsai1: Miscellaneous.DaisySai @ {{ sysbus 0x40015800; rcc RegistrationPeripheralAlias.SAI1 }}\n    libraryPath: \"{}\"\n    codec: codec\n    rcc: rcc\n    rxChannel: {}\n    DmaA -> dmamux1@87\n    DmaB -> dmamux1@88\n", library.display(), board.rx_channel()));
     if board == Board::Rev4 {
         platform = platform.replace("    11 -> timer2@03", "    11 -> timer2@03 | codec@0");
     }

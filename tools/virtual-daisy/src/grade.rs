@@ -12,7 +12,11 @@ pub fn artifact(prefix: &Path, suffix: &str) -> PathBuf {
 }
 
 pub fn stat(prefix: &Path, key: &str) -> Result<u64> {
-    let text = fs::read_to_string(artifact(prefix, ".wav.stats"))?;
+    counter(&artifact(prefix, ".wav.stats"), key)
+}
+
+pub fn counter(path: &Path, key: &str) -> Result<u64> {
+    let text = fs::read_to_string(path)?;
     let marker = format!("{key}=");
     let mut matches = text.lines().filter_map(|line| line.strip_prefix(&marker));
     let value = matches
@@ -71,9 +75,9 @@ fn known_warning(line: &str) -> bool {
         .any(|known| !known.is_empty() && message == known)
 }
 
-fn analyze(samples: &[f32]) -> (Vec<String>, String) {
+fn analyze_at_rate(samples: &[f32], sample_rate: f64) -> (Vec<String>, String) {
     let metrics = audio_lab::metrics(samples);
-    let pitch = audio_lab::estimate_pitch(samples);
+    let pitch = audio_lab::estimate_pitch(samples).map(|hz| hz * sample_rate / f64::from(RATE));
     let cents = pitch.map(|hz| 1200.0 * (hz / 220.0).log2().abs());
     let mut failures = Vec::new();
     for (bad, label) in [
@@ -113,7 +117,7 @@ fn evaluate(prefix: &Path) -> Result<(Vec<String>, String)> {
     let mut wav = hound::WavReader::open(artifact(prefix, ".wav"))?;
     let spec = wav.spec();
     if spec.channels != 2
-        || spec.sample_rate != RATE
+        || !(8000..=192000).contains(&spec.sample_rate)
         || spec.sample_format != hound::SampleFormat::Float
         || spec.bits_per_sample != 32
     {
@@ -126,7 +130,18 @@ fn evaluate(prefix: &Path) -> Result<(Vec<String>, String)> {
         return Err("Truncated stereo capture".into());
     }
     let frames = stat(prefix, "frames")?;
-    if audio.len() / 2 != frames as usize || !(46000..=48100).contains(&frames) {
+    let clock_path = artifact(prefix, ".wav.clock.txt");
+    let numerator = counter(&clock_path, "sai_rate_numerator")?;
+    let denominator = counter(&clock_path, "sai_rate_denominator")?;
+    if denominator == 0 {
+        return Err("Invalid SAI clock denominator".into());
+    }
+    let rate = numerator as f64 / denominator as f64;
+    if rate.round() as u32 != spec.sample_rate {
+        return Err("WAV metadata disagrees with derived SAI clock".into());
+    }
+    if audio.len() / 2 != frames as usize || (frames as f64) < rate * 0.95 || (frames as f64) > rate
+    {
         return Err(format!("Incomplete capture: {frames} frames").into());
     }
     let mut failures = Vec::new();
@@ -141,10 +156,10 @@ fn evaluate(prefix: &Path) -> Result<(Vec<String>, String)> {
             .as_chunks::<2>()
             .0
             .iter()
-            .skip(RATE as usize / 5)
+            .skip((rate / 5.0) as usize)
             .map(|f| f[channel])
             .collect();
-        let (bad, report) = analyze(&steady);
+        let (bad, report) = analyze_at_rate(&steady, rate);
         failures.extend(
             bad.into_iter()
                 .map(|bad| format!("channel {channel}: {bad}")),
@@ -185,6 +200,9 @@ pub fn check(prefix: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn analyze(samples: &[f32]) -> (Vec<String>, String) {
+        analyze_at_rate(samples, f64::from(RATE))
+    }
     #[test]
     fn gates_reject_silence_bypass_clipping_and_lost_audio() {
         let tone = |hz| audio_lab::tone(hz, 0.8, &[(1, 0.2)]);
@@ -211,7 +229,7 @@ mod tests {
         assert!(known_warning(
             "[time]  [WARNING] Thread has been woken up 2 times, verify your condition"
         ));
-        assert!(known_warning(
+        assert!(!known_warning(
             "[time]  [WARNING] cpu: Trying to enable instruction cache, but it's not supported"
         ));
         assert!(!known_warning(

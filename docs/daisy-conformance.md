@@ -87,9 +87,52 @@ bridge now services enable-time requests too. Correct threshold handling prevent
 overfilling the FIFO during that prefill. These fixes improve the model;
 they are not evidence that remaining behaviors are correct by implication.
 
+## Datasheet-driven cache, bus, clock and codec checks
+
+ST's [PM0253 Cortex-M7 programming manual](https://www.st.com/resource/en/programming_manual/pm0253-stm32f7-series-and-stm32h7-series-cortexm7-processor-programming-manual-stmicroelectronics.pdf)
+and [AN4838 MPU guide](https://www.st.com/content/st_com/en/technical-documents/an4838-introduction-to-memory-protection-unit-management-on-stm32-mcus-stmicroelectronics.html)
+define the cache geometry/maintenance and MPU attribute rules. The Rust model
+now implements separate CPU-cache/physical-DMA views, 32-byte cache-line effects,
+MVA and set/way operations, write-through/write-back policies and MPU priority/
+subregion fallback. A dirty neighboring variable can be lost when its shared
+line is invalidated: tests deliberately check this failure, as well as stale
+RX data and uncleaned TX data. The default firmware's noncacheable DMA region
+passes; changing its attributes after boot breaks the audio test.
+
+[RM0433](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+defines the DMA interconnect reachability, TEIF/TEIE behavior, register write
+protection, PLL and SAI dividers. DMA1 rejects ITCM/DTCM and unpopulated RAM,
+preserves NDTR on a failed request, sets TEIF and clears EN. A production boot
+redirected into DTCM must fail the audio gate with those register effects.
+
+The manufacturer's [libDaisy clock configuration](https://github.com/electro-smith/libDaisy/blob/master/src/sys/stm32h7xx_hal_conf.h)
+specifies HSE=16MHz; the inherited Renode platform used 8MHz. That source is
+corrected. PLL fractional values latch on FRACEN's rising edge and remain latched
+while FRACEN is cleared for retuning, as described in RM0433's initialization
+sequence. PLL N/P/Q/R field widths, protected writes, SAI clock routing, MCKDIV,
+OSR and master-clock-disabled division now use the register values. Rational
+phase accumulation avoids rounding the clock to integer Hz. SysTick and APB
+timer clocks follow core/bus prescalers, including TIMPRE and the /64 jump in
+high D1CPRE encodings. Unrelated peripheral kernel muxes remain incomplete.
+
+CYCCNT now follows the derived core frequency with trace enable, software lock,
+writable count and wraparound. The software-lock distinction follows Arm's
+[Cortex-M7 errata notice, entry 513195](https://documentation-service.arm.com/static/665dff778ad83c4754308908?token=):
+software accesses are protected; an external debugger has different access
+semantics. No external-debugger model is claimed. CYCCNT still counts virtual
+elapsed clock periods, not calibrated instruction execution time.
+
+For WM8731, the separate `ideal-line` input stage implements the published
+1.5dB line-gain steps and page58 high-pass transfer function from the linked
+Rev4.9 datasheet. Checks cover DC decay, channel gain independence, HPOR/ADCHPD,
+mute and reset. The normal serial input path bypasses that pre-ADC stage;
+it must not apply gain/filtering twice. De-emphasis and unsupported sample-clock
+ratios are rejected. This does not reproduce the full ADC/DAC response.
+
 CI runs the unmodified production firmware on all three profiles. Each must
 complete startup, produce valid stereo PCM with correct tuning and continuity,
-and detect both silence and lost receive-DMA faults. The existing desktop sweep
+and detect silence, lost receive DMA, cacheable buffers and inaccessible DTCM
+faults. Rev5 additionally boots through the ideal line stage. The existing desktop sweep
 and ARM DSP parity tests remain complementary checks. The source references
 and tests are not substitutes for comparing with a board.
 
@@ -100,9 +143,9 @@ and tests are not substitutes for comparing with a board.
 | Firmware boot and selected audio path | Executed in simulation | Same ELF on an identified physical revision |
 | Serial data, reset and control behavior | Source-backed cases | Captured control transactions and SAI words/edges, including reset and faults |
 | Interrupt/buffer ownership | Functional DMA and IRQ tests | Hardware DMA HT/TC, NVIC and task traces with timestamps and simultaneous UI/MIDI load |
-| Performance and deadlines | Nominal instruction pacing only | Calibrated M7 instruction timing, caches, flash/SDRAM latency and bus contention |
-| Clock rates and drift | Fixed 48014 Hz virtual SAI clock | RCC/PLL-to-SAI derivation, clock measurements and oscillator tolerance |
-| Audio latency/filtering | PCM injected/captured at serial boundary | ADC/DAC filter and startup delays, impulse and frequency responses per codec |
+| Performance and deadlines | Functional data-cache/DMA coherency, nominal instruction pacing | Instruction-cache coherence, silicon cache allocation/replacement, calibrated instruction/flash/SDRAM latency and contention |
+| Clock rates and drift | RCC/PLL/SAI rational derivation, 1µs event grid, DWT/core and timer prescalers | PLL/oscillator lock and jitter, clock-domain crossing delays, oscillator tolerance, independent frequency measurements |
+| Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal stage | Full ADC/DAC filters, internal rounding and startup/group delays, impulse/frequency responses per codec |
 | Analog sound | No analog model | Calibrated gain, impedance, headroom, clipping, noise and distortion measurements |
 | Other peripherals | Partial STM32/Renode coverage | Full register/error/reset semantics, QSPI storage, display, MIDI/USB/ADC tests |
 | Other revisions | Unsupported | Separate sourced profiles and codec conformance suites, then board comparisons |

@@ -1,8 +1,11 @@
 //! Rust register models hosted by Renode through a small native bridge.
 use std::collections::BTreeMap;
 pub mod board;
+pub mod clock;
+mod codec;
 mod dma;
 mod gpio;
+pub mod memory;
 mod qspi;
 mod sai;
 #[cfg(test)]
@@ -16,9 +19,28 @@ pub struct Peripheral {
     qspi: qspi::Qspi,
     gpio: gpio::Gpio,
     codec_reset_high: bool,
+    memory: memory::SystemMemory,
+    clock: clock::ClockTree,
+    line_stage: codec::LineStage,
 }
 
 impl Peripheral {
+    /// Idealized normalized line input before ADC gain/DC removal. Serial PCM
+    /// injection remains a separate boundary and never runs this stage twice.
+    pub fn ideal_line_input(&mut self, sample: [f32; 2]) -> Result<[f32; 2], &'static str> {
+        if self.kind != 4 {
+            return Err("ideal line stage only implemented for WM8731");
+        }
+        let mask = self.read(0x100)?;
+        if mask & 1 == 0 {
+            return Ok([0.0; 2]);
+        }
+        let reg = |index| self.registers.get(&index).copied().unwrap_or(0);
+        if reg(4) & 0x0c != 0 {
+            return Err("WM8731 microphone or analog bypass route is not modeled");
+        }
+        Ok(self.line_stage.process(sample, [reg(0), reg(1)], reg(5)))
+    }
     pub fn configure_revision_straps(&mut self, grounded: u32) -> Result<(), &'static str> {
         if self.kind != 103 || grounded > 7 {
             return Err("invalid port D revision straps");
@@ -54,11 +76,17 @@ impl Peripheral {
             qspi: qspi::Qspi::default(),
             gpio: gpio::Gpio::default(),
             codec_reset_high: false,
+            memory: memory::SystemMemory::default(),
+            clock: clock::ClockTree::default(),
+            line_stage: codec::LineStage::default(),
         };
         result.reset();
         result
     }
     pub fn reset(&mut self) {
+        self.memory.reset_registers();
+        self.clock = clock::ClockTree::default();
+        self.line_stage = codec::LineStage::default();
         self.registers.clear();
         self.dma = dma::Dma::default();
         self.qspi = qspi::Qspi::default();
@@ -135,6 +163,17 @@ impl Peripheral {
                 if reg(7) != 9 {
                     return Err("unsupported active WM8731 digital format");
                 }
+                if reg(8) != 0 {
+                    return Err("unsupported WM8731 sample clock ratio");
+                }
+                if reg(5) & 6 != 0 {
+                    return Err("WM8731 de-emphasis filter is not implemented");
+                }
+                if reg(4) & 0x2c != 0 {
+                    return Err(
+                        "WM8731 microphone, bypass and sidetone routing is not implemented",
+                    );
+                }
                 if reg(6) & 0x80 != 0 {
                     return Ok(0);
                 }
@@ -147,6 +186,8 @@ impl Peripheral {
             8 => self.qspi.read(offset, 4),
             9 if offset == 0x100 => Ok(if self.codec_reset_high { 3 } else { 0 }),
             10 if offset == 0x100 => Ok(3), // Rev7 hardware mode, fixed LJ24, no I2C.
+            12 => self.memory.read_scb(offset),
+            13 => Ok(self.clock.read(offset)),
             100..=110 => self.gpio.read(offset),
             _ => Err("unsupported peripheral"),
         }
@@ -185,6 +226,9 @@ impl Peripheral {
         Ok(())
     }
     pub fn write(&mut self, offset: u64, value: u32) -> Result<(), &'static str> {
+        if self.kind == 12 {
+            return self.memory.write_scb(offset, value);
+        }
         if self.kind == 6 {
             return self.dma.write(offset, value);
         }
@@ -193,6 +237,10 @@ impl Peripheral {
         }
         if self.kind == 8 {
             return self.qspi.write(offset, value, 4);
+        }
+        if self.kind == 13 {
+            self.clock.write(offset, value);
+            return Ok(());
         }
         if self.kind >= 100 {
             return self.gpio.write(offset, value);
@@ -229,6 +277,138 @@ impl Peripheral {
 #[no_mangle]
 pub extern "C" fn daisy_new(kind: u32) -> *mut Peripheral {
     Box::into_raw(Box::new(Peripheral::new(kind)))
+}
+
+/// # Safety
+/// `state` is a live, serialized architecture state; width is 1, 2, or 4.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_memory_read(
+    state: *mut Peripheral,
+    address: u32,
+    width: u32,
+    cpu: u32,
+) -> u64 {
+    let result = if cpu != 0 {
+        (*state).memory.read_cpu(address, width as usize)
+    } else {
+        (*state).memory.read_dma(address, width as usize)
+    };
+    match result {
+        Ok(value) => u64::from(value),
+        Err(_) => 1_u64 << 32,
+    }
+}
+
+/// # Safety
+/// `state` is a live, exclusively accessed architecture state; width is 1, 2, or 4.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_memory_write(
+    state: *mut Peripheral,
+    address: u32,
+    width: u32,
+    value: u32,
+    cpu: u32,
+) -> u32 {
+    u32::from(
+        if cpu != 0 {
+            (*state).memory.write_cpu(address, width as usize, value)
+        } else {
+            (*state).memory.write_dma(address, width as usize, value)
+        }
+        .is_err(),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn daisy_memory_is_ram(address: u32, width: u32) -> u32 {
+    u32::from(memory::SystemMemory::is_ram(address, width as usize))
+}
+
+/// # Safety
+/// `state` is a live, serialized clock state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_clock_advance(
+    state: *mut Peripheral,
+    cr1: u32,
+    frcr: u32,
+    ns: u64,
+) -> u64 {
+    (*state)
+        .clock
+        .advance(cr1, frcr, ns)
+        .map_or(1_u64 << 32, u64::from)
+}
+
+/// # Safety
+/// `state` is a live, serialized clock state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_clock_rate(state: *mut Peripheral, cr1: u32, frcr: u32) -> f64 {
+    (*state)
+        .clock
+        .sample_rate(cr1, frcr)
+        .map_or(f64::NAN, clock::Rate::hz)
+}
+
+/// # Safety
+/// `state` is a live, serialized clock state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_clock_domain(state: *mut Peripheral, domain: u32) -> u64 {
+    (*state).clock.domain_rate(domain).map_or(u64::MAX, |rate| {
+        rate.map_or(0, |rate| rate.numerator / rate.denominator)
+    })
+}
+
+/// # Safety
+/// `state` is a live, serialized clock state; use write=2 to synchronize before RCC writes.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_clock_dwt(
+    state: *mut Peripheral,
+    offset: u64,
+    value: u32,
+    write: u32,
+    now: u64,
+) -> u64 {
+    if write == 3 {
+        return u64::from((*state).clock.trace_enable(value != 0, now).is_err()) << 32;
+    }
+    if write == 2 {
+        return u64::from((*state).clock.sync_cycles(now).is_err()) << 32;
+    }
+    (*state)
+        .clock
+        .dwt(offset, if write == 0 { None } else { Some(value) }, now)
+        .map_or(1_u64 << 32, u64::from)
+}
+
+/// # Safety
+/// `state` is live/serialized; `path` is a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_clock_save(
+    state: *mut Peripheral,
+    cr1: u32,
+    frcr: u32,
+    path: *const std::ffi::c_char,
+) -> u32 {
+    let Ok(path) = std::ffi::CStr::from_ptr(path).to_str() else {
+        return 1;
+    };
+    let Ok(stats) = (*state).clock.stats(cr1, frcr) else {
+        return 1;
+    };
+    u32::from(std::fs::write(path, stats).is_err())
+}
+
+/// # Safety
+/// `state` must be live/serialized and `path` a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_memory_save(
+    state: *mut Peripheral,
+    path: *const std::ffi::c_char,
+) -> u32 {
+    let Ok(path) = std::ffi::CStr::from_ptr(path).to_str() else {
+        return 1;
+    };
+    u32::from(std::fs::write(path, (*state).memory.stats()).is_err())
 }
 
 /// # Safety
@@ -297,10 +477,51 @@ pub unsafe extern "C" fn daisy_sai_tick(state: *mut Peripheral, codec_active: u3
 }
 
 /// # Safety
+/// Both pointers are distinct live states with serialized access.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_sai_tick_codec(
+    state: *mut Peripheral,
+    codec: *mut Peripheral,
+    ideal_line: u32,
+) -> u32 {
+    let Ok(mask) = (*codec).read(0x100) else {
+        return 1;
+    };
+    let sample = (*state).sai.input_sample();
+    let sample = if ideal_line != 0 {
+        match (*codec).ideal_line_input(sample) {
+            Ok(sample) => sample,
+            Err(_) => return 1,
+        }
+    } else {
+        sample
+    };
+    (*state).sai.tick_sample(mask, sample);
+    0
+}
+
+/// # Safety
 /// `state` must be a live, exclusive SAI state. Configure before CPU execution.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_sai_configure(state: *mut Peripheral, rx_channel: u32) -> u32 {
     u32::from((*state).configure_audio(rx_channel).is_err())
+}
+
+/// # Safety
+/// `state` must be a live, serialized SAI state. Rate comes from the modeled clock tree.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_sai_rate(state: *mut Peripheral, rate: f64) -> u32 {
+    if !rate.is_finite() || !(1.0..=384000.0).contains(&rate) {
+        return 1;
+    }
+    if (*state).sai.frames != 0
+        && (*state).sai.sample_rate != 0.0
+        && (*state).sai.sample_rate != rate
+    {
+        return 1;
+    } // A WAV cannot label a variable-rate capture.
+    (*state).sai.sample_rate = rate;
+    0
 }
 
 /// # Safety
@@ -354,6 +575,7 @@ pub unsafe extern "C" fn daisy_sai_input(
 pub unsafe extern "C" fn daisy_sai_save(
     state: *mut Peripheral,
     path: *const std::ffi::c_char,
+    sample_rate: u32,
 ) -> u32 {
     let path = match std::ffi::CStr::from_ptr(path).to_str() {
         Ok(path) => path,
@@ -365,7 +587,7 @@ pub unsafe extern "C" fn daisy_sai_save(
             path,
             hound::WavSpec {
                 channels: 2,
-                sample_rate: 48014,
+                sample_rate,
                 bits_per_sample: 32,
                 sample_format: hound::SampleFormat::Float,
             },
