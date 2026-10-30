@@ -177,6 +177,7 @@ impl Host<'_> {
             "entry-fault",
             "wait-irq",
             "wait-irq-fault",
+            "wait-irq-target",
         ]
         .contains(&fault)
         {
@@ -421,6 +422,10 @@ fn run(
         directory.join("interrupt-probe.bin"),
         probe::interrupt_image(),
     )?;
+    fs::write(
+        directory.join("interrupt-target-probe.bin"),
+        probe::interrupt_target_image(),
+    )?;
     let interrupt = host.boot("wait-irq", &tone, "wait-irq")?;
     probe::check_interrupt(&interrupt)?;
     if grade::counter(
@@ -429,6 +434,14 @@ fn run(
     )? == 0
     {
         return Err("ARM IRQ probe did not abandon a normal-memory wait".into());
+    }
+    let target_irq = host.boot("wait-irq-target", &tone, "wait-irq-target")?;
+    probe::check_interrupt(&target_irq)?;
+    let stats = grade::artifact(&target_irq, ".memory.txt");
+    if grade::counter(&stats, "abandoned_bus_requests")? == 0
+        || grade::counter(&stats, "exception_stack_words")? != 8
+    {
+        return Err("ARM IRQ probe did not abandon a bus request and stack one SRAM frame".into());
     }
     let broken = host.boot("wait-irq-fault", &tone, "wait-irq-fault")?;
     let error = probe::check_interrupt(&broken)

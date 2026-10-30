@@ -139,3 +139,47 @@ fn vector_fetch_uses_default_instruction_cache_policy_despite_mpu_xn_and_noncach
         .unwrap();
     assert_eq!(vector, 0x08003001);
 }
+
+#[test]
+fn an_abandoned_load_does_not_serialize_exception_stacking_on_a_different_target() {
+    let mut memory = SystemMemory::default();
+    let rate = Rate {
+        numerator: 200_000_000,
+        denominator: 1,
+    };
+    memory.configure_bus(rate, rate, None);
+    memory.inject_bus_load(7, 100_000).unwrap();
+    memory.advance_time(0).unwrap();
+    let mut data = 0;
+    assert!(
+        memory
+            .cpu_access(0x10002001f000, 0x24000000, 4, false, &mut data)
+            .unwrap()
+            > 0
+    );
+    for word in 0..8 {
+        let mut value = u64::from(word + 10);
+        memory
+            .cpu_access(u64::MAX - 1, 0x3001ffe0 + word * 4, 4, true, &mut value)
+            .unwrap();
+    }
+    // The vector is in native ITCM, and D2 SRAM has its own service target.
+    for _ in 0..32 {
+        let wait = memory.exception_entry(0x6040).unwrap();
+        if wait == 0 {
+            memory.finish_exception_entry().unwrap();
+            break;
+        }
+        memory.take_cpu_debt();
+        memory.advance_time(memory.now() + wait).unwrap();
+    }
+    assert_eq!(memory.now(), 40);
+    assert_eq!(memory.read_dma(0x3001ffe0, 4).unwrap(), 10);
+    // Returning to the load must still wait for the occupied AXI target.
+    assert!(
+        memory
+            .cpu_access(0x10002001f000, 0x24000000, 4, false, &mut data)
+            .unwrap()
+            > 0
+    );
+}

@@ -96,7 +96,7 @@ public static class DaisyHost
         if(args[5]=="architecture" || args[5]=="runtime-fault") { ArchitectureProbes(emulation,machine,args[3],args[5]=="runtime-fault"); emulation.Dispose(); return; }
         if(args[5]=="flash" || args[5]=="flash-wait-fault") {FlashProbes(emulation,machine,args[3],args[5]=="flash-wait-fault");emulation.Dispose();return;}
         if(args[5]=="timing" || args[5]=="dsb-fault" || args[5]=="entry-fault") {TimingProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
-        if(args[5]=="wait-irq" || args[5]=="wait-irq-fault") {InterruptProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="wait-irq" || args[5]=="wait-irq-fault" || args[5]=="wait-irq-target") {InterruptProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -214,11 +214,16 @@ public static class DaisyHost
     }
     private static void InterruptProbes(Emulation emulation,Machine machine,string prefix,string fault) {
         var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
-        bus.WriteBytes(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(prefix),"interrupt-probe.bin")),0x5000);
+        bool otherTarget=fault=="wait-irq-target";
+        bus.WriteBytes(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(prefix),otherTarget?"interrupt-target-probe.bin":"interrupt-probe.bin")),0x5000);
         bus.WriteDoubleWord(0x6040,0x5801);cpu.VectorTableOffset=0x6000;
         bus.WriteDoubleWord(0xe000edfc,1U<<24);bus.WriteDoubleWord(0xe0001fb0,0xc5acce55);
         bus.WriteDoubleWord(0xe0001000,1);bus.WriteDoubleWord(0xe0001004,0);
         cpu.SP=0x2001f000;cpu.PC=0x5001;
+        if(otherTarget) {
+            cpu.SP=0x3001f000;bus.WriteDoubleWord(0x24040000,42);
+            ((DaisyNvic)machine["sysbus.nvic"]).Architecture.InjectBusLoad(7,100000);
+        }
         cpu.DisableWaitPreemption=fault=="wait-irq-fault";
         emulation.RunFor(TimeInterval.FromMicroseconds(20));
         bus.WriteDoubleWord(0xe000e100,1);bus.WriteDoubleWord(0xe000e200,1);

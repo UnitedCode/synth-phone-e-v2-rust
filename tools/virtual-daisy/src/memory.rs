@@ -55,6 +55,8 @@ pub struct SystemMemory {
     pclk: Option<crate::clock::Rate>,
     sdram: Option<crate::bus::SdramTiming>,
     cpu_requests: [Option<(u32, usize, bool, u64)>; 2],
+    abandoned_requests: Vec<u64>,
+    pub abandoned_bus_requests: u64,
     cpu_debt: u64,
     pub wait_interruptible: bool,
     pending_writebacks: Vec<Writeback>,
@@ -113,6 +115,8 @@ impl Default for SystemMemory {
             pclk: None,
             sdram: None,
             cpu_requests: [None; 2],
+            abandoned_requests: Vec::new(),
+            abandoned_bus_requests: 0,
             cpu_debt: 0,
             wait_interruptible: true,
             pending_writebacks: Vec::new(),
@@ -170,6 +174,7 @@ impl SystemMemory {
             .advance(self.now_ns)
             .expect("empty reset fabric");
         self.cpu_requests = [None; 2];
+        self.abandoned_requests.clear();
         self.cpu_debt = 0;
         self.wait_interruptible = true;
         self.pending_writebacks.clear();
@@ -241,6 +246,8 @@ impl SystemMemory {
         }
         self.now_ns = now;
         self.fabric.advance(now)?;
+        self.abandoned_requests
+            .retain(|&id| !self.fabric.take_ready(id));
         let mut index = 0;
         while index < self.pending_writebacks.len() {
             if self.pending_writebacks[index]
@@ -630,6 +637,17 @@ impl SystemMemory {
         if !self.entry_active {
             self.entry_active = true;
             self.runtime_progress = None;
+            // A transaction already issued on AXI still occupies its target
+            // and credit until response. Its abandoned CPU slot must not hold
+            // up handler accesses to another target. Retire its response later.
+            for slot in &mut self.cpu_requests {
+                if let Some((_, _, _, id)) = slot.take() {
+                    self.abandoned_bus_requests += 1;
+                    if !self.fabric.take_ready(id) {
+                        self.abandoned_requests.push(id);
+                    }
+                }
+            }
         }
         if self.bypass_exception_waits {
             while let Some(op) = self.entry_stores.pop_front() {
@@ -1231,7 +1249,7 @@ impl SystemMemory {
     }
     pub fn stats(&self) -> String {
         let cache=format!("data_cache_enabled={}\ncache_line_fills={}\ncache_line_writebacks={}\ndirty_lines={}\ndma_cacheable_bytes={}\ninstruction_cache_enabled={}\ninstruction_fetch_reads={}\ninstruction_cache_fills={}\nruntime_blocks={}\nruntime_instruction_slots={}\nruntime_retranslations={}\n", u32::from(self.ccr & (1 << 16) != 0), self.fills, self.writebacks, self.cache.iter().filter(|line| line.valid && line.dirty).count(), self.dma_cacheable_bytes,u32::from(self.ccr&(1<<17)!=0),self.instruction_reads,self.instruction_fills,self.runtime_blocks,self.runtime_instructions,self.runtime_retranslations);
-        let timing=format!("abandoned_cpu_waits={}\nabandoned_cpu_wait_ns={}\nflash_buffer_hits={}\nflash_array_reads={}\nwriteback_pending_lines={}\nwriteback_drain_yields={}\nexception_entry_wait_yields={}\nexception_return_wait_yields={}\nexception_stack_words={}\nvector_reads={}\nvector_cache_hits={}\ncache_writeback_timing=DEFERRED_FABRIC_COMPLETION\nexception_bus_timing=RESUMABLE_PORT_SERVICE_SCENARIO\nstore_buffer_and_pipeline_overlap=UNMODELED\n",self.abandoned_waits,self.abandoned_wait_ns,self.fabric.flash_buffer_hits,self.fabric.flash_buffer_misses,self.pending_writebacks.len(),self.writeback_drain_yields,self.entry_wait_yields,self.return_wait_yields,self.exception_stack_words,self.vector_reads,self.vector_cache_hits);
+        let timing=format!("abandoned_bus_requests={}\nabandoned_cpu_waits={}\nabandoned_cpu_wait_ns={}\nflash_buffer_hits={}\nflash_array_reads={}\nwriteback_pending_lines={}\nwriteback_drain_yields={}\nexception_entry_wait_yields={}\nexception_return_wait_yields={}\nexception_stack_words={}\nvector_reads={}\nvector_cache_hits={}\ncache_writeback_timing=DEFERRED_FABRIC_COMPLETION\nexception_bus_timing=RESUMABLE_PORT_SERVICE_SCENARIO\nstore_buffer_and_pipeline_overlap=UNMODELED\n",self.abandoned_bus_requests,self.abandoned_waits,self.abandoned_wait_ns,self.fabric.flash_buffer_hits,self.fabric.flash_buffer_misses,self.pending_writebacks.len(),self.writeback_drain_yields,self.entry_wait_yields,self.return_wait_yields,self.exception_stack_words,self.vector_reads,self.vector_cache_hits);
         format!("{cache}{timing}cpu_bus_wait_ns={}\ncpu_bus_wait_yields={}\ndma_bus_wait_yields={}\nfabric_completed={}\nfabric_contests={}\nbus_stall_scope=COUPLED_FUNCTIONAL_SERVICE_SCENARIO\ndma_service_grid_ns=1000\n{}",self.cpu_wait_ns,self.cpu_wait_yields,self.dma_wait_yields,self.fabric.completed,self.fabric.contests,self.flash.stats())
     }
     pub fn write_scb(&mut self, offset: u64, value: u32) -> Result<()> {

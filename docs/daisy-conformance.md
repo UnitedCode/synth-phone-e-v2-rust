@@ -292,7 +292,12 @@ vector/stack becomes pending. The unconsumed skip budget is cancelled on the
 CPU thread; the handler must run before programming completes and the load must
 restart successfully afterward. Disabling preemption must miss the early IRQ
 marker. Device/Strongly-ordered load waits remain non-interruptible. The private
-managed assembly dispatches only its initial budget check through the existing
+adapter also detaches abandoned CPU request slots at entry. Already-issued
+transactions retain their fabric occupancy/credits until response, but cannot
+serialize handler accesses to an unrelated target. A third ARM fixture holds
+the AXI SRAM read target busy while an IRQ stacks into D2 SRAM; the handler must
+still run early and the abandoned load must restart after return.
+The private managed assembly dispatches only its initial budget check through the existing
 virtual getter; both arithmetic field reads remain intact. Each boot attests
 the pinned IL shape, Python guard and native adapter version8.
 

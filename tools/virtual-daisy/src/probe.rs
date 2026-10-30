@@ -282,6 +282,14 @@ pub fn check_timing(prefix: &std::path::Path) -> super::Result<()> {
 /// A normal flash load is waiting for NVM programming. An IRQ with a TCM
 /// vector/stack must preempt that wait, then the abandoned load must restart.
 pub fn interrupt_image() -> Vec<u8> {
+    interrupt_image_for(false)
+}
+
+pub fn interrupt_target_image() -> Vec<u8> {
+    interrupt_image_for(true)
+}
+
+fn interrupt_image_for(other_target: bool) -> Vec<u8> {
     let mut code = Vec::<u16>::new();
     let mut literals = Vec::<(usize, u16, u32)>::new();
     fn load(code: &mut Vec<u16>, literals: &mut Vec<(usize, u16, u32)>, reg: u16, value: u32) {
@@ -300,6 +308,9 @@ pub fn interrupt_image() -> Vec<u8> {
     code.push(0x202a);
     for word in 0..8 {
         code.push(0x6020 | (word << 6));
+    }
+    if other_target {
+        load(&mut code, &mut literals, 4, 0x24040000);
     }
     load(&mut code, &mut literals, 6, 0xe0001000);
     code.extend([0x6820, 0x6028, 0x2055, 0x6068, 0xe7fe]);

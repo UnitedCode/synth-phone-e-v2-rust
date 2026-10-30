@@ -307,6 +307,9 @@ latched before restoring CPU state. A pending enabled IRQ can abandon a normal
 memory load's unconsumed wait budget and restart that load after the handler;
 Device/Strongly-ordered loads retain their wait. This does not reproduce late
 arrival, complete tail-chaining timing, precise fault delivery or the M7 pipeline.
+Abandoned requests release their CPU slots; already-issued fabric transactions
+retain occupancy/credits until response. A separate ARM case verifies that a
+blocked AXI SRAM read cannot prevent IRQ stacking into D2 SRAM.
 The ARM fixture verifies a basic SRAM frame and return; external floating-point
 frames and snapshots/reset during in-flight operations still need independent
 coverage. No fixed exception-entry cycle count is claimed.
