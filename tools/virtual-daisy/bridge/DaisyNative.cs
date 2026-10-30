@@ -12,11 +12,16 @@ using Antmicro.Renode.Peripherals;
 
 namespace Antmicro.Renode.Peripherals.Miscellaneous
 {
-    public sealed class DaisyFmc : DaisyNative
+    public sealed class DaisyFmc : DaisyNative,IDoubleWordPeripheral
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveNative(IntPtr state,IntPtr clock,[MarshalAs(UnmanagedType.LPUTF8Str)] string path);
         public DaisyFmc(string libraryPath,DaisyRcc rcc) :base(libraryPath,1,0x1000) { this.rcc=rcc; var library=NativeLibrary.Load(libraryPath); save=Marshal.GetDelegateForFunctionPointer<SaveNative>(NativeLibrary.GetExport(library,"daisy_fmc_save")); }
-        public void Save(string path) { if(save(State,rcc.NativeState,path)!=0) throw new InvalidOperationException("Invalid or unmodeled FMC timing configuration"); }
+        public new uint ReadDoubleWord(long offset) {lock(sync) return base.ReadDoubleWord(offset);}
+        public new void WriteDoubleWord(long offset,uint value) {lock(sync) base.WriteDoubleWord(offset,value);}
+        public new void Reset() {lock(sync) base.Reset();}
+        public uint WithState(Func<IntPtr,uint> operation) {lock(sync) return operation(State);}
+        public void Save(string path) { if(rcc.WithState(clock=>WithState(fmc=>save(fmc,clock,path)))!=0) throw new InvalidOperationException("Invalid or unmodeled FMC timing configuration"); }
+        private readonly object sync=new object();
         private readonly DaisyRcc rcc;
         private readonly SaveNative save;
     }

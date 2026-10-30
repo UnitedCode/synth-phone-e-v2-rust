@@ -57,7 +57,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             if(reportCpu && machine.SystemBus.TryGetCurrentCPU(out var current)) current.SyncTime();
             var rcc=(DaisyRcc)machine["sysbus.rcc"];
             var fmc=(DaisyFmc)machine["sysbus.fmc"];
-            if(rcc.WithState(clock=>synchronize(native.State,clock,fmc.State,machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds))!=0) throw new InvalidOperationException("Unsupported bus clock configuration");
+            if(rcc.WithState(clock=>fmc.WithState(controller=>synchronize(native.State,clock,controller,machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds)))!=0) throw new InvalidOperationException("Unsupported bus clock configuration");
         }
         public ulong TakeCpuDebt() { return debt(native.State); }
         public void Advance() {if(advance(native.State,machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds)!=0) throw new InvalidOperationException("Bus time synchronization failed");}
