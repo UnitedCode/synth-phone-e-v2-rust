@@ -25,3 +25,34 @@ impl LineStage {
         })
     }
 }
+
+/// Passband-only group-delay surrogate for the WM8731 normal-mode Type1
+/// converters (datasheet Table32). It supplies no stop-band filtering.
+pub struct PassbandDelay {
+    adc: [[f32; 2]; 20],
+    dac: [[f32; 2]; 18],
+    adc_index: usize,
+    dac_index: usize,
+}
+impl Default for PassbandDelay {
+    fn default() -> Self {
+        Self {
+            adc: [[0.0; 2]; 20],
+            dac: [[0.0; 2]; 18],
+            adc_index: 0,
+            dac_index: 0,
+        }
+    }
+}
+impl PassbandDelay {
+    pub fn adc(&mut self, sample: [f32; 2]) -> [f32; 2] {
+        let old = std::mem::replace(&mut self.adc[self.adc_index], sample);
+        self.adc_index = (self.adc_index + 1) % 20;
+        old
+    }
+    pub fn dac(&mut self, sample: [f32; 2]) -> [f32; 2] {
+        let old = std::mem::replace(&mut self.dac[self.dac_index], sample);
+        self.dac_index = (self.dac_index + 1) % 18;
+        old
+    }
+}

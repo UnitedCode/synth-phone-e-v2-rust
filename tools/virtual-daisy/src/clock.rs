@@ -259,6 +259,14 @@ impl ClockTree {
         };
         Ok(kernel.divided(divider * frame))
     }
+    pub fn fmc_rate(&self) -> Result<Option<Rate>, &'static str> {
+        match self.read(0x4c) & 3 {
+            0 => self.domain_rate(1),
+            1 => self.pll(0, 1),
+            2 => self.pll(1, 2),
+            _ => Err("FMC CKPER mux is not modeled"),
+        }
+    }
     pub fn advance(&mut self, cr1: u32, frcr: u32, nanoseconds: u64) -> Result<u32, &'static str> {
         if cr1 & (1 << 16) == 0 || self.read(0xf0) & (1 << 22) == 0 {
             self.phase = 0;

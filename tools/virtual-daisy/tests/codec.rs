@@ -73,3 +73,19 @@ fn active_wm8731_unsupported_sampling_and_deemphasis_do_not_pass_silently() {
     register(&mut codec, 5, 6); // De-emphasis requires a missing DAC filter model.
     assert!(codec.read(0x100).is_err());
 }
+
+#[test]
+fn wm8731_type1_nominal_passband_delays_adc_by_20_and_dac_by_18_frames() {
+    let mut codec = active();
+    register(&mut codec, 5, 1); // HPF disabled to isolate converter latency.
+    assert_eq!(codec.nominal_adc_passband([0.25, -0.5]).unwrap(), [0.0; 2]);
+    for _ in 1..20 {
+        assert_eq!(codec.nominal_adc_passband([0.0; 2]).unwrap(), [0.0; 2]);
+    }
+    assert_eq!(codec.nominal_adc_passband([0.0; 2]).unwrap(), [0.25, -0.5]);
+    assert_eq!(codec.nominal_dac_passband([0.5, -0.25]).unwrap(), [0.0; 2]);
+    for _ in 1..18 {
+        assert_eq!(codec.nominal_dac_passband([0.0; 2]).unwrap(), [0.0; 2]);
+    }
+    assert_eq!(codec.nominal_dac_passband([0.0; 2]).unwrap(), [0.5, -0.25]);
+}

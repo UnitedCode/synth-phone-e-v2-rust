@@ -1,6 +1,7 @@
 //! Rust register models hosted by Renode through a small native bridge.
 use std::collections::BTreeMap;
 pub mod board;
+pub mod bus;
 pub mod clock;
 mod codec;
 mod dma;
@@ -22,9 +23,30 @@ pub struct Peripheral {
     memory: memory::SystemMemory,
     clock: clock::ClockTree,
     line_stage: codec::LineStage,
+    passband_delay: codec::PassbandDelay,
 }
 
 impl Peripheral {
+    pub fn codec_report(&self, ideal_line: bool, rate: f64) -> Result<String, &'static str> {
+        let (name, adc, dac) = match self.kind {
+            4 => ("WM8731", 20.0, 18.0),
+            9 => ("AK4556", 18.0, 21.0),
+            10 => ("PCM3060", 17.4, 20.0),
+            _ => return Err("not a Seed codec"),
+        };
+        Ok(format!("codec={name}\naudio_boundary={}\nnominal_adc_group_delay_frames={adc}\nnominal_dac_group_delay_frames={dac}\nnominal_adc_group_delay_us={}\nnominal_dac_group_delay_us={}\npassband_delay_surrogate_applied={}\ncomplete_decimation_and_interpolation_response=UNMODELED\ninternal_coefficients_and_rounding=UNVERIFIED\n",if ideal_line { "ideal-line" } else { "serial" },adc/rate*1_000_000.0,dac/rate*1_000_000.0,u32::from(ideal_line&&self.kind==4)))
+    }
+    pub fn nominal_adc_passband(&mut self, sample: [f32; 2]) -> Result<[f32; 2], &'static str> {
+        let sample = self.ideal_line_input(sample)?;
+        Ok(self.passband_delay.adc(sample))
+    }
+    pub fn nominal_dac_passband(&mut self, sample: [f32; 2]) -> Result<[f32; 2], &'static str> {
+        if self.kind != 4 {
+            return Err("nominal passband delay only modeled for WM8731");
+        }
+        self.read(0x100)?;
+        Ok(self.passband_delay.dac(sample))
+    }
     /// Idealized normalized line input before ADC gain/DC removal. Serial PCM
     /// injection remains a separate boundary and never runs this stage twice.
     pub fn ideal_line_input(&mut self, sample: [f32; 2]) -> Result<[f32; 2], &'static str> {
@@ -79,6 +101,7 @@ impl Peripheral {
             memory: memory::SystemMemory::default(),
             clock: clock::ClockTree::default(),
             line_stage: codec::LineStage::default(),
+            passband_delay: codec::PassbandDelay::default(),
         };
         result.reset();
         result
@@ -87,6 +110,7 @@ impl Peripheral {
         self.memory.reset_registers();
         self.clock = clock::ClockTree::default();
         self.line_stage = codec::LineStage::default();
+        self.passband_delay = codec::PassbandDelay::default();
         self.registers.clear();
         self.dma = dma::Dma::default();
         self.qspi = qspi::Qspi::default();
@@ -288,7 +312,9 @@ pub unsafe extern "C" fn daisy_memory_read(
     width: u32,
     cpu: u32,
 ) -> u64 {
-    let result = if cpu != 0 {
+    let result = if cpu == 2 {
+        (*state).memory.read_instruction(address, width as usize)
+    } else if cpu != 0 {
         (*state).memory.read_cpu(address, width as usize)
     } else {
         (*state).memory.read_dma(address, width as usize)
@@ -412,6 +438,25 @@ pub unsafe extern "C" fn daisy_memory_save(
 }
 
 /// # Safety
+/// Distinct live/serialized FMC and clock states; path is NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_fmc_save(
+    fmc: *mut Peripheral,
+    clock: *mut Peripheral,
+    path: *const std::ffi::c_char,
+) -> u32 {
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::ffi::CStr::from_ptr(path).to_str()?;
+        let reg = |offset| (*fmc).registers.get(&offset).copied().unwrap_or(0);
+        let rate = (*clock).clock.fmc_rate()?.ok_or("FMC clock disabled")?;
+        let timing = bus::SdramTiming::decode(reg(0x140), reg(0x148), reg(0x154), rate)?;
+        std::fs::write(path, timing.report())?;
+        Ok(())
+    })();
+    u32::from(result.is_err())
+}
+
+/// # Safety
 /// `state` must be the live pointer returned by daisy_new, with serialized access.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_read(state: *mut Peripheral, offset: u64) -> u64 {
@@ -489,7 +534,7 @@ pub unsafe extern "C" fn daisy_sai_tick_codec(
     };
     let sample = (*state).sai.input_sample();
     let sample = if ideal_line != 0 {
-        match (*codec).ideal_line_input(sample) {
+        match (*codec).nominal_adc_passband(sample) {
             Ok(sample) => sample,
             Err(_) => return 1,
         }
@@ -497,6 +542,14 @@ pub unsafe extern "C" fn daisy_sai_tick_codec(
         sample
     };
     (*state).sai.tick_sample(mask, sample);
+    if ideal_line != 0 {
+        if let Some(frame) = (*state).sai.output.last_mut() {
+            let Ok(delayed) = (*codec).nominal_dac_passband(*frame) else {
+                return 1;
+            };
+            *frame = if mask & 2 != 0 { delayed } else { [0.0; 2] };
+        }
+    }
     0
 }
 
@@ -529,6 +582,27 @@ pub unsafe extern "C" fn daisy_sai_rate(state: *mut Peripheral, rate: f64) -> u3
 #[no_mangle]
 pub unsafe extern "C" fn daisy_codec_control(state: *mut Peripheral, high: u32) -> u32 {
     u32::from((*state).codec_control(high != 0).is_err())
+}
+
+/// # Safety
+/// `state` is a live/serialized codec state and `path` is NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_codec_save(
+    state: *mut Peripheral,
+    path: *const std::ffi::c_char,
+    ideal_line: u32,
+    rate: f64,
+) -> u32 {
+    if !rate.is_finite() || rate <= 0.0 {
+        return 1;
+    }
+    let Ok(path) = std::ffi::CStr::from_ptr(path).to_str() else {
+        return 1;
+    };
+    let Ok(report) = (*state).codec_report(ideal_line != 0, rate) else {
+        return 1;
+    };
+    u32::from(std::fs::write(path, report).is_err())
 }
 
 /// # Safety

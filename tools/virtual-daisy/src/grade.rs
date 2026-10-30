@@ -31,7 +31,10 @@ pub fn counter(path: &Path, key: &str) -> Result<u64> {
 
 pub fn boot_evidence(prefix: &Path) -> Result<()> {
     let host = fs::read_to_string(artifact(prefix, ".host.log"))?;
-    if !host.contains("Python execution guard verified") || !host.contains("PC:") {
+    if !host.contains("Python execution guard verified")
+        || !host.contains("Native instruction-fetch tag verified")
+        || !host.contains("PC:")
+    {
         return Err("Missing execution/guard evidence".into());
     }
     let rtt = fs::read_to_string(artifact(prefix, ".rtt"))?;

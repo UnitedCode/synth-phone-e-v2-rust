@@ -18,7 +18,14 @@ as **UNVERIFIED**; a functional pass cannot certify it.
 ## Run
 
 Install Rust's `thumbv7em-none-eabihf` target, a .NET 8 SDK, and the official
-prebuilt Renode 1.17.0 release for Linux x86-64 or macOS ARM64. Do not launch
+prebuilt Renode 1.17.0 release for Linux x86-64 or macOS ARM64. CMake and a C
+compiler are also required for the pinned native instruction-fetch adapter.
+The runner downloads SHA256-verified Renode infrastructure and tlib source
+archives and builds a private ARM-M core. Its only behavior change tags instruction
+fetches separately from data loads. Register/cache behavior and probe generation/
+grading are Rust; the existing engine's required C interface and managed Renode
+adapters provide dispatch. No Python build/helper is used. The installed
+Renode runtime is unchanged. Do not launch
 Renode's normal CLI for these tests. The Rust runner calls a small managed host
 directly; it never constructs Renode's Python-backed Monitor.
 
@@ -111,6 +118,12 @@ Faults are MMIO writes after startup; the ELF is never patched. Every fault run
 must still complete startup and produce a valid capture. Unit
 tests also check that the grader catches bypass, clipping, NaNs and missing audio.
 Rev5 also boots through the WM8731 ideal line stage and checks its audio output.
+Each run also executes a separate generated-code probe on the actual M7 engine.
+The ARM program writes a new instruction through the data cache, records stale
+return values when either clean or invalidate is omitted, and records the new
+value after DCCMVAU/ICIMVAU plus DSB/ISB. A second phase overwrites code through
+the DMA/physical memory path and checks stale instructions until ICIALLU. The
+production ELF is unchanged; the probe has its own process and results buffer.
 
 With the derived clock, the macOS production fixture measures about **220.90Hz,
 7.05 cents error**, RMS 0.1585, matching left/right output, no silent steady hops,
@@ -146,6 +159,11 @@ the additional behavior needed by this firmware:
   32-byte lines, MPU memory attributes/priority/subregions, write-through and
   write-back policies, MVA and set/way clean/invalidate operations. DMA bypasses
   both the CPU cache and CPU MPU permissions. CMSIS can enumerate all sets/ways.
+- A separate 16KiB, two-way, 32-byte instruction-cache view for executable system
+  RAM. Fetches never forward dirty data-cache bytes. ICIALLU/ICIMVAU update that
+  view and invalidate Renode translations so the CPU actually observes the change.
+  Shared/noncacheable memory bypasses caching; execute-never memory is checked.
+  CSSELR's level bits are read-only zero and CCSIDR reports the documented encoding.
 - Daisy's 16MHz HSE, rational PLL/SAI clock calculation, fractional shadow-register
   latching, PLL write protection, SAI divider/oversampling selection, and clock
   gates. APB timer kernels and SysTick follow their prescalers. DWT CYCCNT follows
@@ -164,9 +182,13 @@ For **Rev5 only**, add `--audio-boundary ideal-line` to place normalized input
 before the WM8731 nominal line gain and digital DC-removal stage. This implements
 1.5dB gain steps (-34.5..+12dB), individual line mutes, and the published
 H(z)=(1-z^-1)/(1-0.9995z^-1), including ADCHPD/HPOR offset retention. It is an
-idealized floating-point stage, not a complete ADC: gain tolerance, internal
-rounding, decimation/interpolation filters, group delay and analog circuitry are
-unmodeled. Rev4/Rev7 reject this option. Unsupported active WM8731 sample-clock
+idealized floating-point stage, not a complete ADC. Normal-mode Type1's nominal
+group delay is represented by separate 20-frame ADC and 18-frame DAC passband
+delay lines. These are delay surrogates, not reconstructed FIR filters: gain
+tolerance, internal rounding, complete decimation/interpolation responses and
+analog circuitry remain unmodeled. `*.wav.codec.txt` records the boundary,
+nominal delays and whether the surrogate was applied. The serial PCM boundary
+does not add converter latency. Rev4/Rev7 reject ideal-line input. Unsupported active WM8731 sample-clock
 ratios, de-emphasis, microphone and analog-bypass paths fail explicitly.
 
 The memory map constrains internal flash to 128 KiB and SDRAM to 64 MiB; it
@@ -185,10 +207,21 @@ oscillator tolerance, flash/SDRAM wait states, write buffers, SDRAM refresh and
 DMA/bus contention remain unmodeled. Data-cache replacement uses deterministic
 round-robin, not the silicon's replacement sequence, and the M7 dynamic
 read-allocation optimization is not reproduced. Cache barriers are effectively
-synchronous in this model. Instruction-cache fetch/coherence (including code
-executed from RAM), memory speculation, full MPU fault semantics and general
-peripheral kernel-clock muxes are not covered by these tests. Passing cannot
+synchronous in this model. RAM instruction-cache coherence is tested, but native
+flash fetches still follow Renode's ROM path. RAM cache lookups occur during
+translation; reuse of a translated block is not a silicon cache lookup. Mixed
+flash/RAM eviction, pipeline behavior when barriers are missing, speculative
+fetches, full MPU fault semantics and general peripheral kernel-clock muxes are
+not validated. Passing cannot
 certify deadline compliance, CPU headroom or complete cache correctness.
+
+`*.sdram.txt` decodes the FMC kernel mux, SDCLK divider, bus width, CAS, RPIPE,
+TRCD/TRP/TRC/TMRD and refresh COUNT. It reports analytical lower bounds for an
+open/precharged/conflicting-row read, a 32-byte line, refresh occupancy and mode
+register quiet time. Field encodings include the specified plus-one timing
+conversion; refresh periods use COUNT directly, without adding the software's
+20-cycle safety margin. These bounds do not impose guessed stalls on the CPU
+or claim to model AXI arbitration, FMC queues, row state or SDRAM retention.
 
 `tools/virtual-daisy/known-warnings.txt` contains exact observed warnings for these
 I2C timing fields, ADC calibration tags, UART fields and flash latency.
@@ -217,6 +250,11 @@ include the exact `firmware.elf` and `firmware.sha256`, generated `daisy.repl`,
 captures. `.memory.txt` reports cache fills/writebacks and cacheable DMA traffic;
 `.bus.txt` records DMA status/control/count, and `.wav.clock.txt` records clock
 rates and the programmed PLL/SAI fields. CI uploads these on success and failure.
+`cpu-core.txt` fingerprints the native core and its pinned source revisions;
+`architecture-probe.bin`, `*.architecture.bin` and `*.architecture.txt` preserve
+the ARM test program, processor-written outcomes and Rust grade. CPU builds are
+cached under the output's `cpu-core/`; `VIRTUAL_DAISY_CORE_CACHE` can select a
+shared cache directory. Archive hashes are verified on every run.
 Replay the WAVs to judge
 timbre; objective pitch gates are only part of listening quality.
 
