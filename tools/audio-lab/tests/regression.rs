@@ -20,6 +20,11 @@ fn lab_uses_the_firmware_dsp_pin_and_locked_dependencies() {
         dependency(lab),
         "Update both DSP pins together"
     );
+    assert_eq!(
+        dependency(firmware),
+        dependency(include_str!("../../arm-audio-tests/Cargo.toml")),
+        "Update the ARM guest DSP pin too"
+    );
     let identities = |lock: &str| {
         lock.split("[[package]]")
             .skip(1)
@@ -44,6 +49,15 @@ fn lab_uses_the_firmware_dsp_pin_and_locked_dependencies() {
         assert!(
             firmware_packages.contains(&package),
             "DSP dependency drift: {package}"
+        );
+    }
+    for package in identities(include_str!("../../arm-audio-tests/Cargo.lock")) {
+        if package.starts_with("name = \"arm-audio-tests\"") {
+            continue;
+        }
+        assert!(
+            firmware_packages.contains(&package),
+            "ARM dependency drift: {package}"
         );
     }
 }
