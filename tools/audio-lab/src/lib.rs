@@ -134,7 +134,9 @@ pub fn metrics(samples: &[f32]) -> Metrics {
     let finite: Vec<f32> = samples.iter().copied().filter(|x| x.is_finite()).collect();
     let n = finite.len().max(1) as f64;
     let hop_rms: Vec<f64> = samples
-        .chunks_exact(HOP_SIZE)
+        .as_chunks::<HOP_SIZE>()
+        .0
+        .iter()
         .map(|hop| (hop.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / HOP_SIZE as f64).sqrt())
         .collect();
     let min_rms = hop_rms.iter().copied().fold(f64::INFINITY, f64::min);
@@ -150,7 +152,9 @@ pub fn metrics(samples: &[f32]) -> Metrics {
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0, f32::max),
         silent_hops: samples
-            .chunks_exact(HOP_SIZE)
+            .as_chunks::<HOP_SIZE>()
+            .0
+            .iter()
             .filter(|hop| {
                 hop.iter().all(|x| x.is_finite())
                     && hop.iter().map(|&x| x as f64 * x as f64).sum::<f64>() / (HOP_SIZE as f64)
