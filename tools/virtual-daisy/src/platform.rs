@@ -39,22 +39,19 @@ pub fn prepare(
     // flash-controller object and is deliberately not on the system bus.
     platform = platform.replace(
         "flashBank1: Memory.MappedMemory @ sysbus 0x08000000\n    size: 0x100000",
-        "flashBank1: Memory.MappedMemory @ none\n    size: 0x20000\n\nuserFlash: Miscellaneous.DaisyMemory @ sysbus 0x08000000\n    size: 0x20000\n    baseAddress: 0x08000000\n    readOnly: true\n    architecture: architecture",
+        "userFlash: Miscellaneous.DaisyMemory @ sysbus 0x08000000\n    size: 0x20000\n    baseAddress: 0x08000000\n    readOnly: true\n    architecture: architecture",
     );
     platform = platform.replace(
         "flashController: MTD.STM32H7_FlashController @",
-        "flashController: Miscellaneous.DaisyReadOnlyFlashController @",
+        "flashController: Miscellaneous.DaisyFlashController @",
     );
     platform = platform.replace(
-        "    flash1: flashBank1",
-        &format!(
-            "    libraryPath: \"{}\"\n    rcc: rcc\n    flash1: flashBank1",
-            library.display()
-        ),
+        "    flash1: flashBank1\n    flash2: flashBank2",
+        "    architecture: architecture",
     );
     platform = platform.replace(
         "flashBank2: Memory.MappedMemory @ sysbus 0x08100000\n    size: 0x100000",
-        "flashBank2: Memory.MappedMemory @ none\n    size: 0x20000",
+        "",
     );
     platform = platform.replace(
         "sdramBank1: Memory.MappedMemory @ sysbus 0xC0000000\n    size: 0x10000000",
@@ -193,7 +190,9 @@ pub fn prepare(
         "\narchitecture: Miscellaneous.DaisyArchitecture @ none\n    libraryPath: \"{}\"\n",
         library.display()
     ));
-    platform.push_str(&format!("\naxi: Miscellaneous.DaisyNative @ sysbus 0x51000000\n    libraryPath: \"{}\"\n    kind: 15\n    size: 0x100000\n",library.display()));
+    platform.push_str(
+        "\naxi: Miscellaneous.DaisyAxi @ sysbus 0x51000000\n    architecture: architecture\n",
+    );
     let registration = if board == Board::Rev5 {
         "i2c2 0x1a"
     } else {

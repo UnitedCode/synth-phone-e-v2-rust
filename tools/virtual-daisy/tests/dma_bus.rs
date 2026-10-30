@@ -1,6 +1,25 @@
 use virtual_daisy::{daisy_dma_irqs, daisy_dma_request, Peripheral};
 
 #[test]
+fn pending_dma_descriptor_does_not_decrement_ndtr_or_raise_completion_irq() {
+    let mut dma = Peripheral::new(6);
+    dma.write(0x14, 1).unwrap();
+    dma.write(0x18, 0x40015820).unwrap();
+    dma.write(0x1c, 0x30000000).unwrap();
+    dma.write(0x10, 1 | 16 | (2 << 11) | (2 << 13)).unwrap();
+    let expected = (0x40015820_u64 << 32) | 0x30000000;
+    assert_eq!(
+        unsafe { virtual_daisy::daisy_dma_peek(&mut dma, 0) },
+        expected
+    );
+    assert_eq!(dma.read(0x14).unwrap(), 1);
+    assert_eq!(unsafe { daisy_dma_irqs(&mut dma) }, 0);
+    assert_eq!(unsafe { daisy_dma_request(&mut dma, 0) }, expected);
+    assert_eq!(dma.read(0x14).unwrap(), 0);
+    assert_eq!(unsafe { daisy_dma_irqs(&mut dma) }, 1);
+}
+
+#[test]
 fn simultaneous_dma_requests_obey_software_priority_then_stream_number() {
     let mut dma = Peripheral::new(6);
     for stream in [0_u64, 1, 2] {
@@ -42,7 +61,7 @@ fn dma1_cannot_transfer_into_dtcm_and_reports_a_transfer_error_irq() {
 }
 
 #[test]
-fn dma_rejects_tcm_holes_and_flash_writes_but_can_read_flash() {
+fn dma_rejects_tcm_holes_but_flash_accesses_reach_the_flash_controller() {
     for (address, transmit, error) in [
         (0, true, true),
         (0x20000000, true, true),
@@ -50,7 +69,7 @@ fn dma_rejects_tcm_holes_and_flash_writes_but_can_read_flash() {
         (0x30048000, false, true),
         (0x38801000, false, true),
         (0xc4000000, false, true),
-        (0x08000000, false, true),
+        (0x08000000, false, false),
         (0x08000000, true, false),
     ] {
         let mut dma = Peripheral::new(6);

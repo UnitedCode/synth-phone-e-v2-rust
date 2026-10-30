@@ -125,7 +125,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly SaveCodec saveCodec;
     }
 
-    public class DaisyDma : IDoubleWordPeripheral, IKnownSize, IGPIOReceiver, INumberedGPIOOutput
+    public class DaisyDma : IDoubleWordPeripheral, IKnownSize, IGPIOReceiver, INumberedGPIOOutput,IDisposable
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong Request(IntPtr state, uint channel);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint Irqs(IntPtr state);
@@ -138,41 +138,68 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             native = new DaisyNative(libraryPath, 6, 0x400);
             var library = NativeLibrary.Load(libraryPath);
             request = Marshal.GetDelegateForFunctionPointer<Request>(NativeLibrary.GetExport(library, "daisy_dma_request"));
+            peek=Marshal.GetDelegateForFunctionPointer<Request>(NativeLibrary.GetExport(library,"daisy_dma_peek"));
             irqs = Marshal.GetDelegateForFunctionPointer<Irqs>(NativeLibrary.GetExport(library, "daisy_dma_irqs"));
             grant=Marshal.GetDelegateForFunctionPointer<Grant>(NativeLibrary.GetExport(library,"daisy_dma_grant"));
             save=Marshal.GetDelegateForFunctionPointer<SaveDma>(NativeLibrary.GetExport(library,"daisy_dma_save"));
             var connections = new Dictionary<int, IGPIO>();
             for(int i = 0; i < 8; i++) connections[i] = new GPIO();
             Connections = connections;
+            clock=machine.ObtainManagedThread(Tick,1000000);clock.Start();
         }
         public uint ReadDoubleWord(long offset) { lock(sync) return native.ReadDoubleWord(offset); }
-        public void WriteDoubleWord(long offset, uint value) { lock(sync) { native.WriteDoubleWord(offset, value); UpdateIrqs(); } }
+        public void WriteDoubleWord(long offset, uint value) { lock(sync) { if(inFlight && offset==0x10+activeStream*0x18 && (value&1)==0) {disableAfterFlight=true;value|=1;} native.WriteDoubleWord(offset, value); UpdateIrqs(); } }
         public void OnGPIO(int number, bool value)
         {
             if(!value) return;
             if(number<0 || number>=8) throw new InvalidOperationException("Invalid DMA stream request");
             lock(sync)
             {
-                if(collecting) { pending|=1U<<number; return; }
-                Transfer((uint)number);
+                pending|=1U<<number;
+                if(!collecting) StartNext();
             }
         }
-        public void BeginBatch() { lock(sync) { collecting=true; pending=0; } }
-        public bool EndBatch() { lock(sync) { collecting=false; uint winner=grant(native.State,pending); if(winner==uint.MaxValue) return false; Transfer(winner); return true; } }
+        public void BeginBatch() { lock(sync) { collecting=true; } }
+        public bool EndBatch() { lock(sync) { collecting=false; return StartNext(); } }
         public void Save(string path) { lock(sync) { if(save(native.State,path)!=0) throw new InvalidOperationException("Could not save DMA arbitration statistics"); } }
-        private void Transfer(uint number)
-        {
-                var transfer = request(native.State, number);
-                if(transfer == ulong.MaxValue) throw new InvalidOperationException("Invalid DMA audio request");
-                if(transfer != 0) {
-                    uint source = (uint)(transfer >> 32), destination = (uint)transfer;
-                    uint word = architecture.Contains(source) ? architecture.Read(source, 4, false) : machine.SystemBus.ReadDoubleWord(source);
-                    if(architecture.Contains(destination)) architecture.Write(destination, 4, word, false); else machine.SystemBus.WriteDoubleWord(destination, word);
-                }
-                UpdateIrqs();
+        private bool StartNext() {
+            if(inFlight) return false;
+            uint winner=grant(native.State,pending);
+            if(winner==uint.MaxValue) return false;
+            pending&=~(1U<<(int)winner);
+            ulong transfer=peek(native.State,winner);
+            if(transfer==ulong.MaxValue) throw new InvalidOperationException("Invalid DMA audio request");
+            if(transfer==0) {request(native.State,winner);UpdateIrqs();return true;}
+            activeStream=winner;source=(uint)(transfer>>32);destination=(uint)transfer;
+            inFlight=true;writing=false;token=0;disableAfterFlight=false;
+            return true;
+        }
+        private bool Memory(uint address) {return architecture.Contains(address) || (address>=0x08000000 && address<=0x0801fffc);}
+        private void Tick() {
+            architecture.Synchronize();
+            bool notify=false;
+            lock(sync) {
+                if(inFlight) {
+                    uint address=writing ? destination:source;
+                    token=architecture.DmaPort(address,writing,token);
+                    if(token==0) {
+                        if(!writing) {word=Memory(source) ? architecture.Read(source,4,false):machine.SystemBus.ReadDoubleWord(source);writing=true;}
+                        else {
+                            if(Memory(destination)) architecture.Write(destination,4,word,false); else machine.SystemBus.WriteDoubleWord(destination,word);
+                            ulong actual=request(native.State,activeStream);
+                            if(actual!=((ulong)source<<32|destination)) throw new InvalidOperationException("DMA descriptor changed before transfer completion");
+                            if(disableAfterFlight) {long offset=0x10+activeStream*0x18; native.WriteDoubleWord(offset,native.ReadDoubleWord(offset)&~1U);}
+                            inFlight=false;UpdateIrqs();notify=true;
+                        }
+                    }
+                } else notify=pending!=0;
+            }
+            if(notify) Ready?.Invoke();
         }
         private void UpdateIrqs() { uint mask = irqs(native.State); for(int i = 0; i < 8; i++) Connections[i].Set((mask & (1U << i)) != 0); }
-        public void Reset() { lock(sync) { native.Reset(); pending=0; collecting=false; UpdateIrqs(); } }
+        public void Reset() { lock(sync) { native.Reset(); pending=0; collecting=false;inFlight=false;token=0; UpdateIrqs(); } }
+        public void Dispose() {clock.Dispose();}
+        public Action Ready {get;set;}
         public long Size { get { return 0x400; } }
         public IReadOnlyDictionary<int, IGPIO> Connections { get; }
         private readonly object sync = new object();
@@ -180,11 +207,16 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly DaisyArchitecture architecture;
         private readonly DaisyNative native;
         private readonly Request request;
+        private readonly Request peek;
         private readonly Irqs irqs;
         private readonly Grant grant;
         private readonly SaveDma save;
         private bool collecting;
         private uint pending;
+        private readonly IManagedThread clock;
+        private bool inFlight,writing,disableAfterFlight;
+        private uint activeStream,source,destination,word;
+        private ulong token;
     }
 
     public class DaisySai : IDoubleWordPeripheral, IKnownSize, IDisposable
@@ -202,6 +234,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             this.rcc = rcc;
             this.rxChannel = rxChannel;
             this.dma=dma;
+            dma.Ready=()=> {lock(sync) PumpRequests();};
             native = new DaisyNative(libraryPath, 7, 0x400);
             var library = NativeLibrary.Load(libraryPath);
             var configure = Marshal.GetDelegateForFunctionPointer<ConfigureNative>(NativeLibrary.GetExport(library, "daisy_sai_configure"));

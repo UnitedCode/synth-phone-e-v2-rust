@@ -10,8 +10,10 @@ fn flash_shares_the_instruction_cache_but_is_not_writable_ram() {
     assert_eq!(memory.read_instruction(0x08000000, 4).unwrap(), 0x47702001);
     memory.write_scb(0xf50, 0).unwrap();
     assert_eq!(memory.read_instruction(0x08000000, 4).unwrap(), 0x47702002);
-    assert!(memory.write_cpu(0x08000000, 4, 0).is_err());
-    assert!(memory.write_dma(0x08000000, 4, 0).is_err());
+    memory.write_cpu(0x08000000, 4, 0).unwrap();
+    memory.write_dma(0x08000000, 4, 0).unwrap();
+    assert_eq!(memory.flash_read_reg(0x10).unwrap() & (1 << 18), 1 << 18); // PG disabled: PGSERR, no data change.
+    assert_eq!(memory.read_dma(0x08000000, 4).unwrap(), 0x47702002);
     assert!(memory.load_flash(0x08020000, 4, 0).is_err());
     assert!(!SystemMemory::is_ram(0x08000000, 4));
 }

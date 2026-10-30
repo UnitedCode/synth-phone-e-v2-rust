@@ -10,7 +10,7 @@ pub struct Stream {
     pub fcr: u32,
     pub cursor: u32,
 }
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Dma {
     pub streams: [Stream; 8],
     pub status: [u32; 2],
@@ -166,9 +166,8 @@ impl Dma {
         } else {
             (peripheral, memory)
         };
-        let transmit = stream.cr & (1 << 6) != 0;
         let readable_flash = (0x0800_0000..0x0802_0000).contains(&memory) && memory <= 0x0801_fffc;
-        if !(crate::memory::SystemMemory::is_ram(memory, 4) || (transmit && readable_flash)) {
+        if !(crate::memory::SystemMemory::is_ram(memory, 4) || readable_flash) {
             self.status[index / 4] |= 1 << ([0, 6, 16, 22][index % 4] + 3);
             stream.cr &= !1;
             return Ok(None);

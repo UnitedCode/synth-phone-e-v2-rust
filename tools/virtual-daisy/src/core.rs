@@ -13,8 +13,8 @@ const INFRA_SHA: &str = "8353496d3489e3801a45fd79b9281040e9d6b00f0c1615a5e77e995
 const TLIB_SHA: &str = "8db4d1fe0a316eec5dcae83bd4d2757b5172332493d6fdecfd9d4b81cb7a77a3";
 const TAG: &str =
     "    cpustate |= (READ_ACCESS_TYPE == ACCESS_INST_FETCH) ? (UINT64_C(1) << 63) : 0;";
-const MARKER:&str="\nuint32_t tlib_daisy_fetch_tag_version(void) { return 3; }\nEXC_INT_0(uint32_t, tlib_daisy_fetch_tag_version)\nvoid *daisy_fetch_state;\nuint32_t (*daisy_fetch_runtime)(void *, uint32_t, uint32_t);\nvoid tlib_daisy_set_runtime_fetch(void *state, void *callback) { daisy_fetch_state = state; daisy_fetch_runtime = callback; }\nEXC_VOID_2(tlib_daisy_set_runtime_fetch, void *, state, void *, callback)\n";
-const RUNTIME:&str="    if(cpu->tb_restart_request == 0 && daisy_fetch_runtime) {\n        uint32_t result = daisy_fetch_runtime(daisy_fetch_state, cpu->current_tb->pc, cpu->current_tb->size);\n        if(result > 1) { tlib_abort(\"Invalid Daisy runtime instruction fetch\"); }\n        if(result == 1) { tb_phys_invalidate(cpu->current_tb, -1); cpu->tb_restart_request = 1; }\n    }\n";
+const MARKER:&str="\nuint32_t tlib_daisy_fetch_tag_version(void) { return 5; }\nEXC_INT_0(uint32_t, tlib_daisy_fetch_tag_version)\nvoid *daisy_fetch_state;\nuint32_t (*daisy_fetch_runtime)(void *, uint32_t, uint32_t);\nvoid tlib_daisy_set_runtime_fetch(void *state, void *callback) { daisy_fetch_state = state; daisy_fetch_runtime = callback; }\nEXC_VOID_2(tlib_daisy_set_runtime_fetch, void *, state, void *, callback)\nuint64_t tlib_daisy_memory_context(void) { target_ulong data[TARGET_INSN_START_WORDS]; if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_VECTOR_READ) { return UINT64_MAX; } if(!cpu->current_tb || !cpu->mem_io_pc) { return 0; } if(cpu_get_data_for_pc(cpu, cpu->current_tb, cpu->mem_io_pc, true, data, false) < 0) { return 0; } return ((uint64_t)data[0] << 32) | cpu->regs[13]; }\nEXC_INT_0(uint64_t, tlib_daisy_memory_context)\n";
+const RUNTIME:&str="    if(cpu->tb_restart_request == 0 && daisy_fetch_runtime) {\n        uint32_t result = daisy_fetch_runtime(daisy_fetch_state, cpu->current_tb->pc, cpu->current_tb->size);\n        if(result > 2) { tlib_abort(\"Invalid Daisy runtime instruction fetch\"); }\n        if(result == 1) { tb_phys_invalidate(cpu->current_tb, -1); cpu->tb_restart_request = 1; }\n        if(result == 2) { cpu->exit_request = 1; cpu->tb_restart_request = 1; }\n    }\n";
 
 fn archive(cache: &Path, name: &str, url: &str, sha: &str) -> Result<PathBuf> {
     let path = cache.join(name);
@@ -158,6 +158,6 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
     if !platform.join(rid).join("translate-arm-m-le.so").is_file() {
         return Err("Renode native platform directory missing".into());
     }
-    fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=3\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
+    fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=5\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
     Ok(())
 }

@@ -14,8 +14,21 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public DaisyCortexM(string cpuType,IMachine machine,NVIC nvic,DaisyArchitecture architecture,uint? numberOfMPURegions=null)
             :base(cpuType,machine,nvic,numberOfMPURegions:numberOfMPURegions) {
             architecture.AttachCPU(this);
+            this.architecture=architecture;
             tlibDaisySetRuntimeFetch(architecture.NativeState,architecture.RuntimeFetchPointer);
         }
+        public override ExecutionResult ExecuteInstructions(ulong numberOfInstructionsToExecute,out ulong numberOfExecutedInstructions) {
+            architecture.Synchronize();
+            var result=base.ExecuteInstructions(numberOfInstructionsToExecute,out numberOfExecutedInstructions);
+            ulong ns=architecture.TakeCpuDebt();
+            if(ns!=0) {
+                SkipInstructions+=checked((ulong)decimal.Ceiling(ns*PerformanceInMips/1000m));
+                if(result==ExecutionResult.StoppedAtWatchpoint) result=ExecutionResult.Ok;
+            }
+            return result;
+        }
+        public void StallMemoryAccess() {tlibRequestTranslationBlockInterrupt(1);RequestReturn();}
+        public ulong MemoryContext=>tlibDaisyMemoryContext();
         public new bool TryConvertUlongToStateObj(ulong? raw,out IContextState state)
         {
             state=null;
@@ -37,6 +50,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 #pragma warning disable CS0649
         [Import] private readonly Func<uint> tlibDaisyFetchTagVersion;
         [Import] private readonly Action<IntPtr,IntPtr> tlibDaisySetRuntimeFetch;
+        [Import] private readonly Action<int> tlibRequestTranslationBlockInterrupt;
+        [Import] private readonly Func<ulong> tlibDaisyMemoryContext;
 #pragma warning restore CS0649
+        private readonly DaisyArchitecture architecture;
     }
 }

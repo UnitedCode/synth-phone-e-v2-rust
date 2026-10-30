@@ -189,8 +189,9 @@ detail or independent measurements, not an arbitrary filter fitted to a diagram.
 
 User flash now shares the Rust cache/memory path with RAM, including separate
 instruction and data views, erased contents, reset persistence and the H750's
-128KiB boundary. Flash programming/erase/options fail explicitly; the upstream
-controller cannot silently mutate a disconnected backing object.
+128KiB boundary. CPU/DMA programming and erase now share that physical storage;
+the upstream controller cannot silently mutate a disconnected backing object.
+Option/security registers and CRC remain unsupported.
 
 The native adapter calls Rust at the engine's pre-execution block check. Translation
 only peeks at the current instruction view; allocation and conflict eviction occur
@@ -211,10 +212,12 @@ specific victim sequence verifies the approximation, not a silicon guarantee.
 define the admission and arbitration rules now tested in Rust. DMA's direct
 single-beat audio requests are batched through the actual DMAMUX wiring, then
 granted by PL priority with lower stream number breaking ties. Runtime reports
-count contested grants; memory/peripheral port timing remains atomic.
+count contested grants. Source and destination ports now wait separately for
+fabric service; NDTR and HT/TC are committed only after destination completion.
+Clearing EN waits for an active beat before allowing reconfiguration.
 
 The AXI GPV exposes independent read/write QoS and issuing overrides for six
-initiators. The standalone model orders supplied concurrent requests by QoS,
+initiators. The shared CPU/DMA fabric orders concurrent requests by QoS,
 then least-recently-served priority independently per target and channel.
 Table4's issuing limits apply admission backpressure until completion; setting
 an override limits new issues to one without cancelling existing transactions.
@@ -228,17 +231,67 @@ waiting reads and 256-bit read buffer. A standalone earliest-service model now
 tests queue-full backpressure, ordered completion and consecutive-word reuse.
 FLASH_ACR LATENCY plus one interface cycle supplies its nonvolatile-read service
 bound; per-run reports retain the actual register and clock. It does not model
-AXI handshakes, ECC, programming conflicts or pipeline overlap. Flash command
-arrival times and AXI admission/grants are not yet coupled to CPU/DMA stalls.
-That coupling still requires implementation work; these tests do not imply it
-is blocked solely on real-board traces.
+AXI handshakes, ECC or pipeline overlap. Live CPU instruction/data requests are
+serialized functional transactions; the standalone read-pipeline test does not
+prove that the CPU issues overlapping flash commands correctly.
+
+### Coupled stalls and nonvolatile operations
+
+CPU cache misses/uncached accesses and DMA port requests now enter a common
+event-driven Rust fabric. AXI QoS, issuing limits and target occupancy delay
+completion; local AHB targets use a declared round-robin service scenario.
+CPU wait debt is consumed through Renode's virtual skipped-instruction budget,
+without retiring firmware instructions. Flash busy reads and full write queues
+use the same mechanism. STM/STRD retries replay completed accesses, keyed by
+native instruction metadata and SP, so an accepted flash strobe is not repeated.
+The fetch scheduler retains serviced prefixes if Renode shortens a block during
+a retry. Unit tests cover that starvation case.
+
+The live service scenario uses FLASH_ACR latency plus transfer beats, 64-bit AXI
+SRAM and 32-bit local SRAM beats, two PCLK cycles for the SAI APB port, and the
+programmed SDRAM open-row read lower bound. AXI read/write target lanes are
+independent in this scenario. These individual assumptions do not establish a
+whole-system hardware timing bound. DMA service is polled every microsecond.
+Dirty-cache eviction/maintenance traffic, write buffers, bus turnaround, actual
+target overlap, FMC row tracking/refresh scheduling, pipeline fetch arrival times
+and precise MPU/BusFault exception delivery remain implementation gaps. Native
+interrupt-vector reads are identified separately from translated instructions;
+their existing functional memory view does not impose bus latency. A vector read
+while flash is busy fails explicitly. Exception entry/exit needs a resumable
+adapter before external-memory stack/vector stalls can be modeled safely.
+
+[RM0433 Rev8 sections4.3.9–4.3.10, 4.5.1 and4.7](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+specify the modeled key sequence and lock, PG/write-buffer behavior, 8/16/32/64-bit
+strobes, forced partial programming, queued operations, sector/bank erase,
+STRBERR/INCERR/PGSERR, BSY/WBNE/QW, EOP, interrupts and W1C flags. The H750 has
+only user sector zero. BER wins over SER/SNB when both are set. Physical bytes
+change only at completion, and erase restores ones. Reprogramming nonvirgin
+ECC words is explicitly unsupported; an invented ECC algorithm or error flag
+would give false confidence. Model errors are surfaced to the host, not yet
+delivered as fully modeled Cortex-M bus exceptions.
+
+[DS12556 Rev8, flash memory characteristics](https://www.st.com/resource/en/datasheet/stm32h750vb.pdf)
+provides typical/maximum timing scenarios. At x64 the model uses 100/200µs per
+256-bit programming operation and 1/2s per 128KiB sector erase. Bank erase uses
+the mass-erase table's 5/10s x64 scenario; exact bank latency is not established.
+Other PSIZE values use their own table entries. Actual operation time depends
+on conditions not simulated here, including voltage, temperature and wear.
+
+An ITCM ARM probe erases and programs flash using scalar, STRD and STMIA accesses,
+checks status/interrupt-related flags and stale instruction-cache behavior, then
+executes the programmed function after maintenance. Typical and maximum scenarios
+have separate runs. Bypassing data stalls must be caught by an old flash word in
+the CPU result buffer; a crash/timeout cannot count. A production audio negative
+control holds a shared SRAM target busy with synthetic competing traffic and
+requires both delayed DMA and FIFO corruption evidence. These checks demonstrate
+functional coupling; they do not calibrate CPU headroom.
 
 | Area | Current evidence | Required next evidence/work |
 | --- | --- | --- |
 | Firmware boot and selected audio path | Executed in simulation | Same ELF on an identified physical revision |
 | Serial data, reset and control behavior | Source-backed cases | Captured control transactions and SAI words/edges, including reset and faults |
 | Interrupt/buffer ownership | Functional DMA and IRQ tests | Hardware DMA HT/TC, NVIC and task traces with timestamps and simultaneous UI/MIDI load |
-| Performance and deadlines | Functional flash/RAM Harvard caches and block-entry runtime refetch; DMA priority arbitration; standalone AXI admission/grants and flash read queue; SDRAM timing bounds | Pipeline/speculation and silicon victim policy, coupling of queues/arbitration to CPU/DMA stalls, calibrated instruction/flash/SDRAM costs |
+| Performance and deadlines | Functional flash/RAM caches, runtime refetch, shared CPU/DMA stall scenarios, flash programming/erase, AXI admission/grants and SDRAM bounds | Pipeline/speculation and silicon victim policy, dirty writeback traffic, FMC row/refresh behavior, actual overlap and calibrated CPU/bus costs |
 | Clock rates and drift | RCC/PLL/SAI rational derivation, 1µs event grid, DWT/core and timer prescalers | PLL/oscillator lock and jitter, clock-domain crossing delays, oscillator tolerance, independent frequency measurements |
 | Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal and passband-delay stage | Full ADC/DAC filters, internal rounding and startup behavior, independent impulse/frequency responses per codec |
 | Analog sound | No analog model | Calibrated gain, impedance, headroom, clipping, noise and distortion measurements |

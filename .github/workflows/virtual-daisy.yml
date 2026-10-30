@@ -48,6 +48,12 @@ jobs:
           cargo test --locked --manifest-path tools/virtual-daisy/Cargo.toml --target x86_64-unknown-linux-gnu
       - name: Boot production ELF, process audio, and reject injected faults
         run: cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target x86_64-unknown-linux-gnu -- run "$RUNNER_TEMP/renode" "audio-lab-results/daisy/${{ matrix.board }}" --board "${{ matrix.board }}"
+      - name: Check maximum-duration flash scenario on ARM
+        if: matrix.board == 'rev5'
+        env:
+          VIRTUAL_DAISY_FLASH_MAXIMUM: 1
+          VIRTUAL_DAISY_CORE_CACHE: ${{ github.workspace }}/audio-lab-results/daisy/rev5/cpu-core
+        run: cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target x86_64-unknown-linux-gnu -- probe "$RUNNER_TEMP/renode" "audio-lab-results/daisy/rev5/maximum" --board rev5
       - name: Publish audio measurements
         if: always()
         run: |
@@ -70,3 +76,8 @@ jobs:
             audio-lab-results/daisy/${{ matrix.board }}/*.repl
             audio-lab-results/daisy/${{ matrix.board }}/architecture-probe.bin
             audio-lab-results/daisy/${{ matrix.board }}/*.architecture.bin
+            audio-lab-results/daisy/${{ matrix.board }}/flash-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/*.flash.bin
+            audio-lab-results/daisy/${{ matrix.board }}/maximum/*.txt
+            audio-lab-results/daisy/${{ matrix.board }}/maximum/*.log
+            audio-lab-results/daisy/${{ matrix.board }}/maximum/*.bin
