@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Reflection;
 using System.Runtime.Loader;
 using Antmicro.Renode.Core;
@@ -78,6 +79,7 @@ public static class DaisyHost
         new CreationDriver(machine, resolver, new NoScripts()).ProcessFile(args[1]);
         var bus = machine.SystemBus;
         var imageArchitecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
+        ((DaisyQspi)machine["sysbus.qspi"]).SetMaximum(args[9]=="maximum");
         imageArchitecture.Register(2,0,args[9]=="maximum" ? 1U:0U,true);
         imageArchitecture.ImageLoading=true;
         try { bus.LoadELF(args[2]); } finally { imageArchitecture.ImageLoading=false; }
@@ -97,6 +99,7 @@ public static class DaisyHost
         if(args[5]=="flash" || args[5]=="flash-wait-fault") {FlashProbes(emulation,machine,args[3],args[5]=="flash-wait-fault");emulation.Dispose();return;}
         if(args[5]=="timing" || args[5]=="dsb-fault" || args[5]=="entry-fault") {TimingProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="wait-irq" || args[5]=="wait-irq-fault" || args[5]=="wait-irq-target") {InterruptProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="storage" || args[5]=="storage-irq-fault" || args[5]=="storage-data-fault" || args[5]=="storage-timer-fault") {StorageProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -107,6 +110,7 @@ public static class DaisyHost
         sai.SuppressReceive = args[5] == "drop-rx";
         using(var log = new StreamWriter(args[3] + ".rtt"))
         {
+            var startupText=args[5]=="startup" ? new StringBuilder():null;
             IEnumerable<ulong> symbols;
             if(!((SystemBus)machine["sysbus"]).TryGetAllSymbolAddresses("_SEGGER_RTT", out symbols)) throw new InvalidOperationException("Firmware has no RTT symbol");
             ulong rtt = symbols.Single();
@@ -136,10 +140,12 @@ public static class DaisyHost
                 uint write = bus.ReadDoubleWord(rtt + 36);
                 uint read = bus.ReadDoubleWord(rtt + 40);
                 if(capacity == 0 || capacity > 65536 || read >= capacity || write >= capacity) continue;
-                while(read != write) { log.Write((char)bus.ReadByte(buffer + read)); read = (read + 1) % capacity; }
+                while(read != write) { char character=(char)bus.ReadByte(buffer + read);log.Write(character);startupText?.Append(character);read = (read + 1) % capacity; }
                 bus.WriteDoubleWord(rtt + 40, read);
+                if(startupText!=null && startupText.ToString().Contains("Startup done!!") && startupText.ToString().Contains("Startup complete, transitioning away from splash screen")) break;
             }
         }
+        if(args[5]=="startup") File.WriteAllText(args[3]+".startup-time.txt",$"elapsed_ns={machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds}\n");
         Console.WriteLine("PC: " + cpu.PC);
         File.WriteAllBytes(args[3], bus.ReadBytes(0x20000000UL, 0x20000));
         sai.Save(args[3] + ".wav");
@@ -233,6 +239,24 @@ public static class DaisyHost
         File.WriteAllBytes(prefix+".interrupt.bin",bus.ReadBytes(0x2001b000UL,20));
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM interrupt-during-memory-wait probe executed; results require Rust grading");
+    }
+    private static void StorageProbes(Emulation emulation,Machine machine,string prefix,string kind) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        var name=kind=="storage" || kind=="storage-timer-fault" ? "storage-probe.bin":kind+".bin";
+        ((DaisyQspi)machine["sysbus.qspi"]).DisableDeadlineReschedule=kind=="storage-timer-fault";
+        bus.WriteBytes(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(prefix),name)),0x9000);
+        bus.WriteDoubleWord(0x61b0,0x9801);cpu.VectorTableOffset=0x6000;
+        cpu.SP=0x2001f000;cpu.PC=0x9001;
+        emulation.RunFor(TimeInterval.FromMicroseconds(50));
+        File.WriteAllBytes(prefix+".storage-early.bin",bus.ReadBytes(0x2001a000UL,4));
+        emulation.RunFor(TimeInterval.FromMicroseconds(2950));
+        File.WriteAllBytes(prefix+".storage-program.bin",bus.ReadBytes(0x2001a000UL,28));
+        bus.WriteDoubleWord(0x2001a020,1);
+        emulation.RunFor(TimeInterval.FromMilliseconds(301));
+        File.WriteAllBytes(prefix+".storage.bin",bus.ReadBytes(0x2001a000UL,28));
+        File.WriteAllBytes(prefix+".storage-cache.bin",bus.ReadBytes(0x2001a024UL,28));
+        ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
+        Console.WriteLine("ARM QSPI storage/polling interrupt probe executed; results require Rust grading");
     }
     private static void VerifyPacingAdapter() {
         using(var assembly=Mono.Cecil.AssemblyDefinition.ReadAssembly(typeof(BaseCPU).Assembly.Location)) {

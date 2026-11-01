@@ -85,6 +85,10 @@ jobs:
             audio-lab-results/daisy/${{ matrix.board }}/interrupt-probe.bin
             audio-lab-results/daisy/${{ matrix.board }}/interrupt-target-probe.bin
             audio-lab-results/daisy/${{ matrix.board }}/*.interrupt*.bin
+            audio-lab-results/daisy/${{ matrix.board }}/storage-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/storage-irq-fault.bin
+            audio-lab-results/daisy/${{ matrix.board }}/storage-data-fault.bin
+            audio-lab-results/daisy/${{ matrix.board }}/*.storage*.bin
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.txt
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.log
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.bin

@@ -241,13 +241,7 @@ impl ClockTree {
             1 => self.pll(1, 0)?,
             2 => self.pll(2, 0)?,
             3 => return Err("external I2S_CKIN is not connected by this profile"),
-            4 => match (self.read(0x4c) >> 28) & 3 {
-                0 if self.read(0) & 3 != 0 => Some(Rate::new(self.hsi(), 1)),
-                1 if self.read(0) & ((1 << 7) | (1 << 9)) != 0 => Some(Rate::new(4_000_000, 1)),
-                2 if self.read(0) & (1 << 16) != 0 => Some(Rate::new(16_000_000, 1)),
-                0..=2 => None,
-                _ => return Err("reserved CKPER source"),
-            },
+            4 => self.ckper_rate()?,
             _ => return Err("reserved SAI kernel source"),
         };
         let kernel = kernel.unwrap_or(Rate::new(0, 1));
@@ -260,11 +254,27 @@ impl ClockTree {
         Ok(kernel.divided(divider * frame))
     }
     pub fn fmc_rate(&self) -> Result<Option<Rate>, &'static str> {
-        match self.read(0x4c) & 3 {
+        self.external_memory_rate(self.read(0x4c) & 3)
+    }
+    pub fn qspi_rate(&self) -> Result<Option<Rate>, &'static str> {
+        self.external_memory_rate((self.read(0x4c) >> 4) & 3)
+    }
+    fn external_memory_rate(&self, source: u32) -> Result<Option<Rate>, &'static str> {
+        match source {
             0 => self.domain_rate(1),
             1 => self.pll(0, 1),
             2 => self.pll(1, 2),
-            _ => Err("FMC CKPER mux is not modeled"),
+            3 => self.ckper_rate(),
+            _ => Err("invalid external memory clock selector"),
+        }
+    }
+    fn ckper_rate(&self) -> Result<Option<Rate>, &'static str> {
+        match (self.read(0x4c) >> 28) & 3 {
+            0 if self.read(0) & 3 != 0 => Ok(Some(Rate::new(self.hsi(), 1))),
+            1 if self.read(0) & ((1 << 7) | (1 << 9)) != 0 => Ok(Some(Rate::new(4_000_000, 1))),
+            2 if self.read(0) & (1 << 16) != 0 => Ok(Some(Rate::new(16_000_000, 1))),
+            0..=2 => Ok(None),
+            _ => Err("reserved CKPER source"),
         }
     }
     pub fn advance(&mut self, cr1: u32, frcr: u32, nanoseconds: u64) -> Result<u32, &'static str> {

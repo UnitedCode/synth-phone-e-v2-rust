@@ -69,13 +69,21 @@ The CPU starts with the SP/PC from the flash vector table, as the chip does.
 The ELF header's entry point is currently zero because of a pre-existing linker
 entry-symbol warning; it is not used as the reset vector.
 
-Use `probe` in place of `run` to execute the generated ARM cache, flash,
+Use `probe` in place of `run` to execute the generated ARM cache, internal/external flash,
 writeback/exception and interrupt-during-wait programs with their negative
 controls. `timing` runs only the latter two programs and their controls for
 faster feedback. `probe-summary.txt` identifies the omitted checks; neither
 command tests production audio. Set `VIRTUAL_DAISY_FLASH_MAXIMUM=1` to select
 the datasheet maximum-duration flash scenario; the default uses typical values.
 These are timing scenarios, not measured or guaranteed board latencies.
+
+`startup` boots the production ELF until both startup messages appear and then
+exits. Its `startup-summary.txt` explicitly excludes full audio validation.
+`storage` runs only the ARM QSPI program/erase, mapped execution, cache
+maintenance and interrupt tests, including masked-IRQ, corrupt-data and stale-timer negative
+controls. `storage-summary.txt` excludes production startup/audio and the other
+ARM probes. Both modes use the same guarded engine and record firmware/model
+hashes; input WAV replay is available only with `run`.
 
 An optional fourth argument replays the first second of a user WAV after running
 the standard regression tests:
@@ -165,15 +173,27 @@ the additional behavior needed by this firmware:
 - Revision-specific SAI receive/transmit FIFOs with signed 24-bit stereo samples, DMA request
   connections through DMAMUX and explicit under/overrun counters. TX prefill works
   before channel enable, matching the firmware's startup wait.
-- GPIO input/output, pulls, BSRR and selected alternate-function signals.
+- GPIO input/output, pulls, BSRR (set wins), analog-mode input disconnection,
+  open-drain release/sink and the LCKR write/read locking sequence, including
+  protected alternate-function fields. Output latches remain writable after locking.
   External board-version straps and idle controls survive peripheral reset.
 - WM8731 register writes, documented reset values, both-channel loads and separate
   ADC/DAC/channel mute gating; AK4556 GPIO reset; PCM3060 hardware control;
   digital-format/direction validation; SSD1306 write acceptance. The OLED has no
   rendered framebuffer yet.
-- PWR readiness, FMC SDRAM configuration, missing SYSCFG/ADC2 startup registers,
-  and IS25LP064 QSPI startup commands: JEDEC ID, status, write-enable, register
-  writes, QPI entry/exit and instruction lane validation.
+- PWR readiness, FMC SDRAM configuration and missing SYSCFG/ADC2 startup registers.
+- An independent IS25LP064A NOR chip and QUADSPI controller: deferred page
+  programming and 4/32/64KiB/chip erase, page wrapping, protection, volatile WEL/WIP,
+  persistent data/registers, reset recovery, suspend/resume and deep power-down.
+  Controller reset retains chip state. SPI/QPI phases, dummy/mode clocks and
+  documented array-read frequency limits are checked. FIFO, sticky completion,
+  status polling, mask/match logic, interrupt92 and mapped timeout are functional.
+- A read-only 256MiB QSPI aperture at 0x90000000 shares the actual NOR storage
+  with indirect commands. CPU/DMA requests use fabric target2 and a declared
+  serial-service cost; CPU I/D caches require explicit maintenance after programming.
+  Decoding is a side-effect-free backing peek; execution validates the live mapped
+  configuration and fetches through the instruction cache. Cache-control writes
+  defer translation invalidation until the running block has safely unwound.
 - Shared physical RAM with a separate CPU data-cache view: 16KiB, four ways,
   32-byte lines, MPU memory attributes/priority/subregions, write-through and
   write-back policies, MVA and set/way clean/invalidate operations. DMA bypasses
@@ -229,10 +249,19 @@ flags, forced partial-word programming, two queued operations, sector/bank erase
 busy flags, EOP, interrupt enables and W1C clearing. Physical changes occur at
 completion; programming never invents a 0-to-1 transition. Reprogramming an ECC
 word without erase, option/security commands and flash CRC fail explicitly.
-QSPI memory-mapped reads,
 Seed2 DFM/Seed3 codecs, USB audio, MIDI input injection, full ADC simulation,
 and complete alternate-function electrical behavior are not implemented. Unknown
 Rust-model registers/commands throw instead of returning invented success.
+
+QSPI indirect shifting is immediate functional FIFO service, not serial-edge
+timing. Polling and mapped reads use explicit clocked service scenarios. The
+mapped timeout assumes a 32-byte prefetch fill; it does not reconstruct speculative
+prefetch, nCS continuity or AXI/serial overlap. DDR, SIOO/continuous-read mode,
+security/UID/SFDP and the unused dual/quad-output SPI commands remain unsupported.
+Reads of a suspended programming target and reset during NVM operations fail
+explicitly because intermediate charge/corruption is not specified. See
+[the conformance record](daisy-conformance.md#external-nor-and-quadspi) for sources
+and the timing assumptions, including the reference manual's FIFO inconsistency.
 
 **Instruction timing is not cycle accurate.** The CPU retains Renode's 480 MIPS
 pacing. The SAI phase accumulator preserves fractional clock rate over time,

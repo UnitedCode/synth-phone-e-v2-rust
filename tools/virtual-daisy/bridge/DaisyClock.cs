@@ -9,6 +9,7 @@ using Antmicro.Renode.Peripherals.Bus;
 
 namespace Antmicro.Renode.Peripherals.Miscellaneous
 {
+    public interface IDaisyKernelClockSink { void RefreshClock(); }
     public sealed class DaisyRcc : IDoubleWordPeripheral, IKnownSize, IRegisterablePeripheral<IPeripheral, EnumRegistrationPoint<STM32H7_RCC.RegistrationPeripheralAlias>>
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong AdvanceNative(IntPtr state, uint cr1, uint frcr, ulong ns);
@@ -58,15 +59,17 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             string name=point.Name.ToString();
             uint group=name is "TIM2" or "TIM3" or "TIM4" or "TIM5" or "TIM6" or "TIM7" or "TIM12" or "TIM13" or "TIM14" ? 6U : name is "TIM1" or "TIM8" or "TIM15" or "TIM16" or "TIM17" ? 7U : 0U;
             if(group!=0 && peripheral is IHasFrequency) timers.Add(peripheral,group);
+            if(peripheral is IDaisyKernelClockSink sink) { clockSinks.Add(sink);sink.RefreshClock(); }
         }
-        public void Unregister(IPeripheral peripheral) { original.Unregister(peripheral); timers.Remove(peripheral); }
+        public void Unregister(IPeripheral peripheral) { original.Unregister(peripheral); timers.Remove(peripheral);if(peripheral is IDaisyKernelClockSink sink) clockSinks.Remove(sink); }
         private void PropagateClocks() {
             ulong core=domain(native.State,0);
             if(core==ulong.MaxValue) throw new InvalidOperationException("Invalid core clock");
             if(core!=0 && systick!=null) systick.Frequency=core;
             foreach(var timer in timers) { ulong hz=domain(native.State,timer.Value); if(hz==ulong.MaxValue) throw new InvalidOperationException("Invalid timer clock"); if(hz!=0) ((IHasFrequency)timer.Key).Frequency=hz; }
+            foreach(var sink in clockSinks) sink.RefreshClock();
         }
-        public void Reset() { lock(sync) { original.Reset(); native.Reset(); } }
+        public void Reset() { lock(sync) { original.Reset(); native.Reset();PropagateClocks(); } }
         public long Size => 0x400;
         public IntPtr NativeState => native.State;
         public uint WithState(Func<IntPtr,uint> operation) {lock(sync) return operation(native.State);}
@@ -79,6 +82,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly DomainNative domain;
         private readonly IHasDivisibleFrequency systick;
         private readonly Dictionary<IPeripheral,uint> timers=new Dictionary<IPeripheral,uint>();
+        private readonly HashSet<IDaisyKernelClockSink> clockSinks=new HashSet<IDaisyKernelClockSink>();
         private readonly DwtNative dwt;
         private readonly SaveNative save;
     }

@@ -131,3 +131,34 @@ fn fractional_changes_latch_only_after_fracen_rising_edge() {
     clock.write(0x2c, (1 << 22) | (1 << 8));
     assert_eq!(clock.sample_rate(4 << 20, 63).unwrap().hz(), 48828.125);
 }
+
+#[test]
+fn external_memory_can_use_ckper_and_obeys_oscillator_gates() {
+    let mut clock = ClockTree::default();
+    clock.write(0x4c, (2 << 28) | 3); // FMCSEL=CLKP, CKPERSEL=HSE.
+    assert_eq!(clock.fmc_rate().unwrap(), None);
+    clock.write(0, 1 | (1 << 16));
+    assert_eq!(clock.fmc_rate().unwrap().unwrap().hz(), 16_000_000.0);
+    clock.write(0x4c, 3); // CKPERSEL=HSI.
+    assert_eq!(clock.fmc_rate().unwrap().unwrap().hz(), 64_000_000.0);
+    clock.write(0x10, 2); // Run from HSE before disabling HSI.
+    clock.write(0, 1 << 16);
+    assert_eq!(clock.fmc_rate().unwrap(), None);
+}
+
+#[test]
+fn qspi_kernel_mux_selects_hclk_pll1q_pll2r_or_ckper() {
+    let mut clock = ClockTree::default();
+    clock.write(0x28, (1 << 4) | (2 << 12)); // HSI, M1=1, M2=2.
+    clock.write(0x30, 63 | (31 << 16)); // PLL1 Q: 64MHz * 64 / 32.
+    clock.write(0x38, 29 | (9 << 24)); // PLL2 R: 64MHz / 2 * 30 / 10.
+    clock.write(0x2c, (1 << 17) | (1 << 21));
+    clock.write(0, 1 | (1 << 16) | (1 << 24) | (1 << 26));
+    for (selector, expected) in [64_000_000.0, 128_000_000.0, 96_000_000.0, 16_000_000.0]
+        .into_iter()
+        .enumerate()
+    {
+        clock.write(0x4c, ((selector as u32) << 4) | (2 << 28));
+        assert_eq!(clock.qspi_rate().unwrap().unwrap().hz(), expected);
+    }
+}

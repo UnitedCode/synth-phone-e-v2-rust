@@ -9,6 +9,7 @@ using Antmicro.Renode.Peripherals.DMA;
 using Antmicro.Renode.Peripherals.I2C;
 using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Peripherals;
+using Antmicro.Renode.Time;
 
 namespace Antmicro.Renode.Peripherals.Miscellaneous
 {
@@ -302,24 +303,82 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly SaveNative save;
     }
 
-    public class DaisyQspi : DaisyNative, IBytePeripheral, IWordPeripheral
+    public class DaisyQspi : DaisyNative, IDoubleWordPeripheral,IBytePeripheral,IWordPeripheral,IDaisyKernelClockSink,IDisposable
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong ReadWidth(IntPtr state, ulong offset, uint width);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint WriteWidth(IntPtr state, ulong offset, uint value, uint width);
-        public DaisyQspi(string libraryPath) : base(libraryPath, 8, 0x400)
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SyncNative(IntPtr state,IntPtr clock,ulong now);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong NextNative(IntPtr state);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint IrqNative(IntPtr state);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint MaximumNative(IntPtr state,uint maximum);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void AttachNative(IntPtr architecture,IntPtr state);
+        public DaisyQspi(IMachine machine,string libraryPath,DaisyRcc rcc,DaisyArchitecture architecture) : base(libraryPath, 8, 0x400)
         {
+            this.machine=machine;this.rcc=rcc;
             var library = NativeLibrary.Load(libraryPath);
             readWidth = Marshal.GetDelegateForFunctionPointer<ReadWidth>(NativeLibrary.GetExport(library, "daisy_read_width"));
             writeWidth = Marshal.GetDelegateForFunctionPointer<WriteWidth>(NativeLibrary.GetExport(library, "daisy_write_width"));
+            synchronize=Marshal.GetDelegateForFunctionPointer<SyncNative>(NativeLibrary.GetExport(library,"daisy_qspi_sync"));
+            next=Marshal.GetDelegateForFunctionPointer<NextNative>(NativeLibrary.GetExport(library,"daisy_qspi_next_event"));
+            irq=Marshal.GetDelegateForFunctionPointer<IrqNative>(NativeLibrary.GetExport(library,"daisy_qspi_irq"));
+            maximum=Marshal.GetDelegateForFunctionPointer<MaximumNative>(NativeLibrary.GetExport(library,"daisy_qspi_maximum"));
+            scheduleChanged=Marshal.GetDelegateForFunctionPointer<IrqNative>(NativeLibrary.GetExport(library,"daisy_qspi_schedule_changed"));
+            Marshal.GetDelegateForFunctionPointer<AttachNative>(NativeLibrary.GetExport(library,"daisy_qspi_attach"))(architecture.NativeState,State);
+            architecture.AttachQspi(this);
         }
-        private uint Read(long offset, uint width) { ulong value = readWidth(State, (ulong)offset, width); if((value >> 32) != 0) throw new InvalidOperationException("Unsupported QSPI read"); return (uint)value; }
-        private void Write(long offset, uint value, uint width) { if(writeWidth(State, (ulong)offset, value, width) != 0) throw new InvalidOperationException("Unsupported QSPI write"); }
+        private uint Timed(Func<uint> operation) {
+            if(machine.SystemBus.TryGetCurrentCPU(out var cpu)) cpu.SyncTime();
+            uint result=0;
+            // RCC owns the outer lock, matching peripheral reset callbacks.
+            rcc.WithState(clock=>{lock(sync) {
+                if(synchronize(State,clock,machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds)!=0) throw new InvalidOperationException("QSPI clock/time synchronization failed");
+                result=operation();IRQ.Set(irq(State)!=0);Schedule();
+            }return 0;});
+            return result;
+        }
+        private void Schedule() {
+            ulong target=next(State);
+            if(target==ulong.MaxValue) {if(scheduled) {generation++;scheduled=false;}return;}
+            if(disposed || (scheduled && (target==scheduledTarget || DisableDeadlineReschedule))) return;
+            scheduled=true;scheduledTarget=target;ulong current=++generation;
+            ulong now=machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds;
+            machine.ScheduleAction(TimeInterval.FromNanoseconds(target>now?target-now:1),_=>{
+                rcc.WithState(clock=>{lock(sync) {
+                    if(disposed || current!=generation) return 0;
+                    scheduled=false;
+                    if(synchronize(State,clock,machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds)!=0) throw new InvalidOperationException("QSPI polling synchronization failed");
+                    IRQ.Set(irq(State)!=0);Schedule();
+                }return 0;});
+            },"QSPI status polling");
+        }
+        private uint Read(long offset, uint width) {return Timed(()=>{ulong value = readWidth(State, (ulong)offset, width); if((value >> 32) != 0) throw new InvalidOperationException($"Unsupported QSPI read at 0x{offset:X}"); return (uint)value;});}
+        private void Write(long offset, uint value, uint width) {Timed(()=>{if(writeWidth(State,(ulong)offset,value,width)!=0) throw new InvalidOperationException($"Unsupported QSPI write at 0x{offset:X}: 0x{value:X}");return 0;});}
+        public new uint ReadDoubleWord(long offset)=>Read(offset,4);
+        public new void WriteDoubleWord(long offset,uint value)=>Write(offset,value,4);
         public byte ReadByte(long offset) { return (byte)Read(offset, 1); }
         public ushort ReadWord(long offset) { return (ushort)Read(offset, 2); }
         public void WriteByte(long offset, byte value) { Write(offset, value, 1); }
         public void WriteWord(long offset, ushort value) { Write(offset, value, 2); }
+        public void RefreshClock() {Timed(()=>0);}
+        public void AfterMemoryAccess() {if(scheduleChanged(State)!=0) RefreshClock();}
+        public bool DisableDeadlineReschedule {get;set;}
+        public void SetMaximum(bool enabled) {Timed(()=>{if(maximum(State,enabled?1U:0U)!=0) throw new InvalidOperationException("Invalid QSPI timing scenario change");return 0;});}
+        public new void Reset() {lock(sync) {generation++;scheduled=false;base.Reset();IRQ.Set(false);}}
+        public void Dispose() {lock(sync) {disposed=true;generation++;scheduled=false;IRQ.Set(false);}}
+        public GPIO IRQ {get;}=new GPIO();
+        private readonly IrqNative scheduleChanged;
+        private ulong scheduledTarget;
+        private readonly IMachine machine;
+        private readonly DaisyRcc rcc;
+        private readonly object sync=new object();
+        private ulong generation;
+        private bool scheduled,disposed;
         private readonly ReadWidth readWidth;
         private readonly WriteWidth writeWidth;
+        private readonly SyncNative synchronize;
+        private readonly NextNative next;
+        private readonly IrqNative irq;
+        private readonly MaximumNative maximum;
     }
     public class DaisyGpio : IDoubleWordPeripheral, IKnownSize, INumberedGPIOOutput, IGPIOReceiver, ILocalGPIOReceiver
     {

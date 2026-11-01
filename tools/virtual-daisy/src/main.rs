@@ -4,6 +4,7 @@ mod core;
 mod grade;
 mod platform;
 mod probe;
+mod storage_probe;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -23,6 +24,8 @@ enum RunMode {
     Full,
     Probes,
     Timing,
+    Startup,
+    Storage,
 }
 
 fn checked(command: &mut Command) -> Result<()> {
@@ -129,6 +132,12 @@ impl Host<'_> {
             ".interrupt-early.bin",
             ".interrupt.txt",
             ".interrupt-negative.txt",
+            ".storage.bin",
+            ".storage-early.bin",
+            ".storage-program.bin",
+            ".storage-cache.bin",
+            ".storage.txt",
+            ".storage-negative.txt",
         ] {
             let path = grade::artifact(&capture, suffix);
             if path.exists() {
@@ -178,6 +187,10 @@ impl Host<'_> {
             "wait-irq",
             "wait-irq-fault",
             "wait-irq-target",
+            "storage",
+            "storage-irq-fault",
+            "storage-data-fault",
+            "storage-timer-fault",
         ]
         .contains(&fault)
         {
@@ -205,7 +218,12 @@ fn run(
     let directory = directory.canonicalize()?;
     // Reusing an output directory must not leave an old success report behind
     // if a new build, boot or quality gate fails.
-    for name in ["summary.txt", "probe-summary.txt"] {
+    for name in [
+        "summary.txt",
+        "probe-summary.txt",
+        "startup-summary.txt",
+        "storage-summary.txt",
+    ] {
         let summary = directory.join(name);
         if summary.exists() {
             fs::remove_file(summary)?;
@@ -298,7 +316,6 @@ fn run(
             .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1"),
     )?;
     core::prepare(&renode, &directory, &managed)?;
-    conformance::write(&directory, board, &sha, &library, ideal_line)?;
     bounded(
         Command::new(&dotnet)
             .arg(managed.join("DaisyHost.dll"))
@@ -306,6 +323,20 @@ fn run(
             .arg("--disable-python")
             .arg(managed.join("Infrastructure.dll")),
         &directory.join("guard.log"),
+    )?;
+    conformance::write(
+        &directory,
+        board,
+        &sha,
+        &library,
+        ideal_line,
+        match mode {
+            RunMode::Full => "full",
+            RunMode::Probes => "probes",
+            RunMode::Timing => "timing",
+            RunMode::Startup => "startup",
+            RunMode::Storage => "storage",
+        },
     )?;
     let tone = directory.join("tone.f32le");
     let silence = directory.join("silence.f32le");
@@ -319,7 +350,73 @@ fn run(
         board,
         ideal_line,
     };
+    if mode == RunMode::Startup {
+        let capture = host.boot("startup", &tone, "startup")?;
+        grade::boot_evidence(&capture)?;
+        if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
+            return Err("Firmware changed during startup check".into());
+        }
+        let elapsed = grade::counter(
+            &grade::artifact(&capture, ".startup-time.txt"),
+            "elapsed_ns",
+        )?;
+        let summary = format!("Production firmware startup passed at {elapsed} virtual ns; ARM probes and full audio/fault suites NOT RUN\n");
+        fs::write(directory.join("startup-summary.txt"), &summary)?;
+        print!("{summary}");
+        return Ok(());
+    }
     if mode != RunMode::Timing {
+        fs::write(
+            directory.join("storage-probe.bin"),
+            storage_probe::image(true, false),
+        )?;
+        fs::write(
+            directory.join("storage-irq-fault.bin"),
+            storage_probe::image(false, false),
+        )?;
+        fs::write(
+            directory.join("storage-data-fault.bin"),
+            storage_probe::image(true, true),
+        )?;
+        let capture = host.boot("storage-probes", &tone, "storage")?;
+        storage_probe::check(&capture)?;
+        for (kind, expected) in [
+            (
+                "storage-irq-fault",
+                "ARM storage .storage-program.bin word 0: expected 0x42, got 0x0",
+            ),
+            (
+                "storage-data-fault",
+                "ARM storage .storage-program.bin word 3: expected 0x47702009, got 0x47702008",
+            ),
+            (
+                "storage-timer-fault",
+                "ARM storage .storage-program.bin word 0: expected 0x42, got 0x0",
+            ),
+        ] {
+            let broken = host.boot(kind, &tone, kind)?;
+            let error = storage_probe::check(&broken)
+                .err()
+                .ok_or("ARM storage fault escaped grading")?
+                .to_string();
+            if !error.contains(expected) {
+                return Err(format!("Unexpected storage negative-control failure: {error}").into());
+            }
+            fs::write(
+                grade::artifact(&broken, ".storage-negative.txt"),
+                format!("{kind}=caught\n{error}\n"),
+            )?;
+        }
+        if mode == RunMode::Storage {
+            if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware
+            {
+                return Err("Firmware changed during storage probes".into());
+            }
+            let summary="ARM QSPI storage/IRQ probes and missing-IRQ/corrupt-data/stale-timer controls passed; production startup/audio and other ARM probes NOT RUN\n";
+            fs::write(directory.join("storage-summary.txt"), summary)?;
+            print!("{summary}");
+            return Ok(());
+        }
         fs::write(directory.join("architecture-probe.bin"), probe::image())?;
         let probes = host.boot("architecture-probes", &tone, "architecture")?;
         probe::check(&probes)?;
@@ -462,7 +559,7 @@ fn run(
         let summary = if mode == RunMode::Timing {
             "ARM writeback/exception timing probes passed; legacy cache/flash probes and production audio NOT RUN\n"
         } else {
-            "ARM cache, flash and writeback/exception probes passed; production firmware/audio NOT RUN\n"
+            "ARM cache, internal/external flash, mapped execution and writeback/exception probes passed; production firmware/audio NOT RUN\n"
         };
         fs::write(directory.join("probe-summary.txt"), summary)?;
         print!("{summary}");
@@ -565,7 +662,10 @@ fn main() -> Result<()> {
         println!("{}", grade::check(Path::new(&args[1]))?);
         return Ok(());
     }
-    if args.len() >= 3 && (args[0] == "run" || args[0] == "probe" || args[0] == "timing") {
+    if args.len() >= 3
+        && ["run", "probe", "timing", "startup", "storage"]
+            .contains(&args[0].to_string_lossy().as_ref())
+    {
         let mut board = None;
         let mut codec = None;
         let mut input = None;
@@ -616,6 +716,9 @@ fn main() -> Result<()> {
         let board = board.ok_or(
             "Select the physical board with --board rev4/rev5/rev7; there is no implicit codec",
         )?;
+        if args[0] != "run" && input.is_some() {
+            return Err("Input WAV replay requires run mode".into());
+        }
         if let Some(codec) = codec {
             board.validate_codec(codec)?;
         }
@@ -628,7 +731,11 @@ fn main() -> Result<()> {
             input,
             board,
             ideal_line,
-            if args[0] == "timing" {
+            if args[0] == "storage" {
+                RunMode::Storage
+            } else if args[0] == "startup" {
+                RunMode::Startup
+            } else if args[0] == "timing" {
                 RunMode::Timing
             } else if args[0] == "probe" {
                 RunMode::Probes
@@ -637,5 +744,5 @@ fn main() -> Result<()> {
             },
         );
     }
-    Err("Usage: virtual-daisy run|probe|timing RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run|probe|timing|startup|storage RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

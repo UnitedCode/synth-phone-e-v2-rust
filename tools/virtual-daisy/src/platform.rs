@@ -132,7 +132,10 @@ pub fn prepare(
     );
     platform = platform.replace(
         "    -> nvic@92",
-        &format!("    libraryPath: \"{}\"", library.display()),
+        &format!(
+            "    libraryPath: \"{}\"\n    rcc: rcc\n    architecture: architecture\n    -> nvic@92",
+            library.display()
+        ),
     );
     platform = platform.replace(
         "    [0-7] -> nvic@[11-17, 47]",
@@ -186,6 +189,7 @@ pub fn prepare(
     if platform.contains("Python.") || platform.contains("`py ") {
         return Err("Python platform code remains".into());
     }
+    platform.push_str("\nqspiWindow: Miscellaneous.DaisyMemory @ sysbus 0x90000000\n    size: 0x10000000\n    baseAddress: 0x90000000\n    architecture: architecture\n");
     platform.push_str(&format!(
         "\narchitecture: Miscellaneous.DaisyArchitecture @ none\n    libraryPath: \"{}\"\n",
         library.display()
