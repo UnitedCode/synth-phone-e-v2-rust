@@ -692,6 +692,15 @@ impl SystemMemory {
         };
         Ok(u32::from_le_bytes(data.try_into().unwrap()))
     }
+    fn vector_bus_error(&self, address: u32, error: &str) -> bool {
+        crate::qspi::mapped_bus_error(error)
+            && Self::is_qspi(address, 4)
+            && self.qspi.as_ref().is_some_and(|qspi| {
+                qspi.lock()
+                    .unwrap()
+                    .mapped_bus_fault(address - 0x90000000, 4)
+            })
+    }
     /// Suspend before handler execution; frame stores and vector fetch can
     /// progress on separate ports. Entry never drains unrelated writebacks.
     pub fn exception_entry(&mut self, address: u32) -> Result<u64> {
@@ -746,12 +755,22 @@ impl SystemMemory {
                 self.entry_vector = Some((address, 0));
                 0
             } else {
-                let wait = self.access_wait_kind(address, 4, false, true, true)?;
-                if wait == 0 {
-                    let data = self.read_vector(address)?;
-                    self.entry_vector = Some((address, data));
+                let service: Result<u64> = (|| {
+                    let wait = self.access_wait_kind(address, 4, false, true, true)?;
+                    if wait == 0 {
+                        let data = self.read_vector(address)?;
+                        self.entry_vector = Some((address, data));
+                    }
+                    Ok(wait)
+                })();
+                match service {
+                    Ok(wait) => wait,
+                    // Finish the original frame, then let the native vector
+                    // read receive its BusFault in VECTOR_READ phase. That
+                    // engine already implements VECTTBL and frame reuse.
+                    Err(error) if self.vector_bus_error(address, error) => 0,
+                    Err(error) => return Err(error),
                 }
-                wait
             };
             let mut stack_wait = 0;
             while let Some(op) = self.entry_stores.front().cloned() {

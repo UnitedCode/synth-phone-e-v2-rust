@@ -30,7 +30,8 @@ pub fn check(prefix: &Path, kind: &str) -> Result<()> {
     let capture = words(prefix, ".transition.bin")?;
     let early = words(prefix, ".transition-early.bin")?;
     let nested = kind == "transition-nested";
-    let floating_point = kind == "transition-fp";
+    let floating_point = kind == "transition-fp" || kind == "transition-fp-psp";
+    let process_stack = kind == "transition-psp" || kind == "transition-fp-psp";
     let low_first = nested || kind == "transition-equal";
     equal(early[0], 0x42, "early readiness")?;
     equal(early[1], 0, "handler before shared stack service")?;
@@ -38,9 +39,11 @@ pub fn check(prefix: &Path, kind: &str) -> Result<()> {
     equal(capture[1], 2, "handler count")?;
     equal(capture[2], 3, "both interrupts")?;
     equal(capture[4], capture[3], "restored thread SP")?;
+    equal(capture[28], capture[27], "restored MSP")?;
+    equal(capture[30], capture[29], "restored PSP")?;
     equal(capture[5], 0, "active interrupts after return")?;
     equal(capture[31], 0, "unexpected exception")?;
-    if !(0x3001e000..=0x3001f000).contains(&capture[3])
+    if !(0x3001c000..=0x3001f000).contains(&capture[3])
         || (nested && !(0x3001e000..=0x3001f000).contains(&capture[7]))
     {
         return Err("ARM transition used an invalid shared-SRAM stack".into());
@@ -57,8 +60,12 @@ pub fn check(prefix: &Path, kind: &str) -> Result<()> {
             capture[base + 1],
             if high_nested {
                 0xfffffff1
+            } else if floating_point && process_stack {
+                0xffffffed
             } else if floating_point {
                 0xffffffe9
+            } else if process_stack {
+                0xfffffffd
             } else {
                 0xfffffff9
             },

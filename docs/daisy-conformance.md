@@ -326,6 +326,26 @@ handlers overwrite them. Disabled-late and disabled-tail controls must exit norm
 their frame gates. Priority-mask/fault combinations, physical late-arrival
 cutoffs and exact pipeline/stack-pop timing remain unverified. These tests
 establish functional transitions, not a silicon cycle count.
+Basic and lazy-FP tail-chain cases also run with PSP thread stacks and verify
+both MSP and PSP restoration, covering F9/FD/E9/ED thread return selections.
+
+[PM0253 sections2.5.1 and4.3.11](https://www.st.com/resource/en/programming_manual/pm0253-stm32f7-series-and-stm32h7-series-cortexm7-processor-programming-manual-stmicroelectronics.pdf)
+requires a vector-table bus error to enter HardFault with HFSR.VECTTBL. A known
+QSPI demand error now lets the original stack frame finish before the native
+vector read receives that error in its existing VECTOR_READ phase. The engine
+handles the derived HardFault using the same frame and restores the original
+IRQ's pending state. This avoids aborting the host or fabricating a data fault.
+Stopped clocks, unknown protocols and prefetch-only failures outside the demanded
+vector word remain unsupported.
+
+A further ARM guest programs a NOR vector table with an IRQ outside FSIZE and a
+valid HardFault vector. It checks VECTTBL without FORCED or data-fault bits,
+original PC/xPSR, a single shared-SRAM frame, and the inactive/pending original
+IRQ. A second case warms the HardFault vector through an actual exception,
+disables QSPI, then requires that cached vector to work after the cold IRQ vector
+faults. A configurable-fault-enabled case still requires HardFault. Expanding
+FSIZE to make the IRQ vector valid must fail the VECTTBL gate. Physical fault
+response timing and complete bus/MPU/fault permutations remain unverified.
 
 A separate no-std Rust ARM guest checks enabled divide/alignment faults,
 16 MPU regions, denied data and execute-never accesses, and disabled-coprocessor
