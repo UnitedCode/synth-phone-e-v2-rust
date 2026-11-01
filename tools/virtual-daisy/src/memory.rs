@@ -36,6 +36,14 @@ struct FetchBlock {
     lines: Vec<FetchLine>,
     instructions: u64,
 }
+#[derive(Clone, Copy)]
+struct FetchValidation {
+    address: u32,
+    bytes: u32,
+    instructions: u64,
+    lines: u64,
+    generation: u64,
+}
 #[derive(Clone)]
 struct CpuAccess {
     address: u32,
@@ -94,6 +102,12 @@ pub struct SystemMemory {
     instruction_reads: u64,
     decoded: BTreeMap<u32, u8>,
     blocks: HashMap<(u32, u32), Arc<FetchBlock>>,
+    // A repeated block needs no byte comparison while every I-cache line and
+    // instruction policy remains unchanged. Physical writes deliberately do
+    // not invalidate this: the Harvard instruction view must remain stale.
+    validated_fetch: [Option<FetchValidation>; 64],
+    instruction_generation: u64,
+    runtime_cached_checks: u64,
     runtime_blocks: u64,
     runtime_instructions: u64,
     runtime_retranslations: u64,
@@ -155,6 +169,9 @@ impl Default for SystemMemory {
             instruction_reads: 0,
             decoded: BTreeMap::new(),
             blocks: HashMap::new(),
+            validated_fetch: [None; 64],
+            instruction_generation: 0,
+            runtime_cached_checks: 0,
             runtime_blocks: 0,
             runtime_instructions: 0,
             runtime_retranslations: 0,
@@ -211,6 +228,7 @@ impl SystemMemory {
         self.next_way = [0; SETS];
         self.decoded.clear();
         self.blocks.clear();
+        self.invalidate_fetch_validations();
         self.runtime_progress = None;
     }
     pub fn read_scb(&self, offset: u64) -> Result<u32> {
@@ -599,10 +617,10 @@ impl SystemMemory {
             }
         }
         let bus_write = write && !allocate_write;
-        let Some((target, service)) = self.target(address, bytes, bus_write)? else {
+        let Some((target, service)) = self.target(key_address, bytes, bus_write)? else {
             return Ok(0);
         };
-        let Some(id) = self.submit_bus(2, address, bytes, bus_write, target, service)? else {
+        let Some(id) = self.submit_bus(2, key_address, bytes, bus_write, target, service)? else {
             let ns = self.fabric.next_event();
             return Ok(self.cpu_wait(ns));
         };
@@ -1105,6 +1123,7 @@ impl SystemMemory {
     pub fn decode_instruction(&mut self, address: u32, width: usize) -> Result<u32> {
         Self::check(address, width)?;
         self.blocks.clear();
+        self.invalidate_fetch_validations();
         let mut value = 0;
         for byte in 0..width {
             let addr = address + byte as u32;
@@ -1134,6 +1153,20 @@ impl SystemMemory {
             return Ok(false);
         }
         let key = (address, bytes);
+        let slot = (((address >> 1) ^ (bytes >> 1)) & 63) as usize;
+        if self.runtime_progress.is_none() {
+            if let Some(validated) = self.validated_fetch[slot] {
+                if (validated.address, validated.bytes) == key
+                    && validated.generation == self.instruction_generation
+                {
+                    self.runtime_blocks += 1;
+                    self.runtime_instructions += validated.instructions;
+                    self.instruction_reads += validated.lines;
+                    self.runtime_cached_checks += 1;
+                    return Ok(false);
+                }
+            }
+        }
         let block = if let Some(block) = self.blocks.get(&key) {
             Arc::clone(block)
         } else {
@@ -1227,7 +1260,32 @@ impl SystemMemory {
             }
         }
         self.runtime_progress = None;
+        // A large validation may itself evict an earlier line. Only memoize
+        // after checking that all of its lines are still resident together.
+        self.validated_fetch[slot] = block
+            .lines
+            .iter()
+            .all(|line| {
+                let set = ((line.address / 32) % 256) as usize;
+                line.cacheable
+                    && (set * 2..set * 2 + 2).any(|i| {
+                        self.instructions[i].valid && self.instructions[i].address == line.address
+                    })
+            })
+            .then_some(FetchValidation {
+                address,
+                bytes,
+                instructions: block.instructions,
+                lines: block.lines.len() as u64,
+                generation: self.instruction_generation,
+            });
         Ok(false)
+    }
+    fn invalidate_fetch_validations(&mut self) {
+        self.instruction_generation = self.instruction_generation.wrapping_add(1);
+        if self.instruction_generation == 0 {
+            self.validated_fetch.fill(None);
+        }
     }
     fn instruction_index(&mut self, base: u32) -> Result<usize> {
         let set = ((base / 32) % 256) as usize;
@@ -1240,6 +1298,7 @@ impl SystemMemory {
             .find(|&i| !self.instructions[i].valid)
             .unwrap_or(set * 2 + self.instruction_way[set]);
         let data = self.backing_read(base, 32, false)?.try_into().unwrap();
+        self.invalidate_fetch_validations();
         self.instructions[index] = CacheLine {
             valid: true,
             dirty: false,
@@ -1250,11 +1309,23 @@ impl SystemMemory {
         self.instruction_fills += 1;
         Ok(index)
     }
-    /// A block-entry fault is precise only if its first instruction cannot
-    /// fetch. A valid/cached prefix followed by a bad line is still unsupported.
-    pub fn instruction_bus_fault_at_start(&self, address: u32) -> bool {
+    /// QSPI blocks contain one instruction, including both halves of Thumb32.
+    /// Reject an external prefetch-only failure outside the demanded bytes.
+    /// Defensive multi-instruction callers must still fault at the first byte.
+    pub fn instruction_bus_fault_at_start(&self, address: u32, bytes: u32) -> bool {
         if !Self::is_qspi(address, 2) {
             return false;
+        }
+        if self
+            .blocks
+            .get(&(address, bytes))
+            .is_some_and(|b| b.instructions == 1)
+        {
+            return self.qspi.as_ref().is_some_and(|q| {
+                q.lock()
+                    .unwrap()
+                    .mapped_bus_fault(address - 0x90000000, bytes as usize)
+            });
         }
         let base = address & !31;
         let set = ((base / 32) % 256) as usize;
@@ -1359,10 +1430,11 @@ impl SystemMemory {
     pub fn stats(&self) -> String {
         let cache=format!("data_cache_enabled={}\ncache_line_fills={}\ncache_line_writebacks={}\ndirty_lines={}\ndma_cacheable_bytes={}\ninstruction_cache_enabled={}\ninstruction_fetch_reads={}\ninstruction_cache_fills={}\nruntime_blocks={}\nruntime_instruction_slots={}\nruntime_retranslations={}\n", u32::from(self.ccr & (1 << 16) != 0), self.fills, self.writebacks, self.cache.iter().filter(|line| line.valid && line.dirty).count(), self.dma_cacheable_bytes,u32::from(self.ccr&(1<<17)!=0),self.instruction_reads,self.instruction_fills,self.runtime_blocks,self.runtime_instructions,self.runtime_retranslations);
         let timing=format!("abandoned_bus_requests={}\nabandoned_cpu_waits={}\nabandoned_cpu_wait_ns={}\nflash_buffer_hits={}\nflash_array_reads={}\nwriteback_pending_lines={}\nwriteback_drain_yields={}\nexception_entry_wait_yields={}\nexception_return_wait_yields={}\nexception_stack_words={}\nvector_reads={}\nvector_cache_hits={}\ncache_writeback_timing=DEFERRED_FABRIC_COMPLETION\nexception_bus_timing=RESUMABLE_PORT_SERVICE_SCENARIO\nstore_buffer_and_pipeline_overlap=UNMODELED\n",self.abandoned_bus_requests,self.abandoned_waits,self.abandoned_wait_ns,self.fabric.flash_buffer_hits,self.fabric.flash_buffer_misses,self.pending_writebacks.len(),self.writeback_drain_yields,self.entry_wait_yields,self.return_wait_yields,self.exception_stack_words,self.vector_reads,self.vector_cache_hits);
-        format!("{cache}{timing}cpu_bus_wait_ns={}\ncpu_bus_wait_yields={}\ndma_bus_wait_yields={}\nfabric_completed={}\nfabric_contests={}\nbus_stall_scope=COUPLED_FUNCTIONAL_SERVICE_SCENARIO\ndma_service_grid_ns=1000\n{}",self.cpu_wait_ns,self.cpu_wait_yields,self.dma_wait_yields,self.fabric.completed,self.fabric.contests,self.flash.stats())
+        format!("{cache}{timing}runtime_cached_checks={}\ncpu_bus_wait_ns={}\ncpu_bus_wait_yields={}\ndma_bus_wait_yields={}\nfabric_completed={}\nfabric_contests={}\nbus_stall_scope=COUPLED_FUNCTIONAL_SERVICE_SCENARIO\ndma_service_grid_ns=1000\n{}",self.runtime_cached_checks,self.cpu_wait_ns,self.cpu_wait_yields,self.dma_wait_yields,self.fabric.completed,self.fabric.contests,self.flash.stats())
     }
     pub fn write_scb(&mut self, offset: u64, value: u32) -> Result<()> {
         self.blocks.clear();
+        self.invalidate_fetch_validations();
         self.runtime_progress = None;
         match offset {
             0xd14 => self.ccr = value,

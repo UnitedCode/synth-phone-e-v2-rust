@@ -1,6 +1,70 @@
 use virtual_daisy::memory::SystemMemory;
 
 #[test]
+fn repeated_cached_fetch_validation_preserves_dma_staleness_and_maintenance() {
+    let mut memory = SystemMemory::default();
+    memory.write_dma(0x24000000, 4, 0x47702001).unwrap();
+    memory.write_scb(0xd14, 1 << 17).unwrap();
+    memory.decode_instruction(0x24000000, 4).unwrap();
+    memory.write_dma(0x24000020, 4, 0x47702003).unwrap();
+    memory.decode_instruction(0x24000020, 4).unwrap();
+    for _ in 0..16 {
+        assert!(!memory.runtime_fetch(0x24000000, 4).unwrap());
+        assert!(!memory.runtime_fetch(0x24000020, 4).unwrap());
+    }
+    let fast: u64 = memory
+        .stats()
+        .lines()
+        .find_map(|l| l.strip_prefix("runtime_cached_checks="))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        fast >= 28,
+        "alternating cached blocks must reuse validation"
+    );
+    memory.write_dma(0x24000000, 4, 0x47702002).unwrap();
+    assert!(!memory.runtime_fetch(0x24000000, 4).unwrap());
+    memory.write_scb(0xf58, 0x24000000).unwrap();
+    assert!(memory.runtime_fetch(0x24000000, 4).unwrap());
+    assert_eq!(
+        memory.decode_instruction(0x24000000, 4).unwrap(),
+        0x47702002
+    );
+    assert!(!memory.runtime_fetch(0x24000000, 4).unwrap());
+}
+
+#[test]
+fn memoized_fetch_rechecks_after_an_unrelated_instruction_refill_evicts_its_line() {
+    let mut memory = SystemMemory::default();
+    memory.load_flash(0x08000000, 4, 0x47702001).unwrap();
+    memory.write_scb(0xd14, 1 << 17).unwrap();
+    memory.decode_instruction(0x08000000, 4).unwrap();
+    assert!(!memory.runtime_fetch(0x08000000, 4).unwrap());
+    assert!(!memory.runtime_fetch(0x08000000, 4).unwrap());
+    memory.load_flash(0x08000000, 4, 0x47702002).unwrap();
+    // These fills do not decode or validate a block. They must still expire
+    // every memo that could depend on the displaced cache line.
+    memory.read_instruction(0x24000000, 4).unwrap();
+    memory.read_instruction(0x24002000, 4).unwrap();
+    assert!(memory.runtime_fetch(0x08000000, 4).unwrap());
+}
+
+#[test]
+fn validating_a_long_block_cannot_cache_a_line_it_evicted_during_that_validation() {
+    let mut memory = SystemMemory::default();
+    memory.write_scb(0xd14, 1 << 17).unwrap();
+    memory.read_instruction(0x24000000, 4).unwrap(); // Set0 way0; victim advances to1.
+    memory.read_instruction(0x08000000, 4).unwrap(); // Set0 way1; victim returns to0.
+    for address in (0x24000002..0x24002002).step_by(4) {
+        memory.decode_instruction(address, 4).unwrap();
+    }
+    assert!(!memory.runtime_fetch(0x24000002, 8192).unwrap()); // Final line evicts the first.
+    memory.write_dma(0x24000002, 2, 0x2001).unwrap();
+    assert!(memory.runtime_fetch(0x24000002, 8192).unwrap());
+}
+
+#[test]
 fn flash_shares_the_instruction_cache_but_is_not_writable_ram() {
     let mut memory = SystemMemory::default();
     memory.load_flash(0x08000000, 4, 0x47702001).unwrap();

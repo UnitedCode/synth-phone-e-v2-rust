@@ -1,34 +1,8 @@
 //! Independent ARM guest and public-result grading for documented QSPI faults.
-use super::{checked, grade, Result};
-use std::{fs, path::Path, process::Command};
+use super::{grade, Result};
+use std::{fs, path::Path};
 pub fn prepare(directory: &Path) -> Result<()> {
-    let source = directory.join("bus-probe.rs");
-    let linker = directory.join("bus-probe.ld");
-    fs::write(&source, include_str!("../guests/bus.rs"))?;
-    fs::write(&linker, include_str!("../guests/cpu.ld"))?;
-    checked(
-        Command::new("rustc")
-            .args([
-                "--edition=2021",
-                "--target",
-                "thumbv7em-none-eabihf",
-                "-C",
-                "target-cpu=cortex-m7",
-                "-C",
-                "opt-level=s",
-                "-C",
-                "panic=abort",
-                "-C",
-            ])
-            .arg(format!(
-                "link-arg=-T{}",
-                virtual_daisy::host::tool_path(&linker)?
-            ))
-            .args(["--crate-name", "daisy_bus_probe"])
-            .arg(source)
-            .arg("-o")
-            .arg(directory.join("bus-probe.elf")),
-    )
+    super::guest::prepare(directory, "bus", include_str!("../guests/bus.rs"))
 }
 fn equal(actual: u32, expected: u32, label: &str) -> Result<()> {
     if actual != expected {
@@ -108,6 +82,6 @@ pub fn check(prefix: &Path, valid_dma: bool, tx_address: u32) -> Result<()> {
             "precise LDR/STR fault PC",
         )?;
     }
-    fs::write(report,format!("qspi_disabled_nonmapped_and_fsize_data_busfault=passed\nqspi_disabled_and_fsize_block_entry_instruction_busfault=passed\nprecise_data_pc_bfar_and_ibuserr_no_bfarvalid=passed\ndisabled_busfault_hardfault_escalation=passed\nflash_key_bus_error_and_persistent_lock=passed\ndma_qspi_response={}\ndma_request_boundary=SINGLE_SYNTHETIC_DREQ\nmidblock_instruction_faults=UNSUPPORTED\nstore_buffer_imprecise_faults_and_board_timing=UNVERIFIED\n",if valid_dma {"COMPLETED_AND_IRQ"} else {"TEIF_DISABLE_NDTR_PRESERVED_AND_IRQ"}))?;
+    fs::write(report,format!("qspi_disabled_nonmapped_and_fsize_data_busfault=passed\nqspi_disabled_and_fsize_block_entry_instruction_busfault=passed\nprecise_data_pc_bfar_and_ibuserr_no_bfarvalid=passed\ndisabled_busfault_hardfault_escalation=passed\nflash_key_bus_error_and_persistent_lock=passed\ndma_qspi_response={}\ndma_request_boundary=SINGLE_SYNTHETIC_DREQ\ninstruction_boundary_cases=SEE_FETCH_CAPTURE\nstore_buffer_imprecise_faults_and_board_timing=UNVERIFIED\n",if valid_dma {"COMPLETED_AND_IRQ"} else {"TEIF_DISABLE_NDTR_PRESERVED_AND_IRQ"}))?;
     Ok(())
 }

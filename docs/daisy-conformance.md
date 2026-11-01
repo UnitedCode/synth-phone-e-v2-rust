@@ -299,7 +299,7 @@ the AXI SRAM read target busy while an IRQ stacks into D2 SRAM; the handler must
 still run early and the abandoned load must restart after return.
 The private managed assembly dispatches only its initial budget check through the existing
 virtual getter; both arithmetic field reads remain intact. Each boot attests
-the pinned IL shape, Python guard and native adapter version10.
+the pinned IL shape, Python guard and native adapter version11.
 
 A separate no-std Rust ARM guest checks enabled divide/alignment faults,
 16 MPU regions, denied data and execute-never accesses, and disabled-coprocessor
@@ -330,11 +330,30 @@ persistent FLASH locking after a bad key. Register stores use an MPU
 Strongly-ordered region; posted-store timing remains outside this test.
 The suppressed-data-error control must finish and fail its exception gate.
 
-Instruction errors are delivered only when the first instruction of a translated
-block cannot fetch. A valid or cached prefix followed by a failing line remains
-explicitly unsupported; the bridge refuses to fabricate a block-start fault
-that would skip that prefix. Unknown protocols and stopped-clock behavior still
-fail as unsupported. A cached QSPI read requires no external response.
+QSPI uses one instruction per native translation block, selected by a pure Rust
+translation-policy query. Internal flash/RAM retain their existing block sizes.
+The existing decoder and exception machinery remain authoritative. Valid code
+executes up to a failing demand fetch; both halves of Thumb32 belong to that
+instruction. A separate ARM guest programs actual NOR code, writes a marker
+before the configured window ends, and verifies the subsequent fault PC. A second
+case straddles the window with STR.W: it must report the instruction's starting
+PC without performing the store. A third case executes the cached prefix after
+disabling QSPI, then faults on the uncached line. Corrupting the prefix must fail its marker gate.
+Refill service now uses the aligned line span, matching the data subsequently
+filled into the cache; an interior PC no longer creates a falsely out-of-range
+linear request. Tests also retain cached execution after controller disable.
+Defensive multi-instruction callers and external prefetch-only errors outside
+the demanded instruction remain explicitly unsupported. Burst ordering,
+critical-word-first arrival and pipeline timing are not certified. Unknown
+protocols and stopped-clock behavior still fail as unsupported.
+
+Repeated validation of an unchanged, fully resident instruction block reuses
+its previous comparison. Every instruction fill/eviction, decode, cache
+maintenance, MPU/CCR write and reset invalidates that host-side memo. Physical
+DMA/data writes deliberately do not: cached instructions remain stale until
+maintenance or eviction. Tests cover both stale DMA code and a long validation
+that evicts its own first line. Fetch counters and modeled service are preserved;
+this optimization changes host work, not virtual CPU speed or audio tolerances.
 
 DMA can now read mapped QSPI. A modeled read bus error sets TEIF, clears EN,
 preserves NDTR and raises the enabled transfer-error IRQ. A successful read

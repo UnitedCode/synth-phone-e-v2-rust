@@ -384,12 +384,20 @@ pub unsafe extern "C" fn daisy_memory_write(
 /// # Safety
 /// Live, serialized architecture state. Called before a translated block runs.
 /// Status: 0=ready, 1=retranslate, 2=wait, 3=unsupported, 4=instruction BusFault.
+/// A count of zero is a pure translation-policy query: 5=one instruction, 0=default.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_runtime_fetch(
     state: *mut Peripheral,
     address: u32,
     count: u32,
 ) -> u32 {
+    if count == 0 {
+        return if memory::SystemMemory::is_qspi(address, 2) {
+            5
+        } else {
+            0
+        };
+    }
     let mut memory = (*state).memory.lock().unwrap();
     memory.begin_cpu_block();
     match memory.runtime_fetch(address, count) {
@@ -402,7 +410,8 @@ pub unsafe extern "C" fn daisy_runtime_fetch(
         }
         Ok(true) => 1,
         Err(error)
-            if qspi::mapped_bus_error(error) && memory.instruction_bus_fault_at_start(address) =>
+            if qspi::mapped_bus_error(error)
+                && memory.instruction_bus_fault_at_start(address, count) =>
         {
             4
         }
