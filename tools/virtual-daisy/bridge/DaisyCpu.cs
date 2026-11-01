@@ -23,6 +23,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public override ExecutionResult ExecuteInstructions(ulong numberOfInstructionsToExecute,out ulong numberOfExecutedInstructions) {
             architecture.Synchronize();
             var result=base.ExecuteInstructions(numberOfInstructionsToExecute,out numberOfExecutedInstructions);
+            if(invalidateAfterExecution) {invalidateAfterExecution=false;ClearTranslationCache();}
+            architecture.AfterExecution();
             ulong ns=architecture.TakeCpuDebt();
             if(ns!=0) {
                 busSkipCycles=checked((ulong)decimal.Ceiling(ns*PerformanceInMips/1000m));
@@ -51,6 +53,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public override void OnGPIO(int number,bool value) {if(number==0) Volatile.Write(ref irqLevel,value?1:0);base.OnGPIO(number,value);}
         public bool DisableWaitPreemption {get;set;}
         public void StallMemoryAccess() {tlibRequestTranslationBlockInterrupt(1);RequestReturn();}
+        // Preserve the running block's unwind metadata until a stalled load
+        // has returned to the engine. ISB/branch boundaries then refetch safely.
+        public void InvalidateAfterExecution() {invalidateAfterExecution=true;RequestReturn();}
         public ulong MemoryContext=>tlibDaisyMemoryContext();
         public new bool TryConvertUlongToStateObj(ulong? raw,out IContextState state)
         {
@@ -84,5 +89,6 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private int irqLevel;
         private ulong busSkipCycles,busSkipNanoseconds;
         private bool busWaitInterruptible;
+        private bool invalidateAfterExecution;
     }
 }

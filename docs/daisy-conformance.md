@@ -343,8 +343,68 @@ functional coupling; they do not calibrate CPU headroom.
 | Clock rates and drift | RCC/PLL/SAI rational derivation, 1µs event grid, DWT/core and timer prescalers | PLL/oscillator lock and jitter, clock-domain crossing delays, oscillator tolerance, independent frequency measurements |
 | Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal and passband-delay stage | Full ADC/DAC filters, internal rounding and startup behavior, independent impulse/frequency responses per codec |
 | Analog sound | No analog model | Calibrated gain, impedance, headroom, clipping, noise and distortion measurements |
-| Other peripherals | Partial STM32/Renode coverage | Full register/error/reset semantics, QSPI storage, display, MIDI/USB/ADC tests |
-| Other revisions | Unsupported | Separate sourced profiles and codec conformance suites, then board comparisons |
+| Other peripherals | QSPI NOR programming/erase, mapped M7 data/execution, polling/timeout IRQ; GPIO lock/analog/open-drain cases | Remaining QSPI modes and serial FIFO timing; full display, MIDI/USB/ADC behavior and error/reset suites |
+| Other revisions | Separate Rev4/Rev5/Rev7 boot/audio profiles | Independent captures for each physical revision; Seed2/Seed3 profiles remain unsupported |
+
+## External NOR and QUADSPI
+
+The external chip model follows ISSI's **IS25LP064A**, not the similarly named
+non-A device. The manufacturer's
+[25LP032-64A-B Rev A, 2015-11-06](https://www.mouser.com/datasheet/3/3722/1/25LP032_64A_B.pdf)
+tables6.4–6.10 and sections8.1–8.32 define the modeled command/state behavior.
+The pinned libdaisy-rust flash driver identifies this part and uses the same
+QPI commands. Storage is independent of the STM32 controller: RCC reset clears
+controller registers/FIFO but retains NOR contents, mode and in-flight NVM work.
+Chip reset has its own enable sequence, recovery interval and retained NV state.
+
+The Rust tests cover WREN/WEL/WIP, one-to-zero programming, page wrapping,
+sector/block/chip erase, BP/SRWD/WP# protection, OTP top/bottom selection, SPI/QPI,
+read dummy clocks, deep power-down and suspend/resume. Program/erase changes are
+deferred. The timing scenarios use 0.2/0.8ms page program, 70/300ms sector erase,
+100/500ms 32KiB erase, 150/1000ms 64KiB erase and 16/45s chip erase from the
+typical/maximum table. Status writes use 2/15ms. Function-register writes use
+that same register-write scenario; the datasheet does not independently specify
+their duration. Suspend uses the 100µs read-ready bound with work continuing
+during that latency; this progress distribution is an emulator policy. Reads
+inside the suspended target and reset during programming/erase are rejected
+rather than inventing intermediate cell state. Deep-power entry/release use
+the published 3µs bounds. UID/security contents and SFDP are not fabricated.
+
+[RM0433, QUADSPI chapter](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+defines controller triggers, FIFO, sticky flags/W1C, polling mask/match, IRQ92,
+FSIZE and the 256MiB read-only mapped window. Register setup without an instruction
+does not issue a chip command; writes restricted by BUSY retain their prior value.
+SPI/QPI instruction/address/data lanes and the programmed dummy clocks must match
+the selected read mode. Alternate-byte clocks count inside the chip's dummy
+requirement: production C0=f8/EB needs ten clocks, satisfied by two mode clocks
+plus DCYC=8. Rated array-read limits are checked at Daisy's 3.3V scenario.
+HSI/HSE/PLL/CKPER selection, enable gates and PRESCALER determine polling and
+mapped service rates. Timeout retains unelapsed serial clocks across a gate.
+
+Mapped reads share the NOR bytes, M7 caches and fabric target2, rather than using
+a disconnected RAM mirror. A cold mapped access uses one serial transaction per
+system-bus request. The timeout scenario adds a 32-byte prefetch fill and LPTR
+clocks. Continuous prefetch, nCS edge placement and overlap are not calibrated.
+Indirect transfers use immediate functional FIFO shifting. RM0433 states a
+32-byte FIFO and refill after four vacant bytes, but its FLEVEL<=11 example
+corresponds to a 16-byte FIFO. The model uses the stated 32-byte/four-vacant-byte
+rule and does not claim to resolve that contradictory example from silicon.
+DDR, SIOO, security/UID/SFDP and unused dual/quad-output SPI opcodes remain gaps.
+
+A separate ITCM Thumb guest programs and erases through MMIO, sleeps in WFI
+until actual polling IRQ92 delivery, checks controller-reset persistence, executes
+programmed code from 0x90000000, observes stale I/D caches after reprogramming,
+then checks fresh results after maintenance. It also waits for the mapped-timeout
+interrupt, including an earlier deadline after the kernel clock accelerates.
+Masked-NVIC, corrupt-data and stale-scheduled-timer controls must fail specific Rust result
+gates after a successful process exit. ARM-written buffers and their grades are
+preserved as `*.storage*.bin` and `*.storage*.txt`. The full suite and `probe`
+include these checks; `storage` runs them alone.
+
+The conformance v7 report records the requested run scope and hashes the native
+model, platform, core manifest, managed host and Python-disabled managed engine.
+Its required full-suite list does not claim those checks ran in a focused mode;
+the mode's success summary states the actual scope.
 
 Reference data must identify physical revision, codec marking, firmware ELF hash,
 settings, clock configuration, input/calibration and measurement method. Digital

@@ -8,7 +8,8 @@ mod dma;
 mod flash;
 mod gpio;
 pub mod memory;
-mod qspi;
+pub mod nor;
+pub mod qspi;
 mod sai;
 #[cfg(test)]
 mod tests;
@@ -18,7 +19,7 @@ pub struct Peripheral {
     registers: BTreeMap<u64, u32>,
     dma: dma::Dma,
     sai: sai::Sai,
-    qspi: qspi::Qspi,
+    qspi: std::sync::Arc<std::sync::Mutex<qspi::Qspi>>,
     gpio: gpio::Gpio,
     codec_reset_high: bool,
     memory: std::sync::Mutex<memory::SystemMemory>,
@@ -97,7 +98,7 @@ impl Peripheral {
             registers: BTreeMap::new(),
             dma: dma::Dma::default(),
             sai: sai::Sai::default(),
-            qspi: qspi::Qspi::default(),
+            qspi: std::sync::Arc::new(std::sync::Mutex::new(qspi::Qspi::default())),
             gpio: gpio::Gpio::default(),
             codec_reset_high: false,
             memory: std::sync::Mutex::new(memory::SystemMemory::default()),
@@ -117,7 +118,7 @@ impl Peripheral {
         self.axi = bus::Axi::default();
         self.registers.clear();
         self.dma = dma::Dma::default();
-        self.qspi = qspi::Qspi::default();
+        self.qspi.lock().unwrap().reset_controller();
         if self.kind >= 100 {
             self.gpio.reset(self.kind - 100);
         }
@@ -211,7 +212,7 @@ impl Peripheral {
             }
             6 => self.dma.read(offset),
             7 => self.sai.read(offset),
-            8 => self.qspi.read(offset, 4),
+            8 => self.qspi.lock().unwrap().read(offset, 4),
             9 if offset == 0x100 => Ok(if self.codec_reset_high { 3 } else { 0 }),
             10 if offset == 0x100 => Ok(3), // Rev7 hardware mode, fixed LJ24, no I2C.
             12 => self.memory.lock().unwrap().read_scb(offset),
@@ -268,7 +269,7 @@ impl Peripheral {
             return self.sai.write(offset, value);
         }
         if self.kind == 8 {
-            return self.qspi.write(offset, value, 4);
+            return self.qspi.lock().unwrap().write(offset, value, 4);
         }
         if self.kind == 13 {
             self.clock.write(offset, value);
@@ -607,7 +608,10 @@ pub unsafe extern "C" fn daisy_bus_load(
 
 #[no_mangle]
 pub extern "C" fn daisy_memory_is_ram(address: u32, width: u32) -> u32 {
-    u32::from(memory::SystemMemory::is_ram(address, width as usize))
+    u32::from(
+        memory::SystemMemory::is_ram(address, width as usize)
+            || memory::SystemMemory::is_qspi(address, width as usize),
+    )
 }
 
 /// # Safety
@@ -982,7 +986,7 @@ pub unsafe extern "C" fn daisy_sai_save(
 /// # Safety
 /// `state` must be live and exclusively accessed for this call.
 pub unsafe extern "C" fn daisy_read_width(state: *mut Peripheral, offset: u64, width: u32) -> u64 {
-    match (*state).qspi.read(offset, width as usize) {
+    match (*state).qspi.lock().unwrap().read(offset, width as usize) {
         Ok(value) => value as u64,
         Err(_) => 1_u64 << 32,
     }
@@ -996,7 +1000,91 @@ pub unsafe extern "C" fn daisy_write_width(
     value: u32,
     width: u32,
 ) -> u32 {
-    u32::from((*state).qspi.write(offset, value, width as usize).is_err())
+    u32::from(
+        (*state)
+            .qspi
+            .lock()
+            .unwrap()
+            .write(offset, value, width as usize)
+            .is_err(),
+    )
+}
+
+/// # Safety
+/// Distinct live QSPI/RCC states. The caller serializes RCC register updates.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_qspi_sync(
+    state: *mut Peripheral,
+    clock: *mut Peripheral,
+    now: u64,
+) -> u32 {
+    let result = (|| {
+        let mut qspi = (*state).qspi.lock().unwrap();
+        qspi.advance_time(now)?;
+        let rate = if (*clock).clock.read(0xd4) & (1 << 14) != 0 {
+            (*clock).clock.qspi_rate()?
+        } else {
+            None
+        };
+        qspi.configure_clock(rate)
+    })();
+    if let Err(error) = result {
+        eprintln!("QSPI synchronization error: {error}");
+        return 1;
+    }
+    0
+}
+/// # Safety
+/// Live QSPI state. No event is represented by u64::MAX.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_qspi_next_event(state: *mut Peripheral) -> u64 {
+    (*state)
+        .qspi
+        .lock()
+        .unwrap()
+        .next_event()
+        .unwrap_or(u64::MAX)
+}
+/// # Safety
+/// Live QSPI state.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_qspi_irq(state: *mut Peripheral) -> u32 {
+    u32::from((*state).qspi.lock().unwrap().irq())
+}
+/// # Safety
+/// Live serialized architecture/controller states; architecture retains an Arc.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_qspi_attach(architecture: *mut Peripheral, state: *mut Peripheral) {
+    (*architecture)
+        .memory
+        .lock()
+        .unwrap()
+        .attach_qspi(std::sync::Arc::clone(&(*state).qspi));
+}
+/// # Safety
+/// Live QSPI state; called after a native CPU block or managed DMA read returns.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_qspi_schedule_changed(state: *mut Peripheral) -> u32 {
+    u32::from((*state).qspi.lock().unwrap().take_schedule_changed())
+}
+/// # Safety
+/// Live serialized QSPI state; lets the managed adapter skip idle timer checks.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_qspi_watches_memory(state: *mut Peripheral) -> u32 {
+    u32::from((*state).qspi.lock().unwrap().watches_memory())
+}
+/// # Safety
+/// Live QSPI state. Set before starting nonvolatile operations.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_qspi_maximum(state: *mut Peripheral, maximum: u32) -> u32 {
+    u32::from(
+        (*state)
+            .qspi
+            .lock()
+            .unwrap()
+            .set_maximum(maximum != 0)
+            .is_err(),
+    )
 }
 #[no_mangle]
 /// # Safety

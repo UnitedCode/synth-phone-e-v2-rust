@@ -58,6 +58,8 @@ fn gpio_pullups_external_straps_and_bsrr_survive_correctly() {
     port.gpio.drive(3, false);
     port.gpio.drive(4, true);
     port.reset();
+    assert_eq!(port.read(0x10).unwrap() & 0x18, 0); // Analog disconnects digital input.
+    port.write(0, 0).unwrap();
     assert_eq!(port.read(0x10).unwrap() & 0x18, 0x10);
     port.write(0, 0).unwrap(); // Inputs, including keypad rows.
     port.write(0xc, 0x55).unwrap(); // Pull up pins 0..3.
@@ -134,25 +136,24 @@ fn qspi_jedec_qpi_lanes_write_enable_and_status_fifo() {
     assert!(qspi.write(0x14, 0x19f, 4).is_err()); // Controller disabled.
     qspi.write(0, 1, 4).unwrap();
     qspi.write(0x10, 2, 4).unwrap();
-    qspi.write(0x14, 0x19f, 4).unwrap();
+    qspi.write(0x14, 0x0500019f, 4).unwrap();
     assert_eq!(qspi.read(0x20, 1), Ok(0x9d));
     assert_eq!(qspi.read(0x20, 2), Ok(0x1760));
     assert!(qspi.read(0x20, 1).is_err());
-    assert!(qspi.write(0x14, 0x135, 4).is_err());
-    qspi.write(0x14, 0x106, 4).unwrap();
-    qspi.write(0x14, 0x135, 4).unwrap();
+    qspi.write(0x14, 0x135, 4).unwrap(); // QPI entry does not require WREN.
     assert!(qspi.write(0x14, 0x105, 4).is_err()); // QPI needs four lanes.
     qspi.write(0x10, 0, 4).unwrap();
     qspi.write(0x14, 0x306, 4).unwrap();
-    qspi.write(0x14, 0x301, 4).unwrap();
-    assert_ne!(qspi.read(8, 4).unwrap() & 32, 0);
+    qspi.write(0x14, 0x03000301, 4).unwrap();
+    assert_eq!(qspi.read(8, 4).unwrap() & 32, 0); // Starts on data, not CCR.
     qspi.write(0x20, 2, 1).unwrap();
     assert_eq!(qspi.read(8, 4).unwrap() & 34, 2);
     qspi.write(0xc, 2, 4).unwrap();
     assert_eq!(qspi.read(8, 4).unwrap() & 2, 0);
-    qspi.write(0x14, 0x305, 4).unwrap();
+    qspi.advance_time(2_000_000).unwrap();
+    qspi.write(0x14, 0x07000305, 4).unwrap();
     assert_eq!(qspi.read(0x20, 1), Ok(0));
-    assert!(qspi.write(0x14, 0x302, 4).is_err()); // Flash programming unsupported.
+    assert!(qspi.write(0x14, 0x302, 4).is_err()); // Program is missing address/data phases.
 }
 
 #[test]

@@ -52,8 +52,16 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             return ReadMode(address,width,cpu ? 1U:0U);
         }
-        public uint ReadMode(uint address,uint width,uint mode) { if(mode==1) {ulong data=0;CpuTransfer(address,width,false,ref data);return (uint)data;} lock(sync) { if(mode==2) codePages.Add(address>>12); ulong value=read(native.State,address,width,mode); if(value>>32!=0) throw new InvalidOperationException($"Unsupported RAM access: 0x{address:X}"); return (uint)value; } }
+        public uint ReadMode(uint address,uint width,uint mode) {
+            if(mode==1) {ulong data=0;CpuTransfer(address,width,false,ref data);return (uint)data;}
+            uint result;
+            lock(sync) { if(mode==2) codePages.Add(address>>12); ulong value=read(native.State,address,width,mode); if(value>>32!=0) throw new InvalidOperationException($"Unsupported memory access: 0x{address:X}"); result=(uint)value; }
+            if(mode==0) AfterExecution(); // DMA mapped reads may arm a timeout.
+            return result;
+        }
         public void AttachCPU(DaisyCortexM cpu) { this.cpu=cpu; }
+        public void AttachQspi(DaisyQspi qspi) {this.qspi=qspi;}
+        public void AfterExecution() {qspi?.AfterMemoryAccess();}
         public IntPtr NativeState => native.State;
         public IntPtr RuntimeFetchPointer { get; }
         public IntPtr BarrierPointer {get;}
@@ -111,6 +119,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly SaveNative save;
         private readonly HashSet<uint> codePages=new HashSet<uint>();
         private DaisyCortexM cpu;
+        private DaisyQspi qspi;
         private readonly IMachine machine;
         private readonly SyncNative synchronize;
         private readonly AccessNative access;
@@ -188,13 +197,18 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         }
         public new void WriteDoubleWord(long offset, uint value)
         {
-            if(offset == 0xd14) { architecture.WriteScb(offset, value); base.WriteDoubleWord(offset, value & ~(3U << 16)); ((DaisyCortexM)machine["sysbus.cpu"]).ClearTranslationCache(); return; }
-            if(offset == 0xd84 || (offset >= 0xf50 && offset <= 0xf74)) { architecture.WriteScb(offset, value); if(offset!=0xd84) ((DaisyCortexM)machine["sysbus.cpu"]).ClearTranslationCache(); return; }
+            if(offset == 0xd14) { architecture.WriteScb(offset, value); base.WriteDoubleWord(offset, value & ~(3U << 16)); Invalidate(); return; }
+            if(offset == 0xd84 || (offset >= 0xf50 && offset <= 0xf74)) { architecture.WriteScb(offset, value); if(offset!=0xd84) Invalidate(); return; }
             if(offset >= 0xd94 && offset <= 0xdb8) architecture.WriteScb(offset, value);
             base.WriteDoubleWord(offset, value);
             if(offset==0xdfc) ((DaisyRcc)machine["sysbus.rcc"]).TraceEnable((value&(1U<<24))!=0);
         }
         public new void Reset() { base.Reset(); architecture.Reset(); }
+        private void Invalidate() {
+            var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+            if(machine.SystemBus.TryGetCurrentCPU(out var _)) cpu.InvalidateAfterExecution();
+            else cpu.ClearTranslationCache();
+        }
         public void SaveMemory(string path) { architecture.Save(path); }
         public DaisyArchitecture Architecture => architecture;
         private readonly DaisyArchitecture architecture;

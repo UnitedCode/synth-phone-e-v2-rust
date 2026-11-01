@@ -47,6 +47,7 @@ struct Writeback {
 }
 
 pub struct SystemMemory {
+    qspi: Option<Arc<std::sync::Mutex<crate::qspi::Qspi>>>,
     flash: crate::flash::Flash,
     now_ns: u64,
     flash_written: std::collections::BTreeSet<u32>,
@@ -107,6 +108,7 @@ pub struct SystemMemory {
 impl Default for SystemMemory {
     fn default() -> Self {
         Self {
+            qspi: None,
             flash: crate::flash::Flash::default(),
             now_ns: 0,
             flash_written: std::collections::BTreeSet::new(),
@@ -167,6 +169,9 @@ impl Default for SystemMemory {
     }
 }
 impl SystemMemory {
+    pub fn attach_qspi(&mut self, qspi: Arc<std::sync::Mutex<crate::qspi::Qspi>>) {
+        self.qspi = Some(qspi);
+    }
     pub fn reset_registers(&mut self) {
         self.flash.reset();
         self.fabric = crate::bus::Fabric::default();
@@ -229,9 +234,14 @@ impl SystemMemory {
         .iter()
         .any(|&(base, size)| address >= base && end <= u64::from(base) + u64::from(size))
     }
+    pub fn is_qspi(address: u32, width: usize) -> bool {
+        address >= 0x90000000 && u64::from(address) + width as u64 <= 0xa0000000
+    }
     fn check(address: u32, width: usize) -> Result<()> {
         if ![1, 2, 4].contains(&width)
-            || !(Self::is_ram(address, width) || Self::is_flash(address, width))
+            || !(Self::is_ram(address, width)
+                || Self::is_flash(address, width)
+                || Self::is_qspi(address, width))
         {
             return Err("access outside H750/Daisy memory");
         }
@@ -324,6 +334,21 @@ impl SystemMemory {
             0x38000000..=0x3800ffff => (11, hclk, (bytes as u64).div_ceil(4)),
             0x38800000..=0x38800fff => (12, hclk, (bytes as u64).div_ceil(4)),
             0x40015820 | 0x40015840 => (13, self.pclk.ok_or("SAI bus clock stopped")?, 2),
+            0x90000000..=0x9fffffff => {
+                if write {
+                    return Err("QSPI mapped aperture is read-only");
+                }
+                let qspi = self
+                    .qspi
+                    .as_ref()
+                    .ok_or("QSPI controller not attached")?
+                    .lock()
+                    .unwrap();
+                return Ok(Some((
+                    2,
+                    qspi.mapped_service_ns(address - 0x90000000, bytes)?,
+                )));
+            }
             0xc0000000..=0xc3ffffff => {
                 let timing = self
                     .sdram
@@ -377,7 +402,9 @@ impl SystemMemory {
         value: &mut u64,
     ) -> Result<u64> {
         if ![1, 2, 4, 8].contains(&width)
-            || !(Self::is_ram(address, width) || Self::is_flash(address, width))
+            || !(Self::is_ram(address, width)
+                || Self::is_flash(address, width)
+                || Self::is_qspi(address, width))
         {
             return Err("invalid CPU transaction");
         }
@@ -619,17 +646,18 @@ impl SystemMemory {
         self.vector_reads += 1;
         self.vector_cache_hits += u64::from(self.vector_cached(address));
         let index = if self.vector_policy(address) != Policy::Noncacheable {
-            Some(self.instruction_index(address & !31))
+            Some(self.instruction_index(address & !31)?)
         } else {
             None
         };
-        Ok((0..4).fold(0, |value, byte| {
-            value
-                | (u32::from(index.map_or_else(
-                    || self.physical_byte(address + byte),
-                    |i| self.instructions[i].data[((address + byte) & 31) as usize],
-                )) << (byte * 8))
-        }))
+        let data = if let Some(index) = index {
+            (0..4)
+                .map(|byte| self.instructions[index].data[((address + byte) & 31) as usize])
+                .collect()
+        } else {
+            self.backing_read(address, 4, false)?
+        };
+        Ok(u32::from_le_bytes(data.try_into().unwrap()))
     }
     /// Suspend before handler execution; frame stores and vector fetch can
     /// progress on separate ports. Entry never drains unrelated writebacks.
@@ -863,6 +891,33 @@ impl SystemMemory {
                 page[(address & 4095) as usize]
             })
     }
+    fn backing_read(&self, address: u32, bytes: usize, peek: bool) -> Result<Vec<u8>> {
+        if Self::is_qspi(address, bytes) {
+            let mut qspi = self
+                .qspi
+                .as_ref()
+                .ok_or("QSPI controller not attached")?
+                .lock()
+                .unwrap();
+            if peek {
+                Ok(qspi.peek_mapped(address - 0x90000000, bytes))
+            } else {
+                qspi.synchronize_chip(self.now_ns)?;
+                qspi.read_mapped(address - 0x90000000, bytes)
+            }
+        } else {
+            Ok((0..bytes)
+                .map(|i| self.physical_byte(address + i as u32))
+                .collect())
+        }
+    }
+    fn backing_byte(&self, address: u32, peek: bool) -> Result<u8> {
+        if Self::is_qspi(address, 1) {
+            Ok(self.backing_read(address, 1, peek)?[0])
+        } else {
+            Ok(self.physical_byte(address))
+        }
+    }
     fn store_byte(&mut self, address: u32, value: u8) {
         self.pages.entry(address >> 12).or_insert_with(|| {
             Box::new([if Self::is_flash(address, 1) { 0xff } else { 0 }; 4096])
@@ -940,10 +995,7 @@ impl SystemMemory {
             .unwrap_or(set * WAYS + self.next_way[set]);
         self.next_way[set] = (index % WAYS + 1) % WAYS;
         self.clean(index)?;
-        let mut data = [0; 32];
-        for (offset, byte) in data.iter_mut().enumerate() {
-            *byte = self.physical_byte(base + offset as u32);
-        }
+        let data = self.backing_read(base, 32, false)?.try_into().unwrap();
         self.cache[index] = CacheLine {
             valid: true,
             dirty: false,
@@ -1030,7 +1082,7 @@ impl SystemMemory {
                 let line = self.allocate(addr)?;
                 self.cache[line].data[(addr & 31) as usize]
             } else {
-                self.physical_byte(addr)
+                self.backing_byte(addr, false)?
             };
             value |= u32::from(b) << (byte * 8);
         }
@@ -1052,10 +1104,11 @@ impl SystemMemory {
             } else {
                 None
             };
-            let b = cached.map_or_else(
-                || self.physical_byte(addr),
-                |i| self.instructions[i].data[(addr & 31) as usize],
-            );
+            let b = if let Some(i) = cached {
+                self.instructions[i].data[(addr & 31) as usize]
+            } else {
+                self.backing_byte(addr, true)?
+            };
             value |= u32::from(b) << (byte * 8);
             self.decoded.insert(addr, b);
         }
@@ -1065,7 +1118,7 @@ impl SystemMemory {
     /// true when its decoded bytes differ, requiring a safe translation restart.
     /// This is block-granular functional fetching, not pipeline/speculation timing.
     pub fn runtime_fetch(&mut self, address: u32, bytes: u32) -> Result<bool> {
-        if !Self::is_ram(address, 2) && !Self::is_flash(address, 2) {
+        if !Self::is_ram(address, 2) && !Self::is_flash(address, 2) && !Self::is_qspi(address, 2) {
             return Ok(false);
         }
         let key = (address, bytes);
@@ -1139,13 +1192,21 @@ impl SystemMemory {
             }
             self.instruction_reads += 1;
             let matches = if line.cacheable {
-                let index = self.instruction_index(line.address);
+                let index = self.instruction_index(line.address)?;
                 self.instructions[index].data[line.start..line.end]
                     == line.expected[line.start..line.end]
             } else {
-                (line.start..line.end).all(|offset| {
-                    self.physical_byte(line.address + offset as u32) == line.expected[offset]
-                })
+                if Self::is_qspi(line.address, 32) {
+                    self.backing_read(
+                        line.address + line.start as u32,
+                        line.end - line.start,
+                        false,
+                    )? == line.expected[line.start..line.end]
+                } else {
+                    (line.start..line.end).all(|offset| {
+                        self.physical_byte(line.address + offset as u32) == line.expected[offset]
+                    })
+                }
             };
             if !matches {
                 self.runtime_progress = None;
@@ -1156,17 +1217,17 @@ impl SystemMemory {
         self.runtime_progress = None;
         Ok(false)
     }
-    fn instruction_index(&mut self, base: u32) -> usize {
+    fn instruction_index(&mut self, base: u32) -> Result<usize> {
         let set = ((base / 32) % 256) as usize;
         if let Some(index) = (set * 2..set * 2 + 2)
             .find(|&i| self.instructions[i].valid && self.instructions[i].address == base)
         {
-            return index;
+            return Ok(index);
         }
         let index = (set * 2..set * 2 + 2)
             .find(|&i| !self.instructions[i].valid)
             .unwrap_or(set * 2 + self.instruction_way[set]);
-        let data = std::array::from_fn(|offset| self.physical_byte(base + offset as u32));
+        let data = self.backing_read(base, 32, false)?.try_into().unwrap();
         self.instructions[index] = CacheLine {
             valid: true,
             dirty: false,
@@ -1175,7 +1236,7 @@ impl SystemMemory {
         };
         self.instruction_way[set] = (index % 2 + 1) % 2;
         self.instruction_fills += 1;
-        index
+        Ok(index)
     }
     pub fn read_instruction(&mut self, address: u32, width: usize) -> Result<u32> {
         Self::check(address, width)?;
@@ -1184,10 +1245,10 @@ impl SystemMemory {
         for byte in 0..width {
             let addr = address + byte as u32;
             let b = if self.access_policy(addr, true)? != Policy::Noncacheable {
-                let index = self.instruction_index(addr & !31);
+                let index = self.instruction_index(addr & !31)?;
                 self.instructions[index].data[(addr & 31) as usize]
             } else {
-                self.physical_byte(addr)
+                self.backing_byte(addr, false)?
             };
             value |= u32::from(b) << (byte * 8);
         }
@@ -1195,6 +1256,9 @@ impl SystemMemory {
     }
     pub fn write_cpu(&mut self, address: u32, width: usize, value: u32) -> Result<()> {
         Self::check(address, width)?;
+        if Self::is_qspi(address, width) {
+            return Err("QSPI mapped aperture is read-only");
+        }
         if !Self::is_ram(address, width) {
             return self.program_flash(address, width, u64::from(value), 0);
         }
@@ -1227,12 +1291,24 @@ impl SystemMemory {
         {
             self.dma_cacheable_bytes += width as u64;
         }
-        Ok((0..width).fold(0, |value, byte| {
-            value | (u32::from(self.physical_byte(address + byte as u32)) << (byte * 8))
-        }))
+        if !Self::is_qspi(address, width) {
+            return Ok((0..width).fold(0, |value, byte| {
+                value | (u32::from(self.physical_byte(address + byte as u32)) << (byte * 8))
+            }));
+        }
+        Ok(self
+            .backing_read(address, width, false)?
+            .iter()
+            .enumerate()
+            .fold(0, |value, (byte, &data)| {
+                value | (u32::from(data) << (byte * 8))
+            }))
     }
     pub fn write_dma(&mut self, address: u32, width: usize, value: u32) -> Result<()> {
         Self::check(address, width)?;
+        if Self::is_qspi(address, width) {
+            return Err("QSPI mapped aperture is read-only");
+        }
         if !Self::is_ram(address, width) {
             return self.program_flash(address, width, u64::from(value), 1);
         }

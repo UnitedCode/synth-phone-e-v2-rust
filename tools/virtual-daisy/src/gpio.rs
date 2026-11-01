@@ -5,6 +5,10 @@ pub struct Gpio {
     external_mask: u16,
     external_levels: u16,
     alternate: [u16; 16],
+    lock_phase: u8,
+    lock_candidate: u16,
+    locked: u16,
+    lock_active: bool,
 }
 impl Gpio {
     pub fn release(&mut self, pin: u32) {
@@ -15,6 +19,10 @@ impl Gpio {
     }
     pub fn reset(&mut self, port: u32) {
         self.registers = [0; 10];
+        self.lock_phase = 0;
+        self.lock_candidate = 0;
+        self.locked = 0;
+        self.lock_active = false;
         self.registers[0] = if port == 0 {
             0xabff_ffff
         } else if port == 1 {
@@ -34,11 +42,18 @@ impl Gpio {
         let mut value = 0;
         for pin in 0..16 {
             let mode = (self.registers[0] >> (pin * 2)) & 3;
-            let high = if mode == 1 {
-                self.registers[5] & (1 << pin) != 0
+            let output = if mode == 1 {
+                Some(self.registers[5] & (1 << pin) != 0)
             } else if mode == 2 {
                 let af = (self.registers[8 + pin / 8] >> ((pin % 8) * 4)) & 15;
-                self.alternate[af as usize] & (1 << pin) != 0
+                Some(self.alternate[af as usize] & (1 << pin) != 0)
+            } else {
+                None
+            };
+            let high = if mode == 3 || output == Some(false) {
+                false
+            } else if output == Some(true) && self.registers[1] & (1 << pin) == 0 {
+                true
             } else if self.external_mask & (1 << pin) != 0 {
                 self.external_levels & (1 << pin) != 0
             } else {
@@ -69,25 +84,72 @@ impl Gpio {
             }
         }
     }
-    pub fn read(&self, offset: u64) -> Result<u32, &'static str> {
+    pub fn read(&mut self, offset: u64) -> Result<u32, &'static str> {
         if !offset.is_multiple_of(4) || offset > 0x24 {
             return Err("unsupported GPIO register");
         }
         Ok(match offset {
             0x10 => self.input(),
             0x18 => 0,
+            0x1c => {
+                if self.lock_phase == 3 {
+                    self.locked = self.lock_candidate;
+                    self.lock_active = true;
+                }
+                self.lock_phase = 0;
+                u32::from(self.lock_candidate) | (u32::from(self.lock_active) << 16)
+            }
             _ => self.registers[offset as usize / 4],
         })
     }
     pub fn write(&mut self, offset: u64, value: u32) -> Result<(), &'static str> {
-        self.read(offset)?;
+        if !offset.is_multiple_of(4) || offset > 0x24 {
+            return Err("unsupported GPIO register");
+        }
         match offset {
             0x10 => return Err("GPIO input is read-only"),
             0x18 => {
-                self.registers[5] = (self.registers[5] | (value & 0xffff)) & !(value >> 16);
+                self.registers[5] = (self.registers[5] & !(value >> 16)) | (value & 0xffff);
             }
-            0x1c if value != 0 => return Err("GPIO configuration lock is not implemented"),
-            _ => self.registers[offset as usize / 4] = value,
+            0x1c => {
+                if self.lock_active {
+                    return Ok(());
+                }
+                let mask = value as u16;
+                let key = value & (1 << 16) != 0;
+                self.lock_phase = match self.lock_phase {
+                    0 if key => {
+                        self.lock_candidate = mask;
+                        1
+                    }
+                    1 if !key && mask == self.lock_candidate => 2,
+                    2 if key && mask == self.lock_candidate => 3,
+                    _ => 0,
+                };
+                if self.lock_phase == 0 {
+                    self.lock_candidate = mask;
+                }
+            }
+            0x14 => self.registers[5] = value & 0xffff,
+            _ => {
+                let index = offset as usize / 4;
+                let mut locked_bits = 0;
+                let (first, width) = if index >= 8 {
+                    ((index - 8) * 8, 4)
+                } else if index == 1 {
+                    (0, 1)
+                } else {
+                    (0, 2)
+                };
+                for pin in first..(first + 32 / width).min(16) {
+                    if self.locked & (1 << pin) != 0 {
+                        locked_bits |= ((1 << width) - 1) << ((pin - first) * width);
+                    }
+                }
+                let value = if index == 1 { value & 0xffff } else { value };
+                self.registers[index] =
+                    (self.registers[index] & locked_bits) | (value & !locked_bits);
+            }
         }
         Ok(())
     }
