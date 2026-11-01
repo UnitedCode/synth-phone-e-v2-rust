@@ -96,9 +96,9 @@ pub fn prepare(
     platform.replace_range(start..end, &native);
     platform = platform.replace(
         "fmc: Miscellaneous.DaisyNative @ sysbus 0x52004000",
-        "fmc: Miscellaneous.DaisyFmc @ sysbus 0x52004000",
+        "fmc: Miscellaneous.DaisyFmc @ {\n    sysbus 0x52004000;\n    rcc RegistrationPeripheralAlias.FMC\n}",
     );
-    platform = platform.replace("    kind: 1\n    size: 0x1000", "    rcc: rcc");
+    platform = platform.replace("    kind: 1\n    size: 0x1000", "    rcc: rcc\n    architecture: architecture\n    -> nvic@48");
     platform = platform.replace("GPIOPort.STM32_GPIOPort", "Miscellaneous.DaisyGpio");
     for (port, letter) in ('A'..='K').enumerate() {
         let marker = format!("rcc RegistrationPeripheralAlias.GPIO{letter}\n    }}");

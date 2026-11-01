@@ -4,6 +4,7 @@ pub mod board;
 pub mod bus;
 pub mod clock;
 mod codec;
+pub use codec::SampleClocks;
 mod dma;
 mod flash;
 mod gpio;
@@ -28,12 +29,53 @@ pub struct Peripheral {
     line_stage: codec::LineStage,
     passband_delay: codec::PassbandDelay,
     axi: bus::Axi,
+    fmc_commands: std::collections::VecDeque<u32>,
 }
 
 impl Peripheral {
+    pub fn codec_clocks(&self, mclk: clock::Rate) -> Result<SampleClocks, &'static str> {
+        if self.kind != 4 { return Err("software sample clocks only apply to WM8731"); }
+        codec::Sampling::decode(self.registers.get(&8).copied().unwrap_or(0))?.clocks(mclk)
+    }
+    pub fn validate_codec_clocks(&mut self, mclk: clock::Rate, frame: clock::Rate) -> Result<(), &'static str> {
+        if self.kind==9 && !self.codec_reset_high {return Ok(());}
+        if self.kind==9 || self.kind==10 {
+            if mclk.numerator==0 || mclk.denominator==0 || frame.numerator==0 || frame.denominator==0 {
+                return Err("hardware codec requires a valid MCLK and LRC");
+            }
+            // Necessary clock ratios from AK4556 Table3 and PCM3060's ADC
+            // system-clock requirements. AK pin-selected speed/range behavior
+            // is not inferred from the union of its documented slave modes.
+            let ratios:&[u64]=if self.kind==9 {&[128,192,256,384,512,768]} else {&[256,384,512,768]};
+            if !ratios.iter().any(|&ratio|u128::from(mclk.numerator)*u128::from(frame.denominator)
+                ==u128::from(frame.numerator)*u128::from(mclk.denominator)*u128::from(ratio)) {
+                return Err("hardware codec ADC/DAC system-clock ratio is unsupported");
+            }
+            return Ok(());
+        }
+        if self.kind != 4 {return Err("not a Seed codec");}
+        if self.registers.get(&9).copied().unwrap_or(0) & 1 == 0 {
+            return Ok(());
+        }
+        self.read(0x100)?;
+        let power = self.registers.get(&6).copied().unwrap_or(0);
+        if power & 0x80 != 0 { return Ok(()); }
+        let clocks = self.codec_clocks(mclk)?;
+        let same = |rate: clock::Rate| u128::from(rate.numerator)*u128::from(frame.denominator)
+            == u128::from(frame.numerator)*u128::from(rate.denominator);
+        if frame.numerator == 0 || frame.denominator == 0
+            || (power & 4 == 0 && !same(clocks.adc))
+            || (power & 8 == 0 && !same(clocks.dac)) {
+            return Err("WM8731 ADC/DAC sample rate does not match the shared SAI LRC");
+        }
+        Ok(())
+    }
     pub fn codec_report(&self, ideal_line: bool, rate: f64) -> Result<String, &'static str> {
         let (name, adc, dac) = match self.kind {
-            4 => ("WM8731", 20.0, 18.0),
+            4 => {
+                let (adc,dac) = codec::Sampling::decode(self.registers.get(&8).copied().unwrap_or(0))?.delays();
+                ("WM8731", adc as f64, dac as f64)
+            },
             9 => ("AK4556", 18.0, 21.0),
             10 => ("PCM3060", 17.4, 20.0),
             _ => return Err("not a Seed codec"),
@@ -42,14 +84,16 @@ impl Peripheral {
     }
     pub fn nominal_adc_passband(&mut self, sample: [f32; 2]) -> Result<[f32; 2], &'static str> {
         let sample = self.ideal_line_input(sample)?;
-        Ok(self.passband_delay.adc(sample))
+        let (delay,_) = codec::Sampling::decode(self.registers.get(&8).copied().unwrap_or(0))?.delays();
+        Ok(self.passband_delay.adc(sample, delay))
     }
     pub fn nominal_dac_passband(&mut self, sample: [f32; 2]) -> Result<[f32; 2], &'static str> {
         if self.kind != 4 {
             return Err("nominal passband delay only modeled for WM8731");
         }
         self.read(0x100)?;
-        Ok(self.passband_delay.dac(sample))
+        let (_,delay) = codec::Sampling::decode(self.registers.get(&8).copied().unwrap_or(0))?.delays();
+        Ok(self.passband_delay.dac(sample, delay))
     }
     /// Idealized normalized line input before ADC gain/DC removal. Serial PCM
     /// injection remains a separate boundary and never runs this stage twice.
@@ -107,6 +151,7 @@ impl Peripheral {
             line_stage: codec::LineStage::default(),
             passband_delay: codec::PassbandDelay::default(),
             axi: bus::Axi::default(),
+            fmc_commands: std::collections::VecDeque::new(),
         };
         result.reset();
         result
@@ -117,6 +162,7 @@ impl Peripheral {
         self.line_stage = codec::LineStage::default();
         self.passband_delay = codec::PassbandDelay::default();
         self.axi = bus::Axi::default();
+        self.fmc_commands.clear();
         self.registers.clear();
         self.dma = dma::Dma::default();
         self.qspi.lock().unwrap().reset_controller();
@@ -133,6 +179,9 @@ impl Peripheral {
         if self.kind == 0 {
             self.registers
                 .extend([(0, 0xF000_C000), (0x0c, 2), (0x18, 0xc000)]);
+        }
+        if self.kind == 1 {
+            self.registers.extend([(0x140,0x2d0),(0x144,0x2d0),(0x148,0x0fffffff),(0x14c,0x0fffffff)]);
         }
         if self.kind == 4 {
             self.registers.extend(
@@ -193,9 +242,7 @@ impl Peripheral {
                 if reg(7) & !(1 << 5) != 9 {
                     return Err("unsupported active WM8731 digital format");
                 }
-                if reg(8) != 0 {
-                    return Err("unsupported WM8731 sample clock ratio");
-                }
+                codec::Sampling::decode(reg(8))?;
                 if reg(5) & 6 != 0 {
                     return Err("WM8731 de-emphasis filter is not implemented");
                 }
@@ -289,6 +336,14 @@ impl Peripheral {
         if self.kind == 1 && offset == 0x150 && value & 7 > 6 {
             return Err("invalid SDRAM command");
         }
+        if self.kind == 1 && offset == 0x150 {
+            self.fmc_commands.push_back(value);
+        }
+        if self.kind == 1 && offset == 0x154 {
+            if value & 1 != 0 { self.registers.insert(0x10000, 1); }
+            self.registers.insert(offset, value & !1);
+            return Ok(());
+        }
         if self.kind == 3 && offset == 0x108 {
             if value & (1 << 31) != 0 && (value & (1 << 28) == 0 || value & ((1 << 29) | 1) != 0) {
                 return Err("invalid ADC calibration state");
@@ -344,7 +399,7 @@ pub unsafe extern "C" fn daisy_memory_read(
     };
     match result {
         Ok(value) => u64::from(value),
-        Err(error) if cpu == 0 && qspi::mapped_bus_error(error) => 2_u64 << 32,
+        Err(error) if cpu == 0 && (qspi::mapped_bus_error(error) || bus::sdram_bus_error(error)) => 2_u64 << 32,
         Err(_) => 1_u64 << 32,
     }
 }
@@ -359,8 +414,7 @@ pub unsafe extern "C" fn daisy_memory_write(
     value: u32,
     cpu: u32,
 ) -> u32 {
-    u32::from(
-        if cpu == 2 {
+    let result=if cpu == 2 {
             (*state)
                 .memory
                 .lock()
@@ -378,9 +432,12 @@ pub unsafe extern "C" fn daisy_memory_write(
                 .lock()
                 .unwrap()
                 .write_dma(address, width as usize, value)
-        }
-        .is_err(),
-    )
+        };
+    match result {
+        Ok(())=>0,
+        Err(error) if cpu==0 && bus::sdram_bus_error(error)=>2,
+        Err(_)=>1,
+    }
 }
 
 /// # Safety
@@ -459,7 +516,7 @@ pub unsafe extern "C" fn daisy_cpu_access(
         &mut *value,
     ) {
         Ok(wait) => wait,
-        Err(error) if qspi::mapped_bus_error(error) => u64::MAX - 1,
+        Err(error) if qspi::mapped_bus_error(error) || bus::sdram_bus_error(error) => u64::MAX - 1,
         Err(error) => {
             eprintln!("CPU bus error: context={context:#x} address={address:#x} width={width} write={write}: {error}");
             u64::MAX
@@ -480,16 +537,34 @@ pub unsafe extern "C" fn daisy_bus_sync(
         let hclk = (*clock).clock.domain_rate(1)?.ok_or("HCLK stopped")?;
         let pclk = (*clock).clock.domain_rate(3)?.ok_or("PCLK2 stopped")?;
         let reg = |offset| (*fmc).registers.get(&offset).copied().unwrap_or(0);
-        let timing = (*clock)
+        let enabled=(*clock).clock.read(0xd4)&(1<<12)!=0 && (*clock).clock.read(0x7c)&(1<<12)==0;
+        let timing = if enabled {(*clock)
             .clock
             .fmc_rate()?
-            .and_then(|r| bus::SdramTiming::decode(reg(0x140), reg(0x148), reg(0x154), r).ok());
+            .and_then(|r| bus::SdramTiming::decode(reg(0x140), reg(0x148), reg(0x154), r).ok())} else {None};
         let mut memory = (*state).memory.lock().unwrap();
-        memory.configure_bus(hclk, pclk, timing);
         let now = now.max(memory.now());
-        memory.advance_time(now)
+        memory.advance_time(now)?;
+        memory.configure_bus(hclk, pclk, timing);
+        if (*fmc).registers.remove(&0x10000).is_some() {
+            memory.fabric.clear_sdram_refresh_error();
+        }
+        while let Some(command)=(*fmc).fmc_commands.pop_front() {
+            memory.fabric.sdram_command(command)?;
+        }
+        memory.advance_time(now)?;
+        (*fmc).registers.insert(0x158, memory.fabric.sdram_status());
+        Ok(())
     })();
     u32::from(result.is_err())
+}
+
+/// # Safety
+/// Live serialized FMC state, synchronized with the shared bus beforehand.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_fmc_irq(state: *mut Peripheral) -> u32 {
+    u32::from((*state).registers.get(&0x158).copied().unwrap_or(0) & 1 != 0
+        && (*state).registers.get(&0x154).copied().unwrap_or(0) & (1 << 14) != 0)
 }
 
 /// # Safety
@@ -624,7 +699,7 @@ pub unsafe extern "C" fn daisy_dma_port(
     match memory.dma_submit(address, write != 0) {
         Ok(Some(id)) => id + 2,
         Ok(None) => 1,
-        Err(error) if qspi::mapped_bus_error(error) => u64::MAX - 1,
+        Err(error) if qspi::mapped_bus_error(error) || bus::sdram_bus_error(error) => u64::MAX - 1,
         Err(_) => u64::MAX,
     }
 }
@@ -865,6 +940,24 @@ pub unsafe extern "C" fn daisy_dma_save(
 /// `state` must be live and exclusively accessed for this call.
 pub unsafe extern "C" fn daisy_sai_tick(state: *mut Peripheral, codec_active: u32) {
     (*state).sai.tick_mask(codec_active);
+}
+
+/// # Safety
+/// Distinct live serialized codec and RCC states, before processing SAI frames.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_codec_clocks(
+    codec: *mut Peripheral, clock: *mut Peripheral, cr1: u32, frcr: u32,
+) -> u32 {
+    if ((*codec).kind==4 && (*codec).registers.get(&9).copied().unwrap_or(0) & 1 == 0)
+        || ((*codec).kind==9 && !(*codec).codec_reset_high) {
+        return 0;
+    }
+    let result = (|| {
+        let mclk = (*clock).clock.sai_mclk(cr1,frcr)?;
+        let frame = (*clock).clock.sample_rate(cr1,frcr)?;
+        (*codec).validate_codec_clocks(mclk,frame)
+    })();
+    u32::from(result.is_err())
 }
 
 /// # Safety

@@ -69,7 +69,7 @@ fn cpu_and_dma_opposite_direction_sdram_accesses_wait_for_shared_service() {
                 .unwrap()
                 > 0
         );
-        let dma_finish = if cpu_write { 35 } else { 10 };
+        let dma_finish = if cpu_write { 65 } else { 40 };
         memory.advance_time(dma_finish).unwrap();
         assert!(memory.dma_ready(dma));
         memory.begin_cpu_block();
@@ -79,7 +79,7 @@ fn cpu_and_dma_opposite_direction_sdram_accesses_wait_for_shared_service() {
                 .unwrap()
                 > 0
         );
-        memory.advance_time(44).unwrap();
+        memory.advance_time(74).unwrap();
         memory.begin_cpu_block();
         assert!(
             memory
@@ -87,7 +87,7 @@ fn cpu_and_dma_opposite_direction_sdram_accesses_wait_for_shared_service() {
                 .unwrap()
                 > 0
         );
-        memory.advance_time(45).unwrap();
+        memory.advance_time(75).unwrap();
         memory.begin_cpu_block();
         assert_eq!(
             memory

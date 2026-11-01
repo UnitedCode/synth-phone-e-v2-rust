@@ -281,17 +281,26 @@ For **Rev5 only**, add `--audio-boundary ideal-line` to place normalized input
 before the WM8731 nominal line gain and digital DC-removal stage. This implements
 1.5dB gain steps (-34.5..+12dB), individual line mutes, and the published
 H(z)=(1-z^-1)/(1-0.9995z^-1), including ADCHPD/HPOR offset retention. It is an
-idealized floating-point stage, not a complete ADC. Normal-mode Type1's nominal
-group delay is represented by separate 20-frame ADC and 18-frame DAC passband
-delay lines. These are delay surrogates, not reconstructed FIR filters: gain
+idealized floating-point stage, not a complete ADC. All four published filter
+types use their nominal ADC/DAC passband delays: 12/11, 20/18, 3/5 and 6/5 frames
+(WM8731 Table32). These are delay surrogates, not reconstructed FIR filters: gain
 tolerance, internal rounding, complete decimation/interpolation responses and
 analog circuitry remain unmodeled. `*.wav.codec.txt` records the boundary,
 nominal delays and whether the surrogate was applied. The serial PCM boundary
-does not add converter latency. Rev4/Rev7 reject ideal-line input. Unsupported active WM8731 sample-clock
-ratios, de-emphasis, microphone and analog-bypass paths fail explicitly.
+does not add converter latency. Rev4/Rev7 reject ideal-line input. WM8731 normal
+and USB sampling tables use exact rational ratios, including fractional USB rates,
+BOSR, SR, CLKIDIV2 and the separate CLKODIV2 output divider. Powered ADC/DAC
+rates must match the shared SAI LRC and generated MCLK. Missing MCLK, reserved
+ratios and mismatched clocks fail explicitly, along with de-emphasis, microphone
+and analog-bypass paths. Changing filter type restarts the delay surrogate;
+the chip's actual reconfiguration transient remains unverified.
 WM8731 R7.LRSWAP reverses DAC channels at both supported audio boundaries;
 ADC channel order is unchanged (datasheet Table15). Other active digital
 formats remain explicitly unsupported.
+AK4556 and PCM3060 also require a connected MCLK and documented slave-clock
+ratios. PCM3060's ADC rejects the 128/192fs ratios that are valid only for its
+DAC. AK4556 checks necessary ratios across its documented slave modes; this
+does not infer unverified CKS strap settings or certify speed/frequency limits.
 
 The memory map constrains internal flash to 128 KiB and SDRAM to 64 MiB; it
 retains the actual SRAM/DTCM regions. Generic H743 extra flash and huge unused FMC
@@ -321,8 +330,8 @@ and the timing assumptions, including the reference manual's FIFO inconsistency.
 pacing. The SAI phase accumulator preserves fractional clock rate over time,
 but events have 1-microsecond resolution. CYCCNT counts core-clock periods of
 virtual elapsed time; it cannot measure true M7 instruction costs. PLL lock,
-oscillator tolerance, the complete CPU store buffer and SDRAM refresh contention
-remain unmodeled. Dirty cache lines now use the shared fabric as described below.
+oscillator tolerance and the complete CPU store buffer remain unmodeled. SDRAM
+refresh contention and dirty cache lines use the shared fabric as described below.
 Data-cache replacement uses deterministic
 round-robin, not the silicon's replacement sequence, and the M7 dynamic
 read-allocation optimization is not reproduced. Flash and RAM are fetched through Rust when translated
@@ -338,10 +347,31 @@ certify deadline compliance, CPU headroom or complete cache correctness.
 TRCD/TRP/TRC/TMRD and refresh COUNT. It reports analytical lower bounds for an
 open/precharged/conflicting-row read, a 32-byte line, refresh occupancy and mode
 register quiet time. Field encodings include the specified plus-one timing
-conversion; refresh periods use COUNT directly, without adding the software's
-20-cycle safety margin. Live SDRAM reads use the open-row lower bound as a
-declared service scenario; writes use transfer clocks. FMC queues, row state,
-refresh scheduling and SDRAM retention still need implementation.
+conversion; the SDRTR timer period is COUNT+1 clocks. The software's 20-cycle
+safety margin is not added to that runtime period. Live SDRAM service tracks
+the configured row/column/bank geometry, active rows, TRCD/TRP/TRAS/TWR, CAS and
+RPIPE. Refresh has priority over new accesses, waits for an active transfer and
+precharges open rows. Delayed refresh sets RE; CRE clears it without resetting
+the timer, and REIE drives NVIC48. Timer deadlines use absolute rational-clock
+epochs so fractional nanoseconds do not accumulate as per-period rounding drift.
+
+PALL, NRFS auto-refresh, mode-register quiet time, self-refresh/TXSR exit and
+power-down refresh are connected to the same service port. WP ignores writes;
+FMC control/timing reset values and the RCC FMC reset/gate connection are modeled.
+H7 SDSR bit5 remains reserved. Stopped-clock accesses and stopping a clock with
+in-flight SDRAM data fail explicitly; physical retention and unsafe clock-change
+behavior are not invented.
+
+RBURST models consumable 32-bit read-ahead words, data-ready times, row boundaries,
+oldest eviction and write/precharge/refresh flushing. The detailed read-cycle
+section says six 32-bit lines, while the feature list says six 64-bit lines; the
+revision history explicitly corrects the depth to six 64-bit entries. The model
+uses that correction, with per-word validity as a declared narrow-read packing
+scenario; exact packing still needs independent validation. FIFO acknowledgement
+uses a declared one-kernel-clock service scenario.
+Other bus widths with RBURST, write-FIFO acceptance depth, actual AXI/command
+overlap, precise low-power status transitions and calibrated latency remain
+unverified or unsupported.
 
 `*.flash.txt` and `*.memory.txt` report completed flash operations, the selected
 timing scenario and coupled CPU/DMA wait counters. DS12556's typical/maximum
@@ -372,8 +402,9 @@ reserve a shared service port, reflecting the shared DATA pins in RM0433
 22.9.3 figures119/120. The oldest waiting direction is selected, then that
 direction's AXI QoS/LRU arbiter selects its initiator. This direction-selection
 rule is a deterministic scenario, not a documented silicon scheduling policy.
-It serializes the complete supplied service windows; FMC FIFO acceptance,
-read-ahead, command overlap and direction-turnaround cycles remain unmodeled.
+It serializes service windows with live row, refresh and read-ahead state; exact
+FMC FIFO acceptance, command overlap and direction-turnaround cycles remain
+unverified.
 Other AXI targets retain separate read/write service lanes. Those lanes,
 AHB round-robin service and request arrival times are explicit model choices;
 pipeline/target overlap remains incomplete. Coupled stalls are functional

@@ -88,6 +88,211 @@ fn active() -> Peripheral {
 }
 
 #[test]
+fn wm8731_512fs_clock_mode_and_unused_clockout_divider_do_not_mute_valid_audio() {
+    let mut codec = active();
+    register(&mut codec, 8, 1 << 6); // CLKIDIV2 accepts 512fs external MCLK.
+    assert_eq!(codec.read(0x100).unwrap(), 3);
+    register(&mut codec, 8, (1 << 6) | (1 << 7));
+    assert_eq!(codec.read(0x100).unwrap(), 3); // CLKOUT is not the ADC/DAC clock.
+}
+
+#[test]
+fn all_four_wm8731_filter_types_use_their_published_nominal_group_delays() {
+    // Table32: ADC/DAC delay pairs for filter types0/1/2/3.
+    for (sampling, adc_delay, dac_delay) in [(1, 12, 11), (0, 20, 18), (28, 3, 5), (29, 6, 5)] {
+        let mut codec = active();
+        register(&mut codec, 5, 1);
+        register(&mut codec, 8, sampling);
+        for frame in 0..=20 {
+            let impulse = if frame == 0 { [0.25, -0.5] } else { [0.0; 2] };
+            assert_eq!(
+                codec.nominal_adc_passband(impulse).unwrap(),
+                if frame == adc_delay {
+                    [0.25, -0.5]
+                } else {
+                    [0.0; 2]
+                }
+            );
+            assert_eq!(
+                codec.nominal_dac_passband(impulse).unwrap(),
+                if frame == dac_delay {
+                    [0.25, -0.5]
+                } else {
+                    [0.0; 2]
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn wm8731_sampling_tables_preserve_fractional_rates_and_separate_clock_dividers() {
+    use virtual_daisy::clock::Rate;
+    // Tables18/19/21/22, including the deliberately non-integer "8k" rates.
+    for (usb, sr, adc, dac, filter) in [
+        (false, 0, 48000.0, 48000.0, 1),
+        (false, 1, 48000.0, 8000.0, 1),
+        (false, 2, 8000.0, 48000.0, 1),
+        (false, 3, 8000.0, 8000.0, 1),
+        (false, 6, 32000.0, 32000.0, 1),
+        (false, 7, 96000.0, 96000.0, 2),
+        (false, 8, 44100.0, 44100.0, 1),
+        (false, 9, 44100.0, 8018.181818181818, 1),
+        (false, 10, 8018.181818181818, 44100.0, 1),
+        (false, 11, 8018.181818181818, 8018.181818181818, 1),
+        (false, 15, 88200.0, 88200.0, 2),
+        (true, 0, 48000.0, 48000.0, 0),
+        (true, 1, 48000.0, 8000.0, 0),
+        (true, 2, 8000.0, 48000.0, 0),
+        (true, 3, 8000.0, 8000.0, 0),
+        (true, 6, 32000.0, 32000.0, 0),
+        (true, 7, 96000.0, 96000.0, 3),
+        (true, 8, 44117.64705882353, 44117.64705882353, 1),
+        (true, 9, 44117.64705882353, 8021.39037433155, 1),
+        (true, 10, 8021.39037433155, 44117.64705882353, 1),
+        (true, 11, 8021.39037433155, 8021.39037433155, 1),
+        (true, 15, 88235.29411764706, 88235.29411764706, 2),
+    ] {
+        for bosr in [0, 1] {
+            if usb && bosr != u16::from(sr >= 8) {
+                continue;
+            }
+            let hz = if usb {
+                12000000
+            } else if sr < 8 {
+                if bosr == 0 {
+                    12288000
+                } else {
+                    18432000
+                }
+            } else if bosr == 0 {
+                11289600
+            } else {
+                16934400
+            };
+            for divide in [0, 1] {
+                let mut codec = active();
+                register(
+                    &mut codec,
+                    8,
+                    u16::from(usb) | (bosr << 1) | (sr << 2) | (divide << 6) | 128,
+                );
+                let clocks = codec
+                    .codec_clocks(Rate {
+                        numerator: hz * (1 + u64::from(divide)),
+                        denominator: 1,
+                    })
+                    .unwrap();
+                assert!((clocks.adc.hz() - adc).abs() < 1e-8);
+                assert!((clocks.dac.hz() - dac).abs() < 1e-8);
+                assert_eq!(clocks.filter, filter);
+                assert_eq!(clocks.clkout.hz(), hz as f64 / 2.0);
+            }
+        }
+    }
+    for control in [3, 4 << 2, 5 << 2, 12 << 2, 13 << 2, 14 << 2, 256] {
+        let mut codec = active();
+        register(&mut codec, 8, control);
+        assert!(codec
+            .codec_clocks(Rate {
+                numerator: 12288000,
+                denominator: 1
+            })
+            .is_err());
+    }
+}
+
+#[test]
+fn live_codec_clock_validation_catches_mismatches_instead_of_returning_valid_looking_pcm() {
+    use virtual_daisy::{daisy_codec_clocks, Peripheral};
+    let mut codec = active();
+    let mut rcc = Peripheral::new(13);
+    rcc.write(0x50, 4).unwrap(); // SAI source CKPER=HSI64MHz.
+    let cr1 = (1 << 16) | (4 << 20);
+    assert_eq!(
+        unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1, 63) },
+        0
+    );
+    register(&mut codec, 8, 64); // Core clock /2 but SAI still256fs.
+    assert_eq!(
+        unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1, 63) },
+        1
+    );
+    assert_eq!(
+        unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1 | (1 << 26), 63) },
+        0
+    ); // 512fs
+    register(&mut codec, 8, 1); // USB250fs cannot use a256fs master clock.
+    assert_eq!(
+        unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1, 63) },
+        1
+    );
+    register(&mut codec, 8, 0);
+    assert_eq!(
+        unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1 | (1 << 19), 63) },
+        1
+    ); // No MCLK.
+    register(&mut codec, 8, 4); // ADC48k/DAC8k cannot both use the shared LRC.
+    assert_eq!(
+        unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1, 63) },
+        1
+    );
+    register(&mut codec, 6, 0x4a); // DAC powered down: ADC-only48k is valid.
+    assert_eq!(
+        unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1, 63) },
+        0
+    );
+}
+
+#[test]
+fn hardware_mode_codecs_require_mclk_and_pcm3060_adc_cannot_use_dac_only_ratios() {
+    use virtual_daisy::{clock::Rate, daisy_codec_clocks};
+    let mut rcc = Peripheral::new(13);
+    rcc.write(0x50, 4).unwrap();
+    let cr1 = (1 << 16) | (4 << 20);
+    for kind in [9, 10] {
+        let mut codec = Peripheral::new(kind);
+        if kind == 9 {
+            codec.codec_control(true).unwrap();
+        }
+        assert_eq!(
+            unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1, 63) },
+            0
+        );
+        assert_eq!(
+            unsafe { daisy_codec_clocks(&mut codec, &mut rcc, cr1 | (1 << 19), 63) },
+            1
+        );
+        assert!(codec
+            .validate_codec_clocks(
+                Rate {
+                    numerator: 12_288_000,
+                    denominator: 1
+                },
+                Rate {
+                    numerator: 48_000,
+                    denominator: 1
+                }
+            )
+            .is_ok());
+        if kind == 10 {
+            assert!(codec
+                .validate_codec_clocks(
+                    Rate {
+                        numerator: 12_288_000,
+                        denominator: 1
+                    },
+                    Rate {
+                        numerator: 96_000,
+                        denominator: 1
+                    }
+                )
+                .is_err()); //128fs valid for DAC only
+        }
+    }
+}
+
+#[test]
 fn wm8731_ideal_line_stage_rejects_dc_with_the_published_high_pass_response() {
     let mut codec = active();
     let first = codec.ideal_line_input([0.25, -0.5]).unwrap();
@@ -132,7 +337,7 @@ fn wm8731_hpor_retains_dc_offset_only_when_requested() {
 #[test]
 fn active_wm8731_unsupported_sampling_and_deemphasis_do_not_pass_silently() {
     let mut codec = active();
-    register(&mut codec, 8, 1); // USB MCLK mode.
+    register(&mut codec, 8, 3); // USB 272fs with SR=0000 is reserved (Table21).
     assert!(codec.read(0x100).is_err());
     register(&mut codec, 8, 0);
     register(&mut codec, 5, 6); // De-emphasis requires a missing DAC filter model.

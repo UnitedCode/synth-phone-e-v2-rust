@@ -1,5 +1,9 @@
 //! RM0433 programmed SDRAM timing bounds. These are not CPU stall estimates.
 use crate::clock::Rate;
+const SDRAM_RANGE: &str = "SDRAM access outside configured geometry";
+pub fn sdram_bus_error(error: &str) -> bool {
+    error == SDRAM_RANGE
+}
 
 struct Transaction {
     id: u64,
@@ -9,6 +13,7 @@ struct Transaction {
     service: u64,
     finish: u64,
     flash: Option<(u32, u64)>,
+    sdram: Option<(u32, usize)>,
 }
 /// Event-driven target service and backpressure. 1..7 are AXI targets;
 /// 8..12 are local SRAM slaves on AHB matrices. Service costs are supplied
@@ -27,6 +32,7 @@ pub struct Fabric {
     flash_buffer: Option<u32>,
     pub flash_buffer_hits: u64,
     pub flash_buffer_misses: u64,
+    sdram: Option<Sdram>,
 }
 impl Fabric {
     fn lane(target: usize, write: bool) -> usize {
@@ -71,6 +77,7 @@ impl Fabric {
             service,
             finish: 0,
             flash: None,
+            sdram: None,
         });
         Ok(Some(self.next))
     }
@@ -95,11 +102,101 @@ impl Fabric {
     pub fn invalidate_flash_buffer(&mut self) {
         self.flash_buffer = None;
     }
+    pub fn configure_sdram(&mut self, timing: Option<SdramTiming>) {
+        match (&mut self.sdram, timing) {
+            (Some(s), Some(t)) => {
+                if s.timing != t {
+                    s.read_ahead.clear();
+                }
+                if s.timing.refresh != t.refresh || s.timing.clock != t.clock {
+                    s.epoch = self.now;
+                    s.refresh_index = 1;
+                }
+                if (
+                    s.timing.columns,
+                    s.timing.rows,
+                    s.timing.banks,
+                    s.timing.width,
+                ) != (t.columns, t.rows, t.banks, t.width)
+                {
+                    s.rows = [SdramRow::default(); 4];
+                }
+                s.timing = t;
+            }
+            (slot, t) => *slot = t.map(|timing| Sdram::new(timing, self.now)),
+        }
+    }
+    pub fn sdram_refresh_error(&self) -> bool {
+        self.sdram.as_ref().is_some_and(|s| s.refresh_error)
+    }
+    pub fn sdram_status(&self) -> u32 {
+        self.sdram
+            .as_ref()
+            .map_or(0, |s| (s.mode << 1) | u32::from(s.refresh_error))
+    }
+    pub fn sdram_command(&mut self, command: u32) -> Result<(), &'static str> {
+        if command & 16 == 0 {
+            return Ok(());
+        } // Seed bank2 is unpopulated.
+        self.sdram
+            .as_mut()
+            .ok_or("SDRAM command without a running clock")?
+            .commands
+            .push_back(command);
+        Ok(())
+    }
+    pub fn clear_sdram_refresh_error(&mut self) {
+        if let Some(s) = self.sdram.as_mut() {
+            s.refresh_error = false;
+        }
+    }
+    pub(crate) fn invalidate_sdram_fifo(&mut self) {
+        if let Some(s) = self.sdram.as_mut() {
+            s.read_ahead.clear();
+        }
+    }
+    pub fn sdram_report(&self) -> String {
+        self.sdram.as_ref().map_or_else(|| "sdram_runtime=DISABLED\n".into(), |s|
+            format!("sdram_runtime=ROW_REFRESH_COMMAND_AND_READ_AHEAD_SERVICE_SCENARIO\nsdram_row_hits={}\nsdram_activations={}\nsdram_precharges={}\nsdram_refreshes={}\nsdram_refresh_error={}\nsdram_mode={}\nsdram_mode_register={}\nsdram_fifo_hits={}\nsdram_fifo_ack=ONE_KERNEL_CYCLE_SCENARIO\n",s.row_hits,s.activations,s.precharges,s.refreshes,u32::from(s.refresh_error),s.mode,s.mode_register,s.fifo_hits))
+    }
+    pub fn submit_sdram(
+        &mut self,
+        ini: usize,
+        address: u32,
+        bytes: usize,
+        write: bool,
+    ) -> Result<Option<u64>, &'static str> {
+        self.validate_sdram(address, bytes)?;
+        let id = self.submit(ini, 5, write, 1)?;
+        if id.is_some() {
+            self.waiting.back_mut().unwrap().sdram = Some((address, bytes));
+        }
+        Ok(id)
+    }
+    pub(crate) fn validate_sdram(&self, address: u32, bytes: usize) -> Result<(), &'static str> {
+        self.sdram
+            .as_ref()
+            .ok_or("SDRAM configuration unavailable")?
+            .validate(address, bytes)
+    }
     fn grant_idle(&mut self) -> Result<(), &'static str> {
+        let sdram_active = self.active.iter().any(|t| t.target == 5);
+        let sdram_waiting = self.waiting.iter().any(|t| t.target == 5);
+        if let Some(sdram) = self.sdram.as_mut() {
+            sdram.poll(self.now, sdram_active, sdram_waiting)?;
+        }
         if self.waiting.is_empty() {
             return Ok(());
         }
         for lane in 0..26 {
+            if lane == Self::lane(5, false)
+                && self
+                    .sdram
+                    .as_ref()
+                    .is_some_and(|s| s.busy_until > self.now || s.pending)
+            {
+                continue;
+            }
             if self
                 .active
                 .iter()
@@ -145,6 +242,13 @@ impl Fabric {
                 })
                 .unwrap();
             let mut t = self.waiting.remove(index).unwrap();
+            if let Some((address, bytes)) = t.sdram {
+                t.service = self
+                    .sdram
+                    .as_mut()
+                    .ok_or("SDRAM clock stopped with queued transfer")?
+                    .service(self.now, address, bytes, t.write)?;
+            }
             if let Some((word, hit)) = t.flash {
                 if self.flash_buffer == Some(word) {
                     t.service = hit;
@@ -163,12 +267,26 @@ impl Fabric {
         Ok(())
     }
     pub fn advance(&mut self, now: u64) -> Result<(), &'static str> {
+        if self.sdram.is_none()
+            && self
+                .active
+                .iter()
+                .chain(&self.waiting)
+                .any(|t| t.sdram.is_some())
+        {
+            return Err("stopping the SDRAM clock with in-flight data is unsupported");
+        }
         if now < self.now {
             return Err("fabric clock moved backwards");
         }
         loop {
             self.grant_idle()?;
-            let next = self.active.iter().map(|t| t.finish).min();
+            let next = self
+                .active
+                .iter()
+                .map(|t| t.finish)
+                .chain(self.sdram.as_ref().and_then(|s| s.next_event(self.now)))
+                .min();
             let Some(next) = next.filter(|&t| t <= now) else {
                 break;
             };
@@ -209,6 +327,12 @@ impl Fabric {
         self.active
             .iter()
             .map(|t| t.finish.saturating_sub(self.now))
+            .chain(
+                self.sdram
+                    .as_ref()
+                    .and_then(|s| s.next_event(self.now))
+                    .map(|t| t - self.now),
+            )
             .min()
             .unwrap_or(1)
             .max(1)
@@ -370,6 +494,7 @@ impl Axi {
         Ok(winner.map(|i| i + 1))
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SdramTiming {
     clock: Rate,
     divider: u64,
@@ -381,8 +506,19 @@ pub struct SdramTiming {
     trc: u64,
     tmrd: u64,
     refresh: u64,
+    columns: u32,
+    rows: u32,
+    banks: u32,
+    tras: u64,
+    twr: u64,
+    txsr: u64,
+    write_protected: bool,
+    read_burst: bool,
 }
 impl SdramTiming {
+    pub(crate) fn write_protected(&self) -> bool {
+        self.write_protected
+    }
     pub fn write_min_ns(&self, bytes: u64) -> u64 {
         self.ns(bytes.div_ceil(self.width))
     }
@@ -408,10 +544,19 @@ impl SdramTiming {
         if cas == 0 || pipe == 3 || kernel.numerator == 0 || kernel.denominator == 0 {
             return Err("invalid SDRAM CAS, pipeline or kernel clock");
         }
+        if control & (1 << 12) != 0 && width != 4 {
+            return Err("SDRAM read-ahead currently requires the Seed 32-bit data bus");
+        }
+        if (control >> 2) & 3 == 3 {
+            return Err("reserved SDRAM row address width");
+        }
         let field = |shift: u32| u64::from(((timing >> shift) & 15_u32) + 1);
         let refresh = u64::from((refresh >> 1) & 8191);
         if (1..41).contains(&refresh) {
             return Err("SDRAM COUNT must be zero or at least 41");
+        }
+        if refresh == field(16) + field(20) + field(12) + field(24) + 4 {
+            return Err("forbidden SDRAM refresh COUNT timing combination");
         }
         Ok(Self {
             divider,
@@ -427,10 +572,22 @@ impl SdramTiming {
             trc: field(12),
             tmrd: field(0),
             refresh,
+            columns: 8 + (control & 3),
+            rows: 11 + ((control >> 2) & 3),
+            banks: if control & (1 << 6) == 0 { 2 } else { 4 },
+            tras: field(8),
+            twr: field(16),
+            txsr: field(4),
+            write_protected: control & (1 << 9) != 0,
+            read_burst: control & (1 << 12) != 0,
         })
     }
     fn ns(&self, cycles: u64) -> u64 {
         (u128::from(cycles) * u128::from(self.clock.denominator) * 1_000_000_000)
+            .div_ceil(u128::from(self.clock.numerator)) as u64
+    }
+    fn kernel_ns(&self, cycles: u64) -> u64 {
+        (u128::from(cycles) * u128::from(self.clock.denominator / self.divider) * 1_000_000_000)
             .div_ceil(u128::from(self.clock.numerator)) as u64
     }
     pub fn read_min_ns(
@@ -452,12 +609,335 @@ impl SdramTiming {
             .div_ceil(u128::from(self.clock.numerator)) as u64)
     }
     pub fn refresh_interval_ns(&self) -> u64 {
-        self.ns(self.refresh)
+        if self.refresh == 0 {
+            0
+        } else {
+            self.ns(self.refresh + 1)
+        }
     }
     pub fn refresh_busy_ns(&self, count: u32) -> u64 {
         self.ns(self.trc * u64::from(count))
     }
     pub fn report(&self) -> String {
-        format!("scope=PROGRAMMED_TIMING_LOWER_BOUNDS\nsdram_clock_hz={}\nbus_width_bytes={}\ncas_cycles={}\nread_pipe_kernel_cycles={}\ntrcd_cycles={}\ntrp_cycles={}\ntrc_cycles={}\ntmrd_cycles={}\nread_word_open_row_min_ns={}\nread_word_precharged_row_min_ns={}\nread_word_conflicting_row_min_ns={}\nread_cacheline_precharged_row_min_ns={}\nrefresh_interval_ns={}\nrefresh_busy_min_ns={}\nmode_register_quiet_min_ns={}\ncpu_stalls_and_bus_contention=UNMODELED\n",self.clock.hz(),self.width,self.cas,self.pipe,self.trcd,self.trp,self.trc,self.tmrd,self.read_min_ns(4,true,false).unwrap(),self.read_min_ns(4,false,false).unwrap(),self.read_min_ns(4,false,true).unwrap(),self.read_min_ns(32,false,false).unwrap(),self.refresh_interval_ns(),self.refresh_busy_ns(1),self.ns(self.tmrd))
+        format!("scope=PROGRAMMED_TIMING_LOWER_BOUNDS\nsdram_clock_hz={}\nbus_width_bytes={}\ncas_cycles={}\nread_pipe_kernel_cycles={}\ntrcd_cycles={}\ntrp_cycles={}\ntrc_cycles={}\ntmrd_cycles={}\nread_word_open_row_min_ns={}\nread_word_precharged_row_min_ns={}\nread_word_conflicting_row_min_ns={}\nread_cacheline_precharged_row_min_ns={}\nrefresh_interval_ns={}\nrefresh_busy_min_ns={}\nmode_register_quiet_min_ns={}\nlive_stalls=SEE_MEMORY_REPORT\n",self.clock.hz(),self.width,self.cas,self.pipe,self.trcd,self.trp,self.trc,self.tmrd,self.read_min_ns(4,true,false).unwrap(),self.read_min_ns(4,false,false).unwrap(),self.read_min_ns(4,false,true).unwrap(),self.read_min_ns(32,false,false).unwrap(),self.refresh_interval_ns(),self.refresh_busy_ns(1),self.ns(self.tmrd))
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct SdramRow {
+    number: Option<u32>,
+    activated: u64,
+    last_write: Option<u64>,
+}
+struct Sdram {
+    timing: SdramTiming,
+    rows: [SdramRow; 4],
+    epoch: u64,
+    refresh_index: u64,
+    pending: bool,
+    refresh_start: Option<u64>,
+    busy_until: u64,
+    refresh_error: bool,
+    refreshes: u64,
+    row_hits: u64,
+    activations: u64,
+    precharges: u64,
+    mode: u32,
+    commands: std::collections::VecDeque<u32>,
+    mode_register: u32,
+    // Six64-bit entries per RM revision history. Per-word validity is a
+    // declared narrow-AXI-read packing scenario, pending independent traces.
+    read_ahead: std::collections::VecDeque<(u32, [Option<u64>; 2])>,
+    port_tail: u64,
+    fifo_hits: u64,
+}
+impl Sdram {
+    fn new(timing: SdramTiming, now: u64) -> Self {
+        Self {
+            timing,
+            rows: [SdramRow::default(); 4],
+            epoch: now,
+            refresh_index: 1,
+            pending: false,
+            refresh_start: None,
+            busy_until: 0,
+            refresh_error: false,
+            refreshes: 0,
+            row_hits: 0,
+            activations: 0,
+            precharges: 0,
+            mode: 0,
+            commands: std::collections::VecDeque::new(),
+            mode_register: 0,
+            read_ahead: std::collections::VecDeque::new(),
+            port_tail: 0,
+            fifo_hits: 0,
+        }
+    }
+    fn deadline(&self) -> Option<u64> {
+        (self.timing.refresh != 0 && self.mode != 1).then(|| {
+            self.epoch.saturating_add(
+                self.timing
+                    .ns(self.refresh_index.saturating_mul(self.timing.refresh + 1)),
+            )
+        })
+    }
+    fn next_event(&self, now: u64) -> Option<u64> {
+        self.deadline()
+            .into_iter()
+            .chain(self.refresh_start)
+            .chain([self.busy_until])
+            .filter(|&time| time > now)
+            .min()
+    }
+    fn poll(
+        &mut self,
+        now: u64,
+        port_active: bool,
+        data_waiting: bool,
+    ) -> Result<(), &'static str> {
+        // Complete command issuance before evaluating a new timer pulse on
+        // the same edge. Precharge/recovery can keep an older request pending.
+        if self.refresh_start.is_some_and(|time| time <= now) {
+            self.refresh_start = None;
+            self.pending = false;
+            self.refreshes += 1;
+        }
+        if self.deadline().is_some_and(|time| time <= now) {
+            if self.pending {
+                self.refresh_error = true;
+            }
+            self.pending = true;
+            self.refresh_index += 1;
+        }
+        if self.pending && !port_active && self.busy_until <= now {
+            let mut start = now.max(self.port_tail);
+            let open = self.rows.iter().any(|row| row.number.is_some());
+            for &row in &self.rows {
+                if row.number.is_some() {
+                    start = start.max(self.precharge_ready(row, now));
+                }
+            }
+            if open {
+                start += self.timing.ns(self.timing.trp);
+                self.precharges += 1;
+            }
+            self.rows = [SdramRow::default(); 4];
+            self.read_ahead.clear();
+            self.busy_until = start + self.timing.ns(self.timing.trc);
+            if start == now {
+                self.pending = false;
+                self.refreshes += 1;
+            } else {
+                self.refresh_start = Some(start);
+            }
+        }
+        while !port_active && self.busy_until <= now {
+            let Some(command) = self.commands.pop_front() else {
+                break;
+            };
+            match command & 7 {
+                0 => self.exit_low_power(now),
+                1 => {} // External device startup delay is firmware-controlled.
+                2 => self.busy_until = self.close_all(now, true),
+                3 => {
+                    if self.rows.iter().any(|r| r.number.is_some()) {
+                        return Err("manual SDRAM auto-refresh requires a preceding PALL command");
+                    }
+                    let count = u64::from(((command >> 5) & 15) + 1);
+                    self.busy_until = now + self.timing.ns(self.timing.trc * count);
+                    self.refreshes += count;
+                }
+                4 => {
+                    self.mode_register = (command >> 9) & 0x3fff;
+                    self.busy_until = now + self.timing.ns(self.timing.tmrd);
+                }
+                5 => {
+                    self.busy_until = self.close_all(now, true) + self.timing.ns(self.timing.tras);
+                    self.mode = 1;
+                    self.pending = false;
+                    self.refresh_start = None;
+                }
+                6 => {
+                    self.mode = 2;
+                }
+                _ => return Err("reserved SDRAM command"),
+            }
+        }
+        if !port_active && data_waiting && self.commands.is_empty() && self.mode != 0 {
+            self.exit_low_power(now);
+        }
+        Ok(())
+    }
+    fn close_all(&mut self, now: u64, always: bool) -> u64 {
+        let mut ready = now.max(self.port_tail);
+        let open = self.rows.iter().any(|r| r.number.is_some());
+        for &row in &self.rows {
+            if row.number.is_some() {
+                ready = ready.max(self.precharge_ready(row, now));
+            }
+        }
+        self.rows = [SdramRow::default(); 4];
+        self.read_ahead.clear();
+        if open || always {
+            ready += self.timing.ns(self.timing.trp);
+            self.precharges += 1;
+        }
+        ready
+    }
+    fn exit_low_power(&mut self, now: u64) {
+        if self.mode == 1 {
+            let start = now.max(self.busy_until);
+            self.busy_until = start + self.timing.ns(self.timing.txsr);
+            self.epoch = start;
+            self.refresh_index = 1;
+        } else if self.mode == 2 {
+            self.busy_until = now.max(self.busy_until) + self.timing.ns(1);
+        }
+        self.mode = 0;
+    }
+    fn validate(&self, address: u32, bytes: usize) -> Result<(), &'static str> {
+        let capacity = (1_u64 << (self.timing.columns + self.timing.rows))
+            * self.timing.width
+            * u64::from(self.timing.banks);
+        if bytes == 0
+            || address < 0xc0000000
+            || u64::from(address - 0xc0000000) + bytes as u64 > capacity
+        {
+            return Err(SDRAM_RANGE);
+        }
+        Ok(())
+    }
+    fn precharge_ready(&self, row: SdramRow, now: u64) -> u64 {
+        now.max(row.activated + self.timing.ns(self.timing.tras))
+            .max(
+                row.last_write
+                    .map_or(0, |w| w + self.timing.ns(self.timing.twr)),
+            )
+    }
+    fn service(
+        &mut self,
+        now: u64,
+        mut address: u32,
+        mut bytes: usize,
+        write: bool,
+    ) -> Result<u64, &'static str> {
+        self.validate(address, bytes)?;
+        if write {
+            self.read_ahead.clear();
+        }
+        // RM0433 SDCR.WP: write accesses are ignored, not bus faults or
+        // physical SDRAM WRITE commands. AXI acknowledgement latency is not
+        // independently specified; no SDRAM service is charged here.
+        if write && self.timing.write_protected {
+            return Ok(0);
+        }
+        let t = &self.timing;
+        let row_bytes = t.width << t.columns;
+        let mut time = now;
+        while bytes != 0 {
+            let offset = u64::from(address - 0xc0000000);
+            let bank = (((offset / row_bytes) >> t.rows) & u64::from(t.banks - 1)) as usize;
+            let number = ((offset / row_bytes) & ((1 << t.rows) - 1)) as u32;
+            let count = bytes.min((row_bytes - offset % row_bytes) as usize);
+            let mut prefix = 0;
+            if !write && t.read_burst {
+                while prefix < count {
+                    let word = (address + prefix as u32) & !3;
+                    let half = ((word >> 2) & 1) as usize;
+                    let Some(index) = self
+                        .read_ahead
+                        .iter()
+                        .position(|&(tag, ready)| tag == word & !7 && ready[half].is_some())
+                    else {
+                        break;
+                    };
+                    let ready = self.read_ahead[index].1[half].take().unwrap();
+                    if self.read_ahead[index].1.iter().all(Option::is_none) {
+                        self.read_ahead.remove(index);
+                    }
+                    time = time.max(ready) + t.kernel_ns(1);
+                    prefix += (4 - ((address + prefix as u32) & 3) as usize).min(count - prefix);
+                    self.fifo_hits += 1;
+                }
+                if prefix == count {
+                    bytes -= count;
+                    if bytes != 0 {
+                        address += count as u32;
+                    }
+                    continue;
+                }
+            }
+            time = time.max(self.port_tail);
+            let mut row = self.rows[bank];
+            if row.number != Some(number) {
+                if row.number.is_some() {
+                    time = (self.precharge_ready(row, time) + t.ns(t.trp))
+                        .max(row.activated + t.ns(t.trc));
+                    self.precharges += 1;
+                    self.read_ahead.clear();
+                }
+                self.activations += 1;
+                row = SdramRow {
+                    number: Some(number),
+                    activated: time,
+                    last_write: None,
+                };
+                time += t.ns(t.trcd);
+            } else {
+                self.row_hits += 1;
+            }
+            if write {
+                row.last_write = Some(time + t.ns((count as u64).div_ceil(t.width) - 1));
+                time += t.write_min_ns(count as u64);
+            } else {
+                time += t.read_min_ns((count - prefix) as u64, true, false)?;
+                if t.read_burst {
+                    for (tag, words) in &mut self.read_ahead {
+                        for (half, word) in words.iter_mut().enumerate() {
+                            let start = u64::from(*tag) + half as u64 * 4;
+                            if start < u64::from(address) + count as u64
+                                && start + 4 > u64::from(address)
+                            {
+                                *word = None;
+                            }
+                        }
+                    }
+                    self.read_ahead
+                        .retain(|(_, words)| words.iter().any(Option::is_some));
+                    let last = (address + count as u32 - 1) & !3;
+                    let anticipated = t.cas + 1 + t.pipe / 2;
+                    let mut fetched = 0;
+                    for index in 1..=anticipated {
+                        let next = last + 4 * index as u32;
+                        if u64::from(next - 0xc0000000) / row_bytes != offset / row_bytes {
+                            break;
+                        }
+                        let tag = next & !7;
+                        let half = ((next >> 2) & 1) as usize;
+                        if let Some(line) =
+                            self.read_ahead.iter_mut().find(|(base, _)| *base == tag)
+                        {
+                            line.1[half] = Some(time + t.ns(index));
+                        } else {
+                            if self.read_ahead.len() == 6 {
+                                self.read_ahead.pop_front();
+                            }
+                            let mut words = [None; 2];
+                            words[half] = Some(time + t.ns(index));
+                            self.read_ahead.push_back((tag, words));
+                        }
+                        fetched = index;
+                    }
+                    self.port_tail = time + t.ns(fetched);
+                }
+            }
+            self.rows[bank] = row;
+            bytes -= count;
+            if bytes != 0 {
+                address += count as u32;
+            }
+        }
+        Ok(time - now)
     }
 }

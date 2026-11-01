@@ -57,6 +57,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void Register(IPeripheral peripheral,EnumRegistrationPoint<STM32H7_RCC.RegistrationPeripheralAlias> point) {
             original.Register(peripheral,point);
             string name=point.Name.ToString();
+            // Register the physical FMC gate/reset connection with Renode.
+            // The Rust RCC state starts with the AHB3 clock gate disabled.
+            if(name=="FMC") machine.SystemBus.SetPeripheralEnabled(peripheral,false);
             uint group=name is "TIM2" or "TIM3" or "TIM4" or "TIM5" or "TIM6" or "TIM7" or "TIM12" or "TIM13" or "TIM14" ? 6U : name is "TIM1" or "TIM8" or "TIM15" or "TIM16" or "TIM17" ? 7U : 0U;
             if(group!=0 && peripheral is IHasFrequency) timers.Add(peripheral,group);
             if(peripheral is IDaisyKernelClockSink sink) { clockSinks.Add(sink);sink.RefreshClock(); }
