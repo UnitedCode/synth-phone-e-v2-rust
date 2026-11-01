@@ -15,7 +15,9 @@ jobs:
       fail-fast: false
       matrix:
         board: [rev4, rev5, rev7]
-    timeout-minutes: 15
+    # Rev5 also runs the maximum-duration flash suite after its full audio/fault
+    # matrix. The 180-second per-emulator watchdog still detects individual hangs.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
