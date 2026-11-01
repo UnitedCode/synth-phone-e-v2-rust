@@ -18,6 +18,8 @@ pub fn write(
     for (key,value) in [
         ("schema","virtual-daisy-conformance-v7"),
         ("requested_scope",scope),
+        ("host_os",std::env::consts::OS),
+        ("host_arch",std::env::consts::ARCH),
         ("board",board.id()),
         ("codec",board.codec()),
         ("audio_input_boundary",if ideal_line {"ideal-line"} else {"serial"}),

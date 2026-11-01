@@ -309,8 +309,15 @@ fn run(
             .current_dir(&root)
             .args(["build"])
             .arg(root.join("tools/virtual-daisy/bridge/DaisyHost.csproj"))
-            .arg(format!("-p:RenodeRoot={}", renode.display()))
+            .arg(format!(
+                "-p:RenodeRoot={}",
+                virtual_daisy::host::tool_path(&renode)?
+            ))
             .arg("-p:UseSharedCompilation=false")
+            .arg(format!(
+                "-p:BaseIntermediateOutputPath={}/",
+                virtual_daisy::host::tool_path(&directory.join("managed-obj"))?
+            ))
             .arg("--output")
             .arg(&managed)
             .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1"),
