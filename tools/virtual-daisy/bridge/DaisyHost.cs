@@ -88,7 +88,7 @@ public static class DaisyHost
         ((DaisyGpio)machine["sysbus.gpioPortD"]).ConfigureStraps(uint.Parse(args[7]));
         Console.WriteLine("Board: " + args[6]);
         var cpu = (CortexM)machine["sysbus.cpu"];
-        if(((DaisyCortexM)cpu).FetchTagVersion!=8) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
+        if(((DaisyCortexM)cpu).FetchTagVersion!=9) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
         Console.WriteLine("Native instruction-fetch tag verified");
         cpu.VectorTableOffset = 0x08000000;
         cpu.SP = bus.ReadDoubleWord(0x08000000);
@@ -100,6 +100,7 @@ public static class DaisyHost
         if(args[5]=="timing" || args[5]=="dsb-fault" || args[5]=="entry-fault") {TimingProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="wait-irq" || args[5]=="wait-irq-fault" || args[5]=="wait-irq-target") {InterruptProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="storage" || args[5]=="storage-irq-fault" || args[5]=="storage-data-fault" || args[5]=="storage-timer-fault") {StorageProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="cpu" || args[5]=="cpu-div-fault" || args[5]=="cpu-lazy-fault" || args[5]=="cpu-align-fault" || args[5]=="cpu-ram" || args[5]=="cpu-eager" || args[5]=="cpu-eager-ram") {CpuProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -257,6 +258,20 @@ public static class DaisyHost
         File.WriteAllBytes(prefix+".storage-cache.bin",bus.ReadBytes(0x2001a024UL,28));
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM QSPI storage/polling interrupt probe executed; results require Rust grading");
+    }
+    private static void CpuProbes(Emulation emulation,Machine machine,string prefix,string kind) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"cpu-probe.elf"));
+        cpu.VectorTableOffset=0x6000;cpu.SP=kind.EndsWith("-ram") ? 0x3001f000U:0x2001f000U;
+        cpu.PC=bus.ReadDoubleWord(0x6004);
+        if(kind=="cpu-align-fault") cpu.DisableAlignment();
+        bus.WriteDoubleWord(0x20018200,kind=="cpu-div-fault" ? 1U:kind=="cpu-lazy-fault" ? 2U:kind.StartsWith("cpu-eager") ? 4U:0U);
+        emulation.RunFor(TimeInterval.FromMilliseconds(2));
+        File.WriteAllBytes(prefix+".cpu.bin",bus.ReadBytes(0x20018000UL,384));
+        using(var output=new BinaryWriter(File.Create(prefix+".cpu-sites.bin")))
+            foreach(uint word in new uint[]{7,11,15,23,27,31,35,39,67,71,75,79,83,87,91}) output.Write(bus.ReadDoubleWord(bus.ReadDoubleWord(0x20018000+4*word)));
+        ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
+        Console.WriteLine("ARM fault/FPU probe executed with "+(kind.EndsWith("-ram") ? "SRAM":"DTCM")+" stack; results require Rust grading");
     }
     private static void VerifyPacingAdapter() {
         using(var assembly=Mono.Cecil.AssemblyDefinition.ReadAssembly(typeof(BaseCPU).Assembly.Location)) {

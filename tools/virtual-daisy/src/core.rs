@@ -13,13 +13,36 @@ const INFRA_SHA: &str = "8353496d3489e3801a45fd79b9281040e9d6b00f0c1615a5e77e995
 const TLIB_SHA: &str = "8db4d1fe0a316eec5dcae83bd4d2757b5172332493d6fdecfd9d4b81cb7a77a3";
 const TAG: &str =
     "    cpustate |= (READ_ACCESS_TYPE == ACCESS_INST_FETCH) ? (UINT64_C(1) << 63) : 0;";
-const MARKER:&str="\nuint32_t tlib_daisy_fetch_tag_version(void) { return 8; }\nEXC_INT_0(uint32_t, tlib_daisy_fetch_tag_version)\nvoid *daisy_fetch_state;\nuint32_t (*daisy_fetch_runtime)(void *, uint32_t, uint32_t);\nvoid tlib_daisy_set_runtime_fetch(void *state, void *callback) { daisy_fetch_state = state; daisy_fetch_runtime = callback; }\nEXC_VOID_2(tlib_daisy_set_runtime_fetch, void *, state, void *, callback)\nuint64_t tlib_daisy_memory_context(void) { target_ulong data[TARGET_INSN_START_WORDS]; if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_STACKING) { return UINT64_MAX-1; } if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_UNSTACKING) { return UINT64_MAX-2; } if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_VECTOR_READ) { return UINT64_MAX; } if(!cpu->current_tb || !cpu->mem_io_pc) { return 0; } if(cpu_get_data_for_pc(cpu, cpu->current_tb, cpu->mem_io_pc, true, data, false) < 0) { return 0; } return ((uint64_t)data[0] << 32) | cpu->regs[13]; }\nEXC_INT_0(uint64_t, tlib_daisy_memory_context)\n";
+const MARKER:&str="\nuint32_t tlib_daisy_fetch_tag_version(void) { return 9; }\nEXC_INT_0(uint32_t, tlib_daisy_fetch_tag_version)\nvoid *daisy_fetch_state;\nuint32_t (*daisy_fetch_runtime)(void *, uint32_t, uint32_t);\nvoid tlib_daisy_set_runtime_fetch(void *state, void *callback) { daisy_fetch_state = state; daisy_fetch_runtime = callback; }\nEXC_VOID_2(tlib_daisy_set_runtime_fetch, void *, state, void *, callback)\nuint64_t tlib_daisy_memory_context(void) { target_ulong data[TARGET_INSN_START_WORDS]; if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_STACKING) { return UINT64_MAX-1; } if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_UNSTACKING) { return UINT64_MAX-2; } if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_VECTOR_READ) { return UINT64_MAX; } if(!cpu->current_tb || !cpu->mem_io_pc) { return 0; } if(cpu_get_data_for_pc(cpu, cpu->current_tb, cpu->mem_io_pc, true, data, false) < 0) { return 0; } return ((uint64_t)data[0] << 32) | cpu->regs[13]; }\nEXC_INT_0(uint64_t, tlib_daisy_memory_context)\n";
 const RUNTIME:&str="    if(cpu->tb_restart_request == 0 && daisy_fetch_runtime) {\n        uint32_t result = daisy_fetch_runtime(daisy_fetch_state, cpu->current_tb->pc, cpu->current_tb->size);\n        if(result > 2) { tlib_abort(\"Invalid Daisy runtime instruction fetch\"); }\n        if(result == 1) { tb_phys_invalidate(cpu->current_tb, -1); cpu->tb_restart_request = 1; }\n        if(result == 2) { cpu->exit_request = 1; cpu->tb_restart_request = 1; }\n    }\n";
 const BARRIER_EXPORT: &str = r#"
 uint32_t (*daisy_barrier_callback)(void *, uint32_t);
 void *daisy_barrier_state;
 void tlib_daisy_set_barrier(void *state, void *callback) { daisy_barrier_state = state; daisy_barrier_callback = callback; }
 EXC_VOID_2(tlib_daisy_set_barrier, void *, state, void *, callback)
+"#;
+const ALIGNMENT_EXPORT: &str = r#"
+void *daisy_alignment_state;
+uint32_t (*daisy_alignment_callback)(void *, uint32_t, uint32_t, uint32_t);
+void tlib_daisy_set_alignment(void *state, void *callback) { daisy_alignment_state=state; daisy_alignment_callback=callback; }
+EXC_VOID_2(tlib_daisy_set_alignment, void *, state, void *, callback)
+"#;
+const ALIGNMENT_HELPER: &str = r#"
+extern void *daisy_alignment_state;
+extern uint32_t (*daisy_alignment_callback)(void *, uint32_t, uint32_t, uint32_t);
+void daisy_check_alignment(CPUState *env, uint32_t address, uint32_t alignment, uint32_t forced, void *retaddr) {
+    if(!(address & (alignment-1)) || !daisy_alignment_callback) { return; }
+    uint32_t result=daisy_alignment_callback(daisy_alignment_state,address,alignment,forced);
+    if(result>1) { tlib_abort("Invalid Daisy alignment check"); }
+    if(result) {
+        extern void *global_retaddr;
+        global_retaddr=retaddr;
+        interrupt_current_translation_block_from_current_instruction(env,EXCP_UNALIGNED);
+    }
+}
+void HELPER(daisy_alignment)(CPUState *env, uint32_t address, uint32_t alignment, uint32_t forced) {
+    daisy_check_alignment(env,address,alignment,forced,GETPC());
+}
 "#;
 const BARRIER_HELPER: &str = r#"
 extern void *daisy_barrier_state;
@@ -173,7 +196,18 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
                 .arg("--strip-components=1"),
         )?;
         let header = tlib_dir.join("include/softmmu_template.h");
-        let original = fs::read_to_string(&header)?;
+        let mut original = fs::read_to_string(&header)?;
+        let io_pc = "    cpu->mem_io_pc = (uintptr_t)retaddr;";
+        if original.matches(io_pc).count() != 2 {
+            return Err("Pinned read/write callback entries changed".into());
+        }
+        original = original.replace(io_pc, &format!("    global_retaddr = retaddr;\n{io_pc}"));
+        let declaration = "uint32_t local_ntohl(uint32_t n);";
+        pinned_replace(&mut original, declaration, &format!("{declaration}\n#ifdef TARGET_PROTO_ARM_M\nextern void daisy_check_alignment(CPUState *, uint32_t, uint32_t, uint32_t, void *);\n#endif"))?;
+        let load = "    bool is_insn_fetch = (env->current_tb == NULL);";
+        pinned_replace(&mut original, load, &format!("{load}\n#if defined(TARGET_PROTO_ARM_M) && SHIFT > 0 && !defined(SOFTMMU_CODE_ACCESS)\n    daisy_check_alignment(env,addr,SHIFT > 2 ? 4 : DATA_SIZE,SHIFT > 2,retaddr);\n#endif"))?;
+        let store = "    target_phys_addr_t ioaddr;\n    target_ulong tlb_addr;\n    int index;\n    uintptr_t addend;";
+        pinned_replace(&mut original, store, &format!("{store}\n#if defined(TARGET_PROTO_ARM_M) && SHIFT > 0\n    daisy_check_alignment(env,addr,SHIFT > 2 ? 4 : DATA_SIZE,SHIFT > 2,retaddr);\n#endif"))?;
         let needle="    uint64_t cpustate = cpu_get_state_for_memory_transaction(env, physaddr, READ_ACCESS_TYPE);";
         if original.matches(needle).count() != 1 {
             return Err("Pinned CPU fetch hook changed".into());
@@ -187,6 +221,7 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
         code.push_str(MARKER);
         code.push_str(BARRIER_EXPORT);
         code.push_str(EXCEPTION_EXPORT);
+        code.push_str(ALIGNMENT_EXPORT);
         let needle = "void tlib_reset()\n{";
         pinned_replace(
             &mut code,
@@ -205,6 +240,15 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
         fs::write(helper,format!("extern void *daisy_fetch_state;\nextern unsigned int (*daisy_fetch_runtime)(void *, unsigned int, unsigned int);\n{}",original.replace(needle,&format!("{RUNTIME}{needle}"))))?;
         let arm_helper = tlib_dir.join("arch/arm/helper.c");
         let mut code = fs::read_to_string(&arm_helper)?;
+        // Physical lazy-FP stores originate in a TCG helper rather than the
+        // softmmu accessors. Preserve that helper's unwind PC so the existing
+        // Rust instruction replay can resume without repeating completed stores.
+        for name in ["fp_lsp", "fp_lsp_no_context"] {
+            let entry = format!("void HELPER({name})(CPUState *env)\n{{");
+            pinned_replace(&mut code,&entry,&format!("{entry}\n    extern void *global_retaddr;\n    global_retaddr=GETPC();\n    env->mem_io_pc=(uintptr_t)global_retaddr;"))?;
+        }
+        let div = "        case EXCP_DIV_0:";
+        pinned_replace(&mut code, div, &format!("        case EXCP_UNALIGNED:\n            env->v7m.fault_status[env->secure] |= USAGE_FAULT_UNALIGNED;\n            v7m_raise_synchronous_exception(env, v7m_exception_number_with_security(env, ARMV7M_EXCP_USAGE, env->secure));\n            return;\n{div}"))?;
         let needle = "void do_v7m_exception_exit(CPUState *env)";
         pinned_replace(&mut code, needle, &format!("{EXCEPTION_DECL}\n{needle}"))?;
         pinned_replace(
@@ -236,8 +280,16 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
         )?;
         fs::write(
             arm_helper,
-            format!("{code}\n{BARRIER_HELPER}\n{EXCEPTION_WRAPPERS}"),
+            format!("{code}\n{BARRIER_HELPER}\n{ALIGNMENT_HELPER}\n{EXCEPTION_WRAPPERS}"),
         )?;
+        let cpu_header = tlib_dir.join("arch/arm/cpu.h");
+        let mut code = fs::read_to_string(&cpu_header)?;
+        pinned_replace(
+            &mut code,
+            "#define EXCP_DIV_0",
+            "#define EXCP_UNALIGNED      22 /* Data alignment UsageFault */\n#define EXCP_DIV_0",
+        )?;
+        fs::write(cpu_header, code)?;
         let exec = tlib_dir.join("cpu-exec.c");
         let mut code = fs::read_to_string(&exec)?;
         let needle = "int cpu_exec(CPUState *env)";
@@ -260,11 +312,35 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
             header,
             code.replace(
                 needle,
-                &format!("DEF_HELPER_2(daisy_barrier, void, env, i32)\n{needle}"),
+                &format!("DEF_HELPER_4(daisy_alignment, void, env, i32, i32, i32)\nDEF_HELPER_2(daisy_barrier, void, env, i32)\n{needle}"),
             ),
         )?;
         let translate = tlib_dir.join("arch/arm/translate.c");
         let mut code = fs::read_to_string(&translate)?;
+        for entry in [
+            "static void gen_load_exclusive(DisasContext *s, int rt, int rt2, TCGv addr, int size)\n{",
+            "static void gen_store_exclusive(DisasContext *s, int rd, int rt, int rt2, TCGv addr, int size)\n{",
+        ] {
+            pinned_replace(&mut code,entry,&format!("{entry}\n#ifdef TARGET_PROTO_ARM_M\n    gen_helper_daisy_alignment(cpu_env,addr,tcg_const_i32(size>2 ? 4:(1<<size)),tcg_const_i32(1));\n#endif"))?;
+        }
+        for name in ["ld", "st"] {
+            let entry=format!("static inline void gen_vfp_{name}(DisasContext *s, enum arm_fp_precision precision, TCGv addr, int reg)\n{{");
+            pinned_replace(&mut code,&entry,&format!("{entry}\n#ifdef TARGET_PROTO_ARM_M\n    gen_helper_daisy_alignment(cpu_env,addr,tcg_const_i32(precision==HALF_PRECISION ? 2:4),tcg_const_i32(1));\n#endif"))?;
+        }
+        // Existing decoders own instruction semantics; only insert the mandatory
+        // word-alignment check before their first memory transfer.
+        for needle in [
+            "                    if(insn & (1 << 20)) {\n                        /* ldrd */",
+            "                    /* Load/store multiple.  */\n                    addr = load_reg(s, rn);",
+            "            rn = (insn >> 8) & 0x7;\n            addr = load_reg(s, rn);\n            for(i = 0; i < 8; i++) {",
+        ] {
+            let replacement=if needle.contains("/* ldrd */") {
+                format!("                    gen_helper_daisy_alignment(cpu_env,addr,tcg_const_i32(4),tcg_const_i32(1));\n{needle}")
+            } else {
+                needle.replace("addr = load_reg(s, rn);","addr = load_reg(s, rn);\n            gen_helper_daisy_alignment(cpu_env,addr,tcg_const_i32(4),tcg_const_i32(1));")
+            };
+            pinned_replace(&mut code,needle,&replacement)?;
+        }
         for (needle,replacement) in [
             ("case 4: /* dsb */\n                case 5: /* dmb */", "case 4: /* dsb */\n                    gen_helper_daisy_barrier(cpu_env, tcg_const_i32(4));\n                    ARCH(7); gen_dxb(s); return;\n                case 5: /* dmb */\n                    gen_helper_daisy_barrier(cpu_env, tcg_const_i32(5));"),
             ("case 4: /* dsb */\n                                    case 5: /* dmb */", "case 4: /* dsb */\n                                        gen_helper_daisy_barrier(cpu_env, tcg_const_i32(4));\n                                        gen_dxb(s); break;\n                                    case 5: /* dmb */\n                                        gen_helper_daisy_barrier(cpu_env, tcg_const_i32(5));")
@@ -303,6 +379,6 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
         rid,
         &core,
     )?;
-    fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=8\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
+    fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=9\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
     Ok(())
 }

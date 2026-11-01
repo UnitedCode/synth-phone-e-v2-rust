@@ -299,10 +299,30 @@ the AXI SRAM read target busy while an IRQ stacks into D2 SRAM; the handler must
 still run early and the abandoned load must restart after return.
 The private managed assembly dispatches only its initial budget check through the existing
 virtual getter; both arithmetic field reads remain intact. Each boot attests
-the pinned IL shape, Python guard and native adapter version8.
+the pinned IL shape, Python guard and native adapter version9.
+
+A separate no-std Rust ARM guest checks enabled divide/alignment faults,
+16 MPU regions, denied data and execute-never accesses, and disabled-coprocessor
+faults through the actual exception vectors. Stacked PCs are checked against the
+faulting instruction encodings. Ordinary Normal-memory accesses remain unaligned
+when permitted; integer multiword, exclusive and floating-point transfers always
+require their architectural alignment. MPU Device/Strongly-ordered mappings are
+also tested with CCR.UNALIGN_TRP clear. Faulting stores must preserve memory.
+These requirements come from [ST PM0253, address alignment, CCR and fault status](https://www.st.com/resource/en/programming_manual/pm0253-stm32f7-series-and-stm32h7-series-cortexm7-processor-programming-manual-stmicroelectronics.pdf).
+
+The Cortex-M7 FPv5-D16 profile exposes read-only MVFR0/1/2 through the PPB,
+using [Arm DDI0489B, section8.3 and table8-2](https://documentation-service.arm.com/static/5e906b038259fe2368e2a7bb).
+The guest checks feature values, double-precision addition, automatic and lazy frame
+reservation/completion, EXC_RETURN, FPCAR, S0/FPSCR and SP restoration. Both TCM
+and D2 SRAM stacks run in both modes; SRAM lazy stores use the existing Rust transaction replay
+after capturing the TCG helper's precise unwind PC. Completed stores are replayed
+without duplicate bus service when a later store stalls. This corrects the prior
+unmodeled-context abort. Separate disabled divide/alignment/lazy-save controls
+must exit normally and fail the intended result gate. `cpu` runs this focused
+suite; `probe` and `run` also include it. No CI workflow or OS matrix was added.
 
 These tests verify functional service scenarios. Late arrival, complete
-tail-chaining timing, precise MPU/BusFault delivery, external FP-frame coverage,
+tail-chaining timing, full MPU/fault-priority and BusFault coverage, FP numerical corner cases,
 snapshot/reset during in-flight operations, bus turnaround, actual target
 overlap, FMC row/refresh scheduling and pipeline fetch arrival times still need
 implementation or independent validation. The source-backed tests do not justify

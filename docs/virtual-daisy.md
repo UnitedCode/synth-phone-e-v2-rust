@@ -67,7 +67,7 @@ $labTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
 cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target $labTarget -- startup 'C:\Tools\renode_1.17.0-portable' 'C:\Phone Tests\startup' --board rev5
 ```
 
-Replace `startup` with `storage`, `probe` or `run` for the corresponding scope.
+Replace `startup` with `cpu`, `storage`, `probe` or `run` for the corresponding scope.
 Rust source and test targets cross-check for Windows and Linux locally. Both the
 Rust model DLL and the pinned CPU adapter link as Windows x64 PE libraries; their
 required exports and runtime imports have been inspected. The managed adapter
@@ -105,7 +105,7 @@ The ELF header's entry point is currently zero because of a pre-existing linker
 entry-symbol warning; it is not used as the reset vector.
 
 Use `probe` in place of `run` to execute the generated ARM cache, internal/external flash,
-writeback/exception and interrupt-during-wait programs with their negative
+CPU fault/FPU, writeback/exception and interrupt-during-wait programs with their negative
 controls. `timing` runs only the latter two programs and their controls for
 faster feedback. `probe-summary.txt` identifies the omitted checks; neither
 command tests production audio. Set `VIRTUAL_DAISY_FLASH_MAXIMUM=1` to select
@@ -117,7 +117,13 @@ exits. Its `startup-summary.txt` explicitly excludes full audio validation.
 `storage` runs only the ARM QSPI program/erase, mapped execution, cache
 maintenance and interrupt tests, including masked-IRQ, corrupt-data and stale-timer negative
 controls. `storage-summary.txt` excludes production startup/audio and the other
-ARM probes. Both modes use the same guarded engine and record firmware/model
+ARM probes. `cpu` runs a separate Rust ARM guest for divide, alignment, MPU/XN,
+disabled-FPU faults, FP identification, double-precision arithmetic and automatic/lazy
+FP frames with DTCM and shared SRAM stacks. It checks precise stacked PCs,
+saved/restored FP state, unchanged memory after faulting stores, and negative
+controls for disabled divide/alignment/lazy preservation. Its summary explicitly
+excludes production startup/audio. The synthetic guest never replaces or patches
+the production firmware artifact. All modes use the same guarded engine and record firmware/model
 hashes; input WAV replay is available only with `run`.
 
 An optional fourth argument replays the first second of a user WAV after running

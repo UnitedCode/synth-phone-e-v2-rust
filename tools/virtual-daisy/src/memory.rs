@@ -8,6 +8,8 @@ type Result<T> = std::result::Result<T, &'static str>;
 const LINE: u32 = 32;
 const SETS: usize = 128;
 const WAYS: usize = 4;
+// Cortex-M7 FPv5-D16: ARM DDI0489, floating-point identification registers.
+pub const FP_FEATURES: [u32; 3] = [0x10110221, 0x12000011, 0x00000040];
 
 #[derive(Clone, Default)]
 struct CacheLine {
@@ -169,6 +171,13 @@ impl Default for SystemMemory {
     }
 }
 impl SystemMemory {
+    pub fn alignment_fault(&self, address: u32, alignment: u32, forced: bool) -> Result<bool> {
+        if !matches!(alignment, 1 | 2 | 4) {
+            return Err("invalid CPU alignment");
+        }
+        Ok(address & (alignment - 1) != 0
+            && (forced || self.ccr & 8 != 0 || !self.normal_memory(address)))
+    }
     pub fn attach_qspi(&mut self, qspi: Arc<std::sync::Mutex<crate::qspi::Qspi>>) {
         self.qspi = Some(qspi);
     }
@@ -207,6 +216,9 @@ impl SystemMemory {
     pub fn read_scb(&self, offset: u64) -> Result<u32> {
         match offset {
             0xd14 => Ok(self.ccr),
+            0xf40 => Ok(FP_FEATURES[0]),
+            0xf44 => Ok(FP_FEATURES[1]),
+            0xf48 => Ok(FP_FEATURES[2]),
             0xd78 => Ok(0x09000003),
             0xd7c => Ok(0x8303c003),
             0xd80 => {

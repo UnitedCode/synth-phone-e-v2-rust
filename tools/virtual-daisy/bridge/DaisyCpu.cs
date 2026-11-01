@@ -17,6 +17,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             architecture.AttachCPU(this);
             this.architecture=architecture;
             tlibDaisySetRuntimeFetch(architecture.NativeState,architecture.RuntimeFetchPointer);
+            tlibDaisySetAlignment(architecture.NativeState,architecture.AlignmentPointer);
             tlibDaisySetBarrier(architecture.NativeState,architecture.BarrierPointer);
             tlibDaisySetException(architecture.NativeState,architecture.ExceptionPointer);
         }
@@ -75,10 +76,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public uint FetchTagVersion => tlibDaisyFetchTagVersion();
         public void DisableRuntimeFetching() { tlibDaisySetRuntimeFetch(IntPtr.Zero,IntPtr.Zero); }
         public void DisableBarriers() {tlibDaisySetBarrier(IntPtr.Zero,IntPtr.Zero);}
+        public void DisableAlignment() {tlibDaisySetAlignment(IntPtr.Zero,IntPtr.Zero);}
         // Assigned by Renode's native binder, as required by its import API.
 #pragma warning disable CS0649
         [Import] private readonly Func<uint> tlibDaisyFetchTagVersion;
         [Import] private readonly Action<IntPtr,IntPtr> tlibDaisySetRuntimeFetch;
+        [Import] private readonly Action<IntPtr,IntPtr> tlibDaisySetAlignment;
         [Import] private readonly Action<int> tlibRequestTranslationBlockInterrupt;
         [Import] private readonly Func<ulong> tlibDaisyMemoryContext;
         [Import] private readonly Action<IntPtr,IntPtr> tlibDaisySetBarrier;
