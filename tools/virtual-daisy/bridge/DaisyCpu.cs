@@ -2,6 +2,7 @@
 // instruction-fetch tag; it is never inferred from PC, thread or TB state.
 using System;
 using System.Threading;
+using System.Runtime.InteropServices;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.CPU;
@@ -16,11 +17,24 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             :base(cpuType,machine,nvic,numberOfMPURegions:numberOfMPURegions) {
             architecture.AttachCPU(this);
             this.architecture=architecture;
+            this.nvic=nvic;
+            lateInterrupt=ReplaceLateInterrupt;
             tlibDaisySetRuntimeFetch(architecture.NativeState,architecture.RuntimeFetchPointer);
             tlibDaisySetAlignment(architecture.NativeState,architecture.AlignmentPointer);
             tlibDaisySetBarrier(architecture.NativeState,architecture.BarrierPointer);
             tlibDaisySetException(architecture.NativeState,architecture.ExceptionPointer);
+            tlibDaisySetLateInterrupt(Marshal.GetFunctionPointerForDelegate(lateInterrupt));
+            tlibDaisySetTailchain(1);
         }
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint LateInterrupt(uint active);
+        private uint ReplaceLateInterrupt(uint active) {
+            if(!nvic.FindPendingInterrupt().HasValue) return active;
+            if(!nvic.CompleteIRQ((int)active)) throw new InvalidOperationException("Late interrupt replaced an inactive exception");
+            nvic.SetPendingIRQ((int)active);
+            return checked((uint)(nvic.AcknowledgeIRQ() ?? throw new InvalidOperationException("Late interrupt had no pending replacement")));
+        }
+        public void DisableLateArrival() { tlibDaisySetLateInterrupt(IntPtr.Zero); }
+        public void DisableTailChaining() { tlibDaisySetTailchain(0); }
         public override ExecutionResult ExecuteInstructions(ulong numberOfInstructionsToExecute,out ulong numberOfExecutedInstructions) {
             architecture.Synchronize();
             var result=base.ExecuteInstructions(numberOfInstructionsToExecute,out numberOfExecutedInstructions);
@@ -86,9 +100,13 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         [Import] private readonly Func<ulong> tlibDaisyMemoryContext;
         [Import] private readonly Action<IntPtr,IntPtr> tlibDaisySetBarrier;
         [Import] private readonly Action<IntPtr,IntPtr> tlibDaisySetException;
+        [Import] private readonly Action<IntPtr> tlibDaisySetLateInterrupt;
+        [Import] private readonly Action<uint> tlibDaisySetTailchain;
         [Import] private readonly Func<uint> tlibDaisyIrqCanPreempt;
 #pragma warning restore CS0649
         private readonly DaisyArchitecture architecture;
+        private readonly NVIC nvic;
+        private readonly LateInterrupt lateInterrupt;
         private int irqLevel;
         private ulong busSkipCycles,busSkipNanoseconds;
         private bool busWaitInterruptible;

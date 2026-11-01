@@ -299,7 +299,33 @@ the AXI SRAM read target busy while an IRQ stacks into D2 SRAM; the handler must
 still run early and the abandoned load must restart after return.
 The private managed assembly dispatches only its initial budget check through the existing
 virtual getter; both arithmetic field reads remain intact. Each boot attests
-the pinned IL shape, Python guard and native adapter version11.
+the pinned IL shapes, Python guard and native adapter version12.
+
+[PM0253 section2.4.7](https://www.st.com/resource/en/programming_manual/pm0253-stm32f7-series-and-stm32h7-series-cortexm7-processor-programming-manual-stmicroelectronics.pdf)
+requires late arrival and tail-chaining to reuse the interrupted frame. The
+adapter now resumes arbitration while entry is waiting, lets the existing NVIC
+select a higher-priority replacement, and re-pends the original exception.
+Completed stack stores are retained. Redirected vector reads release their CPU
+request slot while preserving already-issued fabric occupancy; a refill that
+already covers the replacement vector is reused.
+
+Canonical H750 exception returns deactivate once, then checkpoint before
+unstacking. Pending eligible exceptions reuse that frame without a pop/push
+round trip. A resumed return can select an IRQ before native state restoration.
+The pinned NVIC's RETTOBASE callback previously counted only system exceptions;
+the private assembly now counts its complete active stack. Every boot attests
+the exact patched IL, without changing the source Renode installation.
+
+A Rust ARM guest checks late arrival, ordinary tail-chaining, equal-priority
+deferral, genuine nesting, and an IRQ during modeled unstack service. It records
+handler order, EXC_RETURN, both SPs, IPSR, IABR/RETTOBASE, saved PC/xPSR and final
+thread state. Reuse cases require eight counted basic-frame stores; real nesting requires
+sixteen basic-frame stores. A lazy-FP tail-chain case also requires the shared
+104-byte extended frame and restoration of the thread's S0/FPSCR after both
+handlers overwrite them. Disabled-late and disabled-tail controls must exit normally and fail
+their frame gates. Priority-mask/fault combinations, physical late-arrival
+cutoffs and exact pipeline/stack-pop timing remain unverified. These tests
+establish functional transitions, not a silicon cycle count.
 
 A separate no-std Rust ARM guest checks enabled divide/alignment faults,
 16 MPU regions, denied data and execute-never accesses, and disabled-coprocessor
@@ -370,8 +396,8 @@ guest IRQ. These are functional response tests on the existing 1µs DMA service
 grid. Controller state is evaluated at the modeled read response; physical
 ABORT latency, partially returned bursts and pin timing are not certified.
 
-These tests verify functional service scenarios. Late arrival, complete
-tail-chaining timing, full MPU/fault-priority and BusFault coverage, FP numerical corner cases,
+These tests verify functional service scenarios. Physical late-arrival cutoffs,
+complete tail-chaining timing, full MPU/fault-priority and BusFault coverage, FP numerical corner cases,
 snapshot/reset during in-flight operations, bus turnaround, actual target
 overlap, FMC row/refresh scheduling and pipeline fetch arrival times still need
 implementation or independent validation. The source-backed tests do not justify
@@ -408,7 +434,7 @@ functional coupling; they do not calibrate CPU headroom.
 | Firmware boot and selected audio path | Executed in simulation | Same ELF on an identified physical revision |
 | Serial data, reset and control behavior | Source-backed cases | Captured control transactions and SAI words/edges, including reset and faults |
 | Interrupt/buffer ownership | Functional DMA and IRQ tests | Hardware DMA HT/TC, NVIC and task traces with timestamps and simultaneous UI/MIDI load |
-| Performance and deadlines | Functional caches/runtime refetch, shared CPU/DMA stalls, live flash buffer/programming/erase, deferred dirty writes/DSB, resumable exception service and load-wait IRQ preemption | Pipeline/speculation and silicon victim policy, complete store buffers, late arrival/tail-chaining, FMC row/refresh behavior, actual overlap and calibrated CPU/bus costs |
+| Performance and deadlines | Functional caches/runtime refetch, shared CPU/DMA stalls, live flash buffer/programming/erase, deferred dirty writes/DSB, resumable exception service, load-wait IRQ preemption and late-arrival/tail-chain frame reuse | Pipeline/speculation and silicon victim policy, complete store buffers, physical late-arrival cutoff and tail-chain cycles, FMC row/refresh behavior, actual overlap and calibrated CPU/bus costs |
 | Clock rates and drift | RCC/PLL/SAI rational derivation, 1µs event grid, DWT/core and timer prescalers | PLL/oscillator lock and jitter, clock-domain crossing delays, oscillator tolerance, independent frequency measurements |
 | Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal and passband-delay stage | Full ADC/DAC filters, internal rounding and startup behavior, independent impulse/frequency responses per codec |
 | Analog sound | No analog model | Calibrated gain, impedance, headroom, clipping, noise and distortion measurements |

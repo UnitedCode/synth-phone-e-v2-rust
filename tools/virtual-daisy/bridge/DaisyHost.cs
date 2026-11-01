@@ -8,6 +8,7 @@ using System.Runtime.Loader;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Core.Extensions;
 using Antmicro.Renode.Peripherals.CPU;
+using Antmicro.Renode.Peripherals.IRQControllers;
 using Antmicro.Renode.PlatformDescription.UserInterface;
 using Antmicro.Renode.Utilities;
 using Antmicro.Renode.Time;
@@ -31,6 +32,7 @@ public static class DaisyHost
             return File.Exists(path) ? context.LoadFromAssemblyPath(path) : null;
         };
         if(args[1] == "--disable-python") { DisablePython(root, args[2]); return; }
+        if(args[1] == "--verify-managed") { VerifyPythonGuard();VerifyPacingAdapter();VerifyNvicAdapter();return; }
         Boot(args);
     }
     private static void DisablePython(string root, string output)
@@ -57,6 +59,28 @@ public static class DaisyHost
             var reads=body.Body.Instructions.Where(i=>i.OpCode==Mono.Cecil.Cil.OpCodes.Ldfld && i.Operand is Mono.Cecil.FieldReference f && f.Name=="skipInstructions").ToArray();
             if(reads.Length!=3) throw new InvalidOperationException("Pinned CPU pacing adapter point changed");
             reads[0].OpCode=Mono.Cecil.Cil.OpCodes.Callvirt;reads[0].Operand=getter;
+            // The pinned NVIC incorrectly counts only system exceptions for
+            // RETTOBASE. Keep its active stack authoritative, including IRQs.
+            var nvic=assembly.MainModule.Types.Single(t=>t.FullName==typeof(NVIC).FullName);
+            var retToBase=nvic.Methods.Single(m=>m.HasBody
+                && m.Body.Instructions.Any(i=>i.Operand is Mono.Cecil.MethodReference call && call.Name=="Intersect")
+                && m.Body.Instructions.Any(i=>i.Operand is Mono.Cecil.FieldReference field && field.Name=="activeIRQs"));
+            if(!retToBase.HasThis || retToBase.Parameters.Count!=1 || retToBase.ReturnType.MetadataType!=Mono.Cecil.MetadataType.Boolean)
+                throw new InvalidOperationException("Pinned NVIC active-count callback changed");
+            var active=retToBase.Body.Instructions.Select(i=>i.Operand).OfType<Mono.Cecil.FieldReference>().Single(f=>f.Name=="activeIRQs");
+            var count=nvic.Methods.Single(m=>m.Name=="FindPendingInterrupt").Body.Instructions.Select(i=>i.Operand).OfType<Mono.Cecil.MethodReference>()
+                .First(m=>m.Name=="get_Count" && m.DeclaringType.FullName.StartsWith("System.Collections.Generic.Stack`1"));
+            retToBase.Body.Instructions.Clear();retToBase.Body.ExceptionHandlers.Clear();retToBase.Body.Variables.Clear();
+            retToBase.Body.MaxStackSize=2;retToBase.Body.InitLocals=false;
+            var activeIl=retToBase.Body.GetILProcessor();
+            activeIl.Append(activeIl.Create(Mono.Cecil.Cil.OpCodes.Ldarg_0));
+            activeIl.Append(activeIl.Create(Mono.Cecil.Cil.OpCodes.Ldfld,active));
+            activeIl.Append(activeIl.Create(Mono.Cecil.Cil.OpCodes.Callvirt,count));
+            activeIl.Append(activeIl.Create(Mono.Cecil.Cil.OpCodes.Ldc_I4_1));
+            activeIl.Append(activeIl.Create(Mono.Cecil.Cil.OpCodes.Cgt));
+            activeIl.Append(activeIl.Create(Mono.Cecil.Cil.OpCodes.Ldc_I4_0));
+            activeIl.Append(activeIl.Create(Mono.Cecil.Cil.OpCodes.Ceq));
+            activeIl.Append(activeIl.Create(Mono.Cecil.Cil.OpCodes.Ret));
             assembly.Write(output + ".tmp");
             File.Move(output + ".tmp", output, true);
         }
@@ -71,6 +95,7 @@ public static class DaisyHost
         TypeManager.Instance.ScanFile(Assembly.GetExecutingAssembly().Location, false);
         VerifyPythonGuard();
         VerifyPacingAdapter();
+        VerifyNvicAdapter();
         var emulation = EmulationManager.Instance.CurrentEmulation;
         var machine = new Machine();
         emulation.AddMachine(machine, "daisy");
@@ -88,7 +113,7 @@ public static class DaisyHost
         ((DaisyGpio)machine["sysbus.gpioPortD"]).ConfigureStraps(uint.Parse(args[7]));
         Console.WriteLine("Board: " + args[6]);
         var cpu = (CortexM)machine["sysbus.cpu"];
-        if(((DaisyCortexM)cpu).FetchTagVersion!=11) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
+        if(((DaisyCortexM)cpu).FetchTagVersion!=12) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
         Console.WriteLine("Native instruction-fetch tag verified");
         cpu.VectorTableOffset = 0x08000000;
         cpu.SP = bus.ReadDoubleWord(0x08000000);
@@ -103,6 +128,7 @@ public static class DaisyHost
         if(args[5]=="cpu" || args[5]=="cpu-div-fault" || args[5]=="cpu-lazy-fault" || args[5]=="cpu-align-fault" || args[5]=="cpu-ram" || args[5]=="cpu-eager" || args[5]=="cpu-eager-ram") {CpuProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="bus" || args[5]=="bus-dma-valid" || args[5]=="bus-dma-disable" || args[5]=="bus-dma-abort" || args[5]=="bus-dma-range" || args[5]=="bus-fault-control") {BusProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="fetch" || args[5]=="fetch-prefix-control") {FetchProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5].StartsWith("transition-")) {TransitionProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -261,6 +287,43 @@ public static class DaisyHost
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM QSPI storage/polling interrupt probe executed; results require Rust grading");
     }
+    private static void TransitionProbes(Emulation emulation,Machine machine,string prefix,string kind) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        var nvic=(DaisyNvic)machine["sysbus.nvic"];var architecture=nvic.Architecture;
+        bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"transition-probe.elf"));
+        cpu.VectorTableOffset=0x6000;cpu.SP=0x3001f000;cpu.PC=bus.ReadDoubleWord(0x6004);
+        bus.WriteDoubleWord(0x20019700,kind=="transition-equal" ? 1U:kind=="transition-nested" ? 2U:kind=="transition-return" ? 4U:kind=="transition-fp" ? 8U:0U);
+        bus.WriteDoubleWord(0x20019704,0);
+        if(kind=="transition-late-control") cpu.DisableLateArrival();
+        if(kind=="transition-tail-control") cpu.DisableTailChaining();
+        emulation.RunFor(TimeInterval.FromMilliseconds(1));
+        if(bus.ReadDoubleWord(0x20019600)!=0x42) throw new InvalidOperationException("ARM transition guest not ready");
+        architecture.InjectBusLoad(8,100000,true);
+        nvic.SetPendingIRQ(kind=="transition-return" ? 17:16);
+        bool tail=kind=="transition-tail" || kind=="transition-tail-control" || kind=="transition-fp";
+        if(tail) nvic.SetPendingIRQ(17);
+        emulation.RunFor(TimeInterval.FromMicroseconds(2));
+        File.WriteAllBytes(prefix+".transition-early.bin",bus.ReadBytes(0x20019600UL,128));
+        architecture.Save(prefix+".transition-early.memory.txt");
+        if(kind=="transition-nested") {
+            emulation.RunFor(TimeInterval.FromMicroseconds(150));
+            if(bus.ReadDoubleWord(0x20019618)!=1) throw new InvalidOperationException("ARM nested control did not reach the active low-priority handler");
+        }
+        if(kind=="transition-return") {
+            emulation.RunFor(TimeInterval.FromMicroseconds(150));
+            if(bus.ReadDoubleWord(0x20019618)!=2) throw new InvalidOperationException("ARM return fixture did not reach the active high-priority handler");
+            architecture.InjectBusLoad(8,100000);
+            bus.WriteDoubleWord(0x20019704,1);
+            emulation.RunFor(TimeInterval.FromMicroseconds(2));
+            File.WriteAllBytes(prefix+".transition-return.bin",bus.ReadBytes(0x20019600UL,128));
+            architecture.Save(prefix+".transition-return.memory.txt");
+            nvic.SetPendingIRQ(16);
+        } else if(!tail) nvic.SetPendingIRQ(17);
+        emulation.RunFor(TimeInterval.FromMicroseconds(500));
+        File.WriteAllBytes(prefix+".transition.bin",bus.ReadBytes(0x20019600UL,128));
+        architecture.Save(prefix+".memory.txt");
+        Console.WriteLine("ARM late-arrival/tail-chain fixture executed; results require Rust grading");
+    }
     private static void FetchProbes(Emulation emulation,Machine machine,string prefix,string kind) {
         var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
         bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"fetch-probe.elf"));
@@ -314,6 +377,21 @@ public static class DaisyHost
             foreach(uint word in new uint[]{7,11,15,23,27,31,35,39,67,71,75,79,83,87,91}) output.Write(bus.ReadDoubleWord(bus.ReadDoubleWord(0x20018000+4*word)));
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM fault/FPU probe executed with "+(kind.EndsWith("-ram") ? "SRAM":"DTCM")+" stack; results require Rust grading");
+    }
+    private static void VerifyNvicAdapter() {
+        using(var assembly=Mono.Cecil.AssemblyDefinition.ReadAssembly(typeof(NVIC).Assembly.Location)) {
+            var nvic=assembly.MainModule.Types.Single(t=>t.FullName==typeof(NVIC).FullName);
+            var method=nvic.Methods.Single(m=>m.HasBody && m.Name.Contains("<") && m.Body.Instructions.Count==8
+                && m.Body.Instructions[1].Operand is Mono.Cecil.FieldReference field && field.Name=="activeIRQs");
+            var instructions=method.Body.Instructions;
+            var expected=new[]{Mono.Cecil.Cil.OpCodes.Ldarg_0,Mono.Cecil.Cil.OpCodes.Ldfld,Mono.Cecil.Cil.OpCodes.Callvirt,
+                Mono.Cecil.Cil.OpCodes.Ldc_I4_1,Mono.Cecil.Cil.OpCodes.Cgt,Mono.Cecil.Cil.OpCodes.Ldc_I4_0,Mono.Cecil.Cil.OpCodes.Ceq,Mono.Cecil.Cil.OpCodes.Ret};
+            if(!instructions.Select(i=>i.OpCode).SequenceEqual(expected)
+                || !(instructions[2].Operand is Mono.Cecil.MethodReference count) || count.Name!="get_Count"
+                || !count.DeclaringType.FullName.StartsWith("System.Collections.Generic.Stack`1"))
+                throw new InvalidOperationException("Missing NVIC active-count adapter");
+        }
+        Console.WriteLine("NVIC active-count adapter verified");
     }
     private static void VerifyPacingAdapter() {
         using(var assembly=Mono.Cecil.AssemblyDefinition.ReadAssembly(typeof(BaseCPU).Assembly.Location)) {
