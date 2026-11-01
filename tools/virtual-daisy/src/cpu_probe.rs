@@ -1,34 +1,8 @@
 //! Build and grade the independent Rust ARM guest through public memory results.
-use super::{checked, grade, Result};
-use std::{fs, path::Path, process::Command};
+use super::{grade, Result};
+use std::{fs, path::Path};
 pub fn prepare(directory: &Path) -> Result<()> {
-    let source = directory.join("cpu-probe.rs");
-    let linker = directory.join("cpu-probe.ld");
-    fs::write(&source, include_str!("../guests/cpu.rs"))?;
-    fs::write(&linker, include_str!("../guests/cpu.ld"))?;
-    checked(
-        Command::new("rustc")
-            .args([
-                "--edition=2021",
-                "--target",
-                "thumbv7em-none-eabihf",
-                "-C",
-                "target-cpu=cortex-m7",
-                "-C",
-                "opt-level=s",
-                "-C",
-                "panic=abort",
-                "-C",
-            ])
-            .arg(format!(
-                "link-arg=-T{}",
-                virtual_daisy::host::tool_path(&linker)?
-            ))
-            .args(["--crate-name", "daisy_cpu_probe"])
-            .arg(source)
-            .arg("-o")
-            .arg(directory.join("cpu-probe.elf")),
-    )
+    super::guest::prepare(directory, "cpu", include_str!("../guests/cpu.rs"))
 }
 fn equal(actual: u32, expected: u32, label: &str) -> Result<()> {
     if actual != expected {

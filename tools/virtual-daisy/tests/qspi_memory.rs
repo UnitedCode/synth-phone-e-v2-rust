@@ -1,5 +1,37 @@
 use std::sync::{Arc, Mutex};
 use virtual_daisy::{clock::Rate, memory::SystemMemory, qspi::Qspi};
+
+#[test]
+fn instruction_line_service_uses_the_aligned_line_address_near_fsize() {
+    let q = Arc::new(Mutex::new(Qspi::default()));
+    {
+        let mut controller = q.lock().unwrap();
+        controller
+            .configure_clock(Some(Rate {
+                numerator: 16_000_000,
+                denominator: 1,
+            }))
+            .unwrap();
+        mapped(&mut controller);
+        controller.write(4, 5 << 16, 4).unwrap(); // 64 bytes; 0x38 is inside its final line.
+    }
+    let mut memory = SystemMemory::default();
+    memory.attach_qspi(q);
+    let hclk = Rate {
+        numerator: 64_000_000,
+        denominator: 1,
+    };
+    memory.configure_bus(hclk, hclk, None);
+    let wait = memory.access_wait(0x90000038, 2, false, true).unwrap();
+    assert!(wait > 0);
+    memory.take_cpu_debt();
+    memory.advance_time(memory.now() + wait).unwrap();
+    let wait = memory.access_wait(0x90000038, 2, false, true).unwrap();
+    memory.take_cpu_debt();
+    memory.advance_time(memory.now() + wait).unwrap();
+    assert_eq!(memory.access_wait(0x90000038, 2, false, true).unwrap(), 0);
+    assert_eq!(memory.read_instruction(0x90000038, 2).unwrap(), 0xffff);
+}
 fn mapped(q: &mut Qspi) {
     q.write(0, 1, 4).unwrap();
     q.write(4, 22 << 16, 4).unwrap();

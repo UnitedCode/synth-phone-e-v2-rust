@@ -55,10 +55,20 @@ fn documented_qspi_bus_errors_have_a_distinct_ffi_status() {
             daisy_memory_read(&mut architecture, 0x907ffffe, 4, 2),
             u64::from(u32::MAX)
         );
-        // A valid prefix followed by an external fault needs instruction-level
-        // service. Do not fabricate a block-start fault and skip that prefix.
-        assert_eq!(daisy_runtime_fetch(&mut architecture, 0x907ffffe, 4), 3);
-        architecture.write(0xd14, 1 << 16).unwrap();
+        // One Thumb32 instruction can fault on its second halfword.
+        assert_eq!(daisy_runtime_fetch(&mut architecture, 0x907ffffe, 4), 4);
+        assert_eq!(
+            daisy_memory_read(&mut architecture, 0x907ffffc, 4, 2),
+            u64::from(u32::MAX)
+        );
+        assert_eq!(
+            daisy_memory_read(&mut architecture, 0x90800000, 4, 2),
+            u64::from(u32::MAX)
+        );
+        // Defensive callers using a multi-instruction block still cannot skip
+        // an otherwise valid instruction prefix. Native QSPI blocks are single.
+        assert_eq!(daisy_runtime_fetch(&mut architecture, 0x907ffffc, 8), 3);
+        architecture.write(0xd14, 3 << 16).unwrap();
         assert_eq!(
             daisy_cpu_access(
                 &mut architecture,
@@ -71,6 +81,11 @@ fn documented_qspi_bus_errors_have_a_distinct_ffi_status() {
             0
         );
         assert_eq!(value, u64::from(u32::MAX));
+        assert_eq!(
+            daisy_memory_read(&mut architecture, 0x90000000, 4, 2),
+            u64::from(u32::MAX)
+        );
+        assert_eq!(daisy_runtime_fetch(&mut architecture, 0x90000000, 4), 0);
         assert_eq!(daisy_write_width(&mut controller, 0, 0, 4), 0);
         assert_eq!(
             daisy_cpu_access(
@@ -84,6 +99,7 @@ fn documented_qspi_bus_errors_have_a_distinct_ffi_status() {
             0
         );
         assert_eq!(value, u64::from(u32::MAX)); // Cache hit does not issue an external transaction.
+        assert_eq!(daisy_runtime_fetch(&mut architecture, 0x90000000, 4), 0);
     }
 }
 
@@ -103,5 +119,14 @@ fn unmodeled_bus_failures_do_not_masquerade_as_hardware_faults() {
             ),
             u64::MAX
         );
+    }
+}
+
+#[test]
+fn qspi_translation_asks_for_single_instruction_blocks_without_executing_fetches() {
+    let mut architecture = Peripheral::new(12);
+    unsafe {
+        assert_eq!(daisy_runtime_fetch(&mut architecture, 0x90000000, 0), 5);
+        assert_eq!(daisy_runtime_fetch(&mut architecture, 0x08000000, 0), 0);
     }
 }

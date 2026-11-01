@@ -3,7 +3,9 @@ mod bus_probe;
 mod conformance;
 mod core;
 mod cpu_probe;
+mod fetch_probe;
 mod grade;
+mod guest;
 mod platform;
 mod probe;
 mod storage_probe;
@@ -149,6 +151,9 @@ impl Host<'_> {
             ".fault-sites.bin",
             ".fault.txt",
             ".fault-negative.txt",
+            ".fetch.bin",
+            ".fetch.txt",
+            ".fetch-negative.txt",
         ] {
             let path = grade::artifact(&capture, suffix);
             if path.exists() {
@@ -212,6 +217,8 @@ impl Host<'_> {
             "bus",
             "bus-dma-valid",
             "bus-fault-control",
+            "fetch",
+            "fetch-prefix-control",
         ]
         .contains(&fault)
         {
@@ -284,6 +291,21 @@ fn cpu_checks(host: &Host<'_>, tone: &Path) -> Result<()> {
     fs::write(
         grade::artifact(&broken, ".fault-negative.txt"),
         format!("suppressed_data_busfault=caught\n{error}\n"),
+    )?;
+    guest::prepare(host.directory, "fetch", include_str!("../guests/fetch.rs"))?;
+    let capture = host.boot("fetch", tone, "fetch")?;
+    fetch_probe::check(&capture)?;
+    let broken = host.boot("fetch-prefix-control", tone, "fetch-prefix-control")?;
+    let error = fetch_probe::check(&broken)
+        .err()
+        .ok_or("Corrupt QSPI prefix escaped grading")?
+        .to_string();
+    if !error.contains("ARM fetch valid prefix marker: expected 0x5a, got 0x0") {
+        return Err(format!("Unexpected fetch-prefix control: {error}").into());
+    }
+    fs::write(
+        grade::artifact(&broken, ".fetch-negative.txt"),
+        format!("corrupt_qspi_prefix=caught\n{error}\n"),
     )?;
     Ok(())
 }
@@ -469,7 +491,7 @@ fn run(
         if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
             return Err("Firmware changed during CPU check".into());
         }
-        let summary="ARM CPU faults/FPU, QSPI/FLASH bus errors and DMA QSPI completion/error probes passed, including all negative controls; production startup/audio and other ARM probes NOT RUN\n";
+        let summary="ARM CPU faults/FPU, QSPI/FLASH bus errors, DMA QSPI completion/error and precise mapped-fetch probes passed, including all negative controls; production startup/audio and other ARM probes NOT RUN\n";
         fs::write(directory.join("cpu-summary.txt"), summary)?;
         print!("{summary}");
         return Ok(());
