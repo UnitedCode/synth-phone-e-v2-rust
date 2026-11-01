@@ -34,6 +34,7 @@ pub fn execution_evidence(prefix: &Path) -> Result<()> {
     if !host.contains("Python execution guard verified")
         || !host.contains("Native instruction-fetch tag verified")
         || !host.contains("IRQ-aware wait pacing adapter verified")
+        || !host.contains("NVIC active-count adapter verified")
     {
         return Err("Missing execution/guard evidence".into());
     }

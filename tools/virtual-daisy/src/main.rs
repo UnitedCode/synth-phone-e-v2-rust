@@ -9,6 +9,7 @@ mod guest;
 mod platform;
 mod probe;
 mod storage_probe;
+mod transition_probe;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -154,6 +155,13 @@ impl Host<'_> {
             ".fetch.bin",
             ".fetch.txt",
             ".fetch-negative.txt",
+            ".transition.bin",
+            ".transition-early.bin",
+            ".transition-early.memory.txt",
+            ".transition.txt",
+            ".transition-return.bin",
+            ".transition-return.memory.txt",
+            ".transition-negative.txt",
         ] {
             let path = grade::artifact(&capture, suffix);
             if path.exists() {
@@ -222,6 +230,14 @@ impl Host<'_> {
             "bus-fault-control",
             "fetch",
             "fetch-prefix-control",
+            "transition-late",
+            "transition-tail",
+            "transition-equal",
+            "transition-nested",
+            "transition-return",
+            "transition-fp",
+            "transition-late-control",
+            "transition-tail-control",
         ]
         .contains(&fault)
         {
@@ -316,6 +332,51 @@ fn cpu_checks(host: &Host<'_>, tone: &Path) -> Result<()> {
         grade::artifact(&broken, ".fetch-negative.txt"),
         format!("corrupt_qspi_prefix=caught\n{error}\n"),
     )?;
+    guest::prepare(
+        host.directory,
+        "transition",
+        include_str!("../guests/transition.rs"),
+    )?;
+    let mut failures = Vec::new();
+    for kind in [
+        "transition-late",
+        "transition-tail",
+        "transition-equal",
+        "transition-nested",
+        "transition-return",
+        "transition-fp",
+    ] {
+        let capture = host.boot(kind, tone, kind)?;
+        if let Err(error) = transition_probe::check(&capture, kind) {
+            failures.push(format!("{kind}: {error}"));
+        }
+    }
+    if !failures.is_empty() {
+        return Err(failures.join("\n").into());
+    }
+    for (kind, expected) in [
+        (
+            "transition-late-control",
+            "ARM transition EXC_RETURN: expected 0xfffffff9, got 0xfffffff1",
+        ),
+        (
+            "transition-tail-control",
+            "ARM transition stacked extra or missing frames",
+        ),
+    ] {
+        let capture = host.boot(kind, tone, kind)?;
+        let error = transition_probe::check(&capture, kind)
+            .err()
+            .ok_or("Disabled exception transition escaped grading")?
+            .to_string();
+        if !error.contains(expected) {
+            return Err(format!("Unexpected exception transition control: {error}").into());
+        }
+        fs::write(
+            grade::artifact(&capture, ".transition-negative.txt"),
+            format!("{kind}=caught\n{error}\n"),
+        )?;
+    }
     Ok(())
 }
 
@@ -500,7 +561,7 @@ fn run(
         if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
             return Err("Firmware changed during CPU check".into());
         }
-        let summary="ARM CPU faults/FPU, QSPI/FLASH bus errors, DMA QSPI completion/error and precise mapped-fetch probes passed, including all negative controls; production startup/audio and other ARM probes NOT RUN\n";
+        let summary="ARM CPU faults/FPU, QSPI/FLASH bus errors, DMA QSPI completion/error, precise mapped-fetch and exception frame-transition probes passed, including all negative controls; production startup/audio and other ARM probes NOT RUN\n";
         fs::write(directory.join("cpu-summary.txt"), summary)?;
         print!("{summary}");
         return Ok(());
@@ -785,7 +846,7 @@ fn run(
         return Err("Firmware changed during the run".into());
     }
     let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nBus-contention negative control: caught by audio/FIFO gates and delayed DMA\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nARM flash programming/erase: status, deferred completion, STM/STRD retries and stale I-cache checks passed\nFlash wait-bypass negative control: caught by CPU result gate\nARM dirty writeback/DSB: deferred shared-port completion and early-marker control passed\nARM exception entry/return: busy flash vector, single SRAM frame and wait-bypass control passed\nARM normal-load IRQ preemption: early handler, restarted load and blocked-preemption control passed\nCPU/DMA stalls: coupled functional service scenario; not cycle accurate\nSDRAM timing: open-row read/transfer service scenario; row/refresh scheduling unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, full store buffers, late arrival/tail-chain timing, pipeline overlap, calibrated CPU timing and complete codec response remain unfinished or unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
-    let summary=format!("{summary}ARM CPU divide/alignment/MPU/XN/NOCP faults, FPv5-D16 identification, f64 arithmetic and automatic/lazy TCM/SRAM frames: passed\nQSPI/FLASH data and instruction bus faults, escalation and DMA QSPI TC/TE/IRQ: passed\n");
+    let summary=format!("{summary}ARM CPU divide/alignment/MPU/XN/NOCP faults, FPv5-D16 identification, f64 arithmetic and automatic/lazy TCM/SRAM frames: passed\nQSPI/FLASH data and instruction bus faults, escalation and DMA QSPI TC/TE/IRQ: passed\nARM late-arrival/tail-chain frame reuse, equal priority, genuine nesting, pending-return IRQ and disabled-feature controls: passed\n");
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())

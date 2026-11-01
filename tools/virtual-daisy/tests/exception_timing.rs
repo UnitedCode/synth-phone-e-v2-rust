@@ -1,6 +1,83 @@
 use virtual_daisy::{clock::Rate, memory::SystemMemory};
 
 #[test]
+fn a_replacement_vector_in_the_same_pending_cache_line_reuses_its_service() {
+    let mut memory = SystemMemory::default();
+    let rate = Rate {
+        numerator: 200_000_000,
+        denominator: 1,
+    };
+    memory.configure_bus(rate, rate, None);
+    memory.write_dma(0x24000040, 4, 0x1001).unwrap();
+    memory.write_dma(0x24000044, 4, 0x2001).unwrap();
+    memory.write_scb(0xd14, 1 << 17).unwrap();
+    memory.inject_bus_load(7, 100_000).unwrap();
+    memory.advance_time(0).unwrap();
+    assert!(memory.exception_entry(0x24000040).unwrap() > 0);
+    memory.take_cpu_debt();
+    for _ in 0..4 {
+        let wait = memory.exception_entry(0x24000044).unwrap();
+        if wait == 0 {
+            break;
+        }
+        memory.take_cpu_debt();
+        memory.advance_time(memory.now() + wait).unwrap();
+    }
+    assert_eq!(memory.now(), 100_020);
+    assert_eq!(memory.abandoned_bus_requests, 0);
+    let mut vector = 0;
+    memory
+        .cpu_access(u64::MAX, 0x24000044, 4, false, &mut vector)
+        .unwrap();
+    assert_eq!(vector, 0x2001);
+    memory.finish_exception_entry().unwrap();
+}
+
+#[test]
+fn changing_a_pending_vector_preserves_the_frame_and_releases_its_instruction_slot() {
+    let mut memory = SystemMemory::default();
+    let rate = Rate {
+        numerator: 200_000_000,
+        denominator: 1,
+    };
+    memory.configure_bus(rate, rate, None);
+    memory.inject_bus_load(7, 100_000).unwrap();
+    memory.advance_time(0).unwrap();
+    for word in 0..8 {
+        let mut value = u64::from(word + 10);
+        memory
+            .cpu_access(u64::MAX - 1, 0x3001ffe0 + word * 4, 4, true, &mut value)
+            .unwrap();
+    }
+    let wait = memory.exception_entry(0x24000040).unwrap();
+    assert!(wait > 0);
+    memory.take_cpu_debt();
+    memory.advance_time(wait).unwrap();
+    for _ in 0..32 {
+        let wait = memory.exception_entry(0x6044).unwrap();
+        if wait == 0 {
+            memory.finish_exception_entry().unwrap();
+            break;
+        }
+        memory.take_cpu_debt();
+        memory.advance_time(memory.now() + wait).unwrap();
+    }
+    assert_eq!(memory.now(), 40);
+    assert_eq!(memory.exception_stack_words, 8);
+    for word in 0..8 {
+        assert_eq!(
+            memory.read_dma(0x3001ffe0 + word * 4, 4).unwrap(),
+            word + 10
+        );
+    }
+    assert_eq!(memory.abandoned_bus_requests, 1);
+    // The abandoned AXI read retains fabric occupancy but cannot serialize
+    // an instruction fetch from a different SRAM target.
+    let wait = memory.access_wait(0x30040000, 2, false, true).unwrap();
+    assert!((1..=40).contains(&wait));
+}
+
+#[test]
 fn exception_frame_stores_and_busy_flash_vector_fetch_complete_before_handler_entry() {
     let mut memory = SystemMemory::default();
     let rate = Rate {

@@ -16,7 +16,7 @@ pub fn write(
 ) -> Result<()> {
     let mut report = String::new();
     for (key,value) in [
-        ("schema","virtual-daisy-conformance-v7"),
+        ("schema","virtual-daisy-conformance-v8"),
         ("requested_scope",scope),
         ("host_os",std::env::consts::OS),
         ("host_arch",std::env::consts::ARCH),
@@ -51,7 +51,11 @@ pub fn write(
         ("store_buffer_and_pipeline_overlap","UNMODELED"),
         ("exception_entry_and_return_bus_stalls","RESUMABLE_PORT_SERVICE_SCENARIO"),
         ("normal_load_wait_irq_preemption","FUNCTIONAL_RESTART_MODEL"),
-        ("exception_late_arrival_tailchain_pipeline","INCOMPLETE"),
+        ("exception_late_arrival_tailchain_frames","FUNCTIONAL_PRIORITY_AND_REUSE_PROBES_REQUIRED"),
+        ("exception_return_checkpoint","DEACTIVATION_ONCE_BEFORE_RESUMABLE_UNSTACK"),
+        ("exception_tailchain_fp_state","LAZY_EXTENDED_FRAME_AND_THREAD_S0_FPSCR_PROBES_REQUIRED"),
+        ("nvic_icsr_rettobase","ALL_ACTIVE_SYSTEM_AND_EXTERNAL_EXCEPTIONS"),
+        ("exception_late_arrival_cutoff_and_tailchain_pipeline","UNVERIFIED"),
         ("documented_qspi_flash_bus_errors","FUNCTIONAL_IMMEDIATE_RESPONSE_GUEST_PROBES"),
         ("instruction_bus_fault_scope","DEMAND_QSPI_INSTRUCTION_BOUNDARIES"),
         ("qspi_translation_granularity","ONE_INSTRUCTION_TCG_BLOCK"),

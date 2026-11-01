@@ -74,6 +74,7 @@ pub struct SystemMemory {
     memory_order_fence: bool,
     entry_stores: std::collections::VecDeque<CpuAccess>,
     entry_vector: Option<(u32, u32)>,
+    entry_vector_address: Option<u32>,
     entry_active: bool,
     pub abandoned_waits: u64,
     pub abandoned_wait_ns: u64,
@@ -141,6 +142,7 @@ impl Default for SystemMemory {
             memory_order_fence: false,
             entry_stores: std::collections::VecDeque::new(),
             entry_vector: None,
+            entry_vector_address: None,
             entry_active: false,
             abandoned_waits: 0,
             abandoned_wait_ns: 0,
@@ -212,6 +214,7 @@ impl SystemMemory {
         self.memory_order_fence = false;
         self.entry_stores.clear();
         self.entry_vector = None;
+        self.entry_vector_address = None;
         self.entry_active = false;
         self.return_frame = None;
         self.return_reads.clear();
@@ -706,7 +709,24 @@ impl SystemMemory {
                     }
                 }
             }
+        } else if self.entry_vector_address != Some(address) {
+            self.entry_vector = None;
+            if let Some((base, bytes, write, _)) = self.cpu_requests[0] {
+                // A pending line refill may already cover the replacement
+                // vector. Otherwise retain its occupancy but release the slot.
+                if write
+                    || address < base
+                    || u64::from(address) + 4 > u64::from(base) + bytes as u64
+                {
+                    let (_, _, _, id) = self.cpu_requests[0].take().unwrap();
+                    self.abandoned_bus_requests += 1;
+                    if !self.fabric.take_ready(id) {
+                        self.abandoned_requests.push(id);
+                    }
+                }
+            }
         }
+        self.entry_vector_address = Some(address);
         if self.bypass_exception_waits {
             while let Some(op) = self.entry_stores.pop_front() {
                 self.write_cpu(op.address, op.width, op.value as u32)?;
@@ -750,6 +770,9 @@ impl SystemMemory {
         self.memory_order_fence = fence;
         self.cpu_debt = old;
         result.map(|wait| {
+            // This is a resumable entry checkpoint, not an interrupted store:
+            // a higher-priority vector can replace it without another frame.
+            self.wait_interruptible = true;
             if wait != 0 {
                 self.entry_wait_yields += 1;
                 self.cpu_wait(wait)
@@ -763,6 +786,7 @@ impl SystemMemory {
             return Err("handler started before stack stores completed");
         }
         self.entry_vector = None;
+        self.entry_vector_address = None;
         self.entry_active = false;
         Ok(())
     }
@@ -795,6 +819,7 @@ impl SystemMemory {
         })();
         self.memory_order_fence = fence;
         result.inspect(|&wait| {
+            self.wait_interruptible = true;
             self.return_wait_yields += u64::from(wait != 0);
         })
     }

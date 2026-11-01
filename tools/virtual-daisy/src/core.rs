@@ -13,7 +13,7 @@ const INFRA_SHA: &str = "8353496d3489e3801a45fd79b9281040e9d6b00f0c1615a5e77e995
 const TLIB_SHA: &str = "8db4d1fe0a316eec5dcae83bd4d2757b5172332493d6fdecfd9d4b81cb7a77a3";
 const TAG: &str =
     "    cpustate |= (READ_ACCESS_TYPE == ACCESS_INST_FETCH) ? (UINT64_C(1) << 63) : 0;";
-const MARKER:&str="\nuint32_t tlib_daisy_fetch_tag_version(void) { return 11; }\nEXC_INT_0(uint32_t, tlib_daisy_fetch_tag_version)\nvoid *daisy_fetch_state;\nuint32_t (*daisy_fetch_runtime)(void *, uint32_t, uint32_t);\nvoid tlib_daisy_set_runtime_fetch(void *state, void *callback) { daisy_fetch_state = state; daisy_fetch_runtime = callback; }\nEXC_VOID_2(tlib_daisy_set_runtime_fetch, void *, state, void *, callback)\nuint64_t tlib_daisy_memory_context(void) { target_ulong data[TARGET_INSN_START_WORDS]; if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_STACKING) { return UINT64_MAX-1; } if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_UNSTACKING) { return UINT64_MAX-2; } if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_VECTOR_READ) { return UINT64_MAX; } if(!cpu->current_tb || !cpu->mem_io_pc) { return 0; } if(cpu_get_data_for_pc(cpu, cpu->current_tb, cpu->mem_io_pc, true, data, false) < 0) { return 0; } return ((uint64_t)data[0] << 32) | cpu->regs[13]; }\nEXC_INT_0(uint64_t, tlib_daisy_memory_context)\n";
+const MARKER:&str="\nuint32_t tlib_daisy_fetch_tag_version(void) { return 12; }\nEXC_INT_0(uint32_t, tlib_daisy_fetch_tag_version)\nvoid *daisy_fetch_state;\nuint32_t (*daisy_fetch_runtime)(void *, uint32_t, uint32_t);\nvoid tlib_daisy_set_runtime_fetch(void *state, void *callback) { daisy_fetch_state = state; daisy_fetch_runtime = callback; }\nEXC_VOID_2(tlib_daisy_set_runtime_fetch, void *, state, void *, callback)\nuint64_t tlib_daisy_memory_context(void) { target_ulong data[TARGET_INSN_START_WORDS]; if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_STACKING) { return UINT64_MAX-1; } if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_UNSTACKING) { return UINT64_MAX-2; } if(cpu->v7m.exception_phase == V7M_EXCEPTION_PHASE_VECTOR_READ) { return UINT64_MAX; } if(!cpu->current_tb || !cpu->mem_io_pc) { return 0; } if(cpu_get_data_for_pc(cpu, cpu->current_tb, cpu->mem_io_pc, true, data, false) < 0) { return 0; } return ((uint64_t)data[0] << 32) | cpu->regs[13]; }\nEXC_INT_0(uint64_t, tlib_daisy_memory_context)\n";
 const RUNTIME: &str = r#"
     if(cpu->tb_restart_request == 0 && cpu->current_tb->size != 0 && daisy_fetch_runtime) {
         uint32_t result = daisy_fetch_runtime(daisy_fetch_state, cpu->current_tb->pc, cpu->current_tb->size);
@@ -76,22 +76,35 @@ void HELPER(daisy_barrier)(CPUState *env, uint32_t kind) {
 const EXCEPTION_EXPORT: &str = r#"
 void *daisy_exception_state;
 uint32_t (*daisy_exception_callback)(void *, uint32_t, uint32_t);
+uint32_t (*daisy_late_interrupt)(uint32_t);
+uint32_t daisy_tailchain_enabled=1;
+void tlib_daisy_set_tailchain(uint32_t enabled) { daisy_tailchain_enabled=enabled; }
+EXC_VOID_1(tlib_daisy_set_tailchain, uint32_t, enabled)
+void tlib_daisy_set_late_interrupt(void *callback) { daisy_late_interrupt=callback; }
+EXC_VOID_1(tlib_daisy_set_late_interrupt, void *, callback)
 extern void daisy_reset_exception(void);
 extern int daisy_vector_pending(void);
+extern int daisy_entry_pending(void);
+extern int daisy_return_pending(void);
 void tlib_daisy_set_exception(void *state, void *callback) {
     daisy_exception_state=state; daisy_exception_callback=callback; daisy_reset_exception();
 }
 EXC_VOID_2(tlib_daisy_set_exception, void *, state, void *, callback)
 uint32_t tlib_daisy_irq_can_preempt(void) {
-    return (cpu->interrupt_request & CPU_INTERRUPT_HARD) && cpu->regs[15] < ARM_M_FNC_RETURN_MIN
-        && !daisy_vector_pending() && !cpu->v7m.locked_up;
+    return (cpu->interrupt_request & CPU_INTERRUPT_HARD)
+        && (daisy_vector_pending() || cpu->regs[15] < ARM_M_FNC_RETURN_MIN)
+        && (!daisy_entry_pending() || daisy_late_interrupt)
+        && (!daisy_return_pending() || daisy_tailchain_enabled) && !cpu->v7m.locked_up;
 }
 EXC_INT_0(uint32_t, tlib_daisy_irq_can_preempt)
 "#;
 const EXCEPTION_DECL: &str = r#"
 extern void *daisy_exception_state;
 extern uint32_t (*daisy_exception_callback)(void *, uint32_t, uint32_t);
+extern uint32_t (*daisy_late_interrupt)(uint32_t);
+extern uint32_t daisy_tailchain_enabled;
 static struct { bool pending; uint32_t lr; int active; bool secure_target; bool lockup; } daisy_vector;
+static struct { bool pending; uint32_t type; } daisy_return;
 static uint32_t daisy_exception_bus(uint32_t address, uint32_t phase) {
     uint32_t result=daisy_exception_callback ? daisy_exception_callback(daisy_exception_state,address,phase):0;
     if(result>1) { tlib_abort("Invalid Daisy exception bus phase"); }
@@ -108,6 +121,12 @@ const EXCEPTION_RESUME: &str = r#"
     }
 "#;
 const EXCEPTION_VECTOR: &str = r#"
+        if(!env->v7m.has_trustzone && !lockup_after_exception_taken &&
+           (env->interrupt_request & CPU_INTERRUPT_HARD) && daisy_late_interrupt) {
+            uint32_t replacement=daisy_late_interrupt(env->v7m.exception);
+            if(replacement<2 || replacement>511) { tlib_abort("Invalid Daisy late interrupt"); }
+            env->v7m.exception=replacement; active_exception=replacement;
+        }
         if(daisy_exception_bus(env->v7m.vecbase[env->secure]+env->v7m.exception*4,0)) {
             daisy_vector.pending=true; daisy_vector.lr=lr; daisy_vector.active=active_exception;
             daisy_vector.secure_target=secure_target; daisy_vector.lockup=lockup_after_exception_taken;
@@ -118,11 +137,20 @@ const EXCEPTION_VECTOR: &str = r#"
         }
 "#;
 const EXCEPTION_RETURN: &str = r#"
+daisy_return_resume:
     if(!env->v7m.has_trustzone && (type==0xfffffff1 || type==0xfffffff9 || type==0xfffffffd ||
                                  type==0xffffffe1 || type==0xffffffe9 || type==0xffffffed)) {
+        if(daisy_tailchain_enabled && (env->interrupt_request & CPU_INTERRUPT_HARD)) {
+            daisy_exception_bus(0,2);
+            env->v7m.exception_return_tailchain=true;
+            env->v7m.exception_return_type=type;
+            env->exception_index=EXCP_IRQ;
+            cpu_loop_exit(env);
+        }
         uint32_t frame=(type&4) ? *pointer_psp(env):*pointer_msp(env);
         uint32_t bytes=(!(type&16) && !(env->v7m.fpccr[env->secure]&ARM_FPCCR_LSPACT_MASK)) ? 104:32;
         if(daisy_exception_bus(frame,0x100+bytes)) {
+            daisy_return.pending=true; daisy_return.type=type;
             env->exception_index=EXCP_INTERRUPT;
             env->exit_request=1;
             cpu_loop_exit_without_hook(env);
@@ -130,9 +158,13 @@ const EXCEPTION_RETURN: &str = r#"
     }
 "#;
 const EXCEPTION_WRAPPERS: &str = r#"
-int daisy_vector_pending(void) { return daisy_vector.pending; }
-void daisy_resume_vector(CPUState *env) { do_interrupt_v7m(env); }
-void daisy_reset_exception(void) { daisy_vector.pending=false; }
+int daisy_vector_pending(void) { return daisy_vector.pending || daisy_return.pending; }
+int daisy_entry_pending(void) { return daisy_vector.pending; }
+int daisy_return_pending(void) { return daisy_return.pending; }
+void daisy_resume_vector(CPUState *env) {
+    if(daisy_return.pending) { do_v7m_exception_exit(env); } else { do_interrupt_v7m(env); }
+}
+void daisy_reset_exception(void) { daisy_vector.pending=false; daisy_return.pending=false; daisy_tailchain_enabled=1; }
 "#;
 
 fn pinned_replace(code: &mut String, needle: &str, replacement: &str) -> Result<()> {
@@ -283,8 +315,10 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
             needle,
             &format!("        daisy_exception_bus(0,1);\n{needle}"),
         )?;
-        let needle = "    type = env->regs[15];";
-        pinned_replace(&mut code, needle, &format!("{needle}\n{EXCEPTION_RETURN}"))?;
+        let needle = "    int validation_fault = 0;";
+        pinned_replace(&mut code, needle, &format!("{needle}\n    if(daisy_return.pending) {{ type=daisy_return.type; daisy_return.pending=false; goto daisy_return_resume; }}"))?;
+        let needle = "    if(env->v7m.has_trustzone) {\n        /* Location of return stack type (Secure/Non-secure) */";
+        pinned_replace(&mut code, needle, &format!("{EXCEPTION_RETURN}\n{needle}"))?;
         let needle = "    int unstacking_fault = env->v7m.exception_phase_fault;";
         pinned_replace(
             &mut code,
@@ -397,6 +431,6 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
         rid,
         &core,
     )?;
-    fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=11\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
+    fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=12\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
     Ok(())
 }

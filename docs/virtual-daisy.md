@@ -127,7 +127,9 @@ with a synthetic peripheral request and real NVIC acknowledgement. DMA cases
 include an out-of-range source and controller disable/ABORT while a read is
 pending, requiring TEIF without decrementing NDTR. A mapped-code
 guest checks execution before a failing fetch and a Thumb32 instruction spanning
-FSIZE, with a corrupt-prefix control. Its summary explicitly
+FSIZE, with a corrupt-prefix control. A further guest checks frame reuse for
+late arrival/tail-chaining, equal priorities, genuine nesting and an IRQ during
+modeled unstack service, including disabled-feature controls. Its summary explicitly
 excludes production startup/audio. The synthetic guest never replaces or patches
 the production firmware artifact. All modes use the same guarded engine and record firmware/model
 hashes; input WAV replay is available only with `run`.
