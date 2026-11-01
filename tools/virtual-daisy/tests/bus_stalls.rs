@@ -1,6 +1,104 @@
 use virtual_daisy::bus::Fabric;
 
 #[test]
+fn fmc_sdram_read_and_write_service_share_one_port_in_both_directions() {
+    for first_write in [false, true] {
+        let mut fabric = Fabric::default();
+        let first = fabric.submit(2, 5, first_write, 35).unwrap().unwrap();
+        fabric.advance(0).unwrap();
+        let second = fabric.submit(1, 5, !first_write, 20).unwrap().unwrap();
+        let independent = fabric.submit(1, 7, true, 5).unwrap().unwrap();
+        fabric.advance(5).unwrap();
+        assert!(fabric.take_ready(independent));
+        fabric.advance(35).unwrap();
+        assert!(fabric.take_ready(first));
+        assert!(!fabric.take_ready(second));
+        fabric.advance(54).unwrap();
+        assert!(!fabric.take_ready(second));
+        fabric.advance(55).unwrap();
+        assert!(fabric.take_ready(second));
+    }
+}
+
+#[test]
+fn sdram_direction_reservation_preserves_axi_qos_and_per_direction_credits() {
+    let mut fabric = Fabric::default();
+    fabric.axi.write(0x42100, 15).unwrap(); // DMA read priority.
+    let cpu_read = fabric.submit(2, 5, false, 10).unwrap().unwrap();
+    let cpu_write = fabric.submit(2, 5, true, 20).unwrap().unwrap();
+    let dma_read = fabric.submit(1, 5, false, 30).unwrap().unwrap();
+    fabric.advance(30).unwrap();
+    assert!(fabric.take_ready(dma_read));
+    assert!(!fabric.take_ready(cpu_read));
+    assert!(!fabric.take_ready(cpu_write));
+    fabric.advance(40).unwrap();
+    assert!(fabric.take_ready(cpu_read));
+    assert!(!fabric.take_ready(cpu_write));
+    fabric.advance(60).unwrap();
+    assert!(fabric.take_ready(cpu_write));
+    // Completed reads must not release the still-reserved write credit.
+    // All three completions must leave both channels usable.
+    assert!(fabric.submit(2, 5, false, 1).unwrap().is_some());
+    assert!(fabric.submit(2, 5, true, 1).unwrap().is_some());
+}
+
+#[test]
+fn cpu_and_dma_opposite_direction_sdram_accesses_wait_for_shared_service() {
+    use virtual_daisy::{bus::SdramTiming, clock::Rate, memory::SystemMemory};
+    for cpu_write in [false, true] {
+        let mut memory = SystemMemory::default();
+        let rate = Rate {
+            numerator: 200_000_000,
+            denominator: 1,
+        };
+        let sdram = SdramTiming::decode(
+            (2 << 4) | (3 << 7) | (2 << 10) | (1 << 13),
+            0x02126471,
+            1560 << 1,
+            rate,
+        )
+        .unwrap();
+        memory.configure_bus(rate, rate, Some(sdram));
+        let dma = memory.dma_submit(0xc0000000, !cpu_write).unwrap().unwrap();
+        memory.advance_time(0).unwrap();
+        let mut value = 0x12345678;
+        let context = 0x10002001f000;
+        assert!(
+            memory
+                .cpu_access(context, 0xc0000004, 4, cpu_write, &mut value)
+                .unwrap()
+                > 0
+        );
+        let dma_finish = if cpu_write { 35 } else { 10 };
+        memory.advance_time(dma_finish).unwrap();
+        assert!(memory.dma_ready(dma));
+        memory.begin_cpu_block();
+        assert!(
+            memory
+                .cpu_access(context, 0xc0000004, 4, cpu_write, &mut value)
+                .unwrap()
+                > 0
+        );
+        memory.advance_time(44).unwrap();
+        memory.begin_cpu_block();
+        assert!(
+            memory
+                .cpu_access(context, 0xc0000004, 4, cpu_write, &mut value)
+                .unwrap()
+                > 0
+        );
+        memory.advance_time(45).unwrap();
+        memory.begin_cpu_block();
+        assert_eq!(
+            memory
+                .cpu_access(context, 0xc0000004, 4, cpu_write, &mut value)
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
 fn shared_targets_delay_cpu_and_dma_but_independent_targets_run_in_parallel() {
     let mut fabric = Fabric::default();
     fabric.axi.write(0x42100, 15).unwrap(); // D2 DMA read QoS outranks CPU.

@@ -16,7 +16,7 @@ pub fn write(
 ) -> Result<()> {
     let mut report = String::new();
     for (key,value) in [
-        ("schema","virtual-daisy-conformance-v8"),
+        ("schema","virtual-daisy-conformance-v9"),
         ("requested_scope",scope),
         ("host_os",std::env::consts::OS),
         ("host_arch",std::env::consts::ARCH),
@@ -70,10 +70,14 @@ pub fn write(
         ("automatic_and_lazy_fp_frame_tcm_sram_and_return","FUNCTIONAL_RETRY_AND_PORT_SERVICE_SCENARIO"),
         ("fp_numerical_corner_cases_and_inflight_snapshot_reset","UNVERIFIED"),
         ("sdram_programmed_timing","OPEN_ROW_SERVICE_SCENARIO_AND_ANALYTICAL_BOUNDS"),
+        ("sdram_read_write_port","SHARED_SERVICE_RESERVATION"),
+        ("sdram_direction_arbitration","OLDEST_DIRECTION_THEN_AXI_QOS_SCENARIO_NOT_SILICON_POLICY"),
+        ("sdram_fifo_acceptance_and_command_overlap","UNMODELED"),
         ("sdram_row_refresh_scheduling","UNMODELED"),
         ("analog_and_codec_filter_response","INCOMPLETE"),
         ("wm8731_ideal_line_gain_and_hpf","SOURCE_CHECKED_NOMINAL_MODEL"),
         ("wm8731_passband_group_delay","NOMINAL_20_ADC_18_DAC_FRAMES"),
+        ("wm8731_lrswap","DAC_ONLY_SERIAL_AND_IDEAL_LINE_PCM_CHECKED"),
         ("complete_codec_filter_response","UNMODELED"),
         ("pll_and_sai_clock_coupling","RATIONAL_FUNCTIONAL_MODEL"),
         ("pll_lock_and_oscillator_tolerance","UNMODELED"),

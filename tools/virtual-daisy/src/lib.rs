@@ -190,7 +190,7 @@ impl Peripheral {
                 if reg(9) & 1 == 0 {
                     return Ok(0);
                 }
-                if reg(7) != 9 {
+                if reg(7) & !(1 << 5) != 9 {
                     return Err("unsupported active WM8731 digital format");
                 }
                 if reg(8) != 0 {
@@ -887,9 +887,20 @@ pub unsafe extern "C" fn daisy_sai_tick_codec(
     } else {
         sample
     };
+    let previous_frames = (*state).sai.output.len();
     (*state).sai.tick_sample(mask, sample);
-    if ideal_line != 0 {
+    if (*state).sai.output.len() != previous_frames {
         if let Some(frame) = (*state).sai.output.last_mut() {
+            // WM8731 Table 15: LRSWAP routes DAC data only. ADC ordering and
+            // the AK4556/PCM3060 hardware-mode interfaces remain independent.
+            if (*codec).kind == 4
+                && (*codec).registers.get(&7).copied().unwrap_or(0) & (1 << 5) != 0
+            {
+                frame.swap(0, 1);
+            }
+            if ideal_line == 0 {
+                return 0;
+            }
             let Ok(delayed) = (*codec).nominal_dac_passband(*frame) else {
                 return 1;
             };
