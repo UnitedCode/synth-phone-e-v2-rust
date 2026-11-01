@@ -64,6 +64,7 @@ expectations. Each new behavior was introduced with a failing check first.
 | WM8731 reset | Power-on and software-reset register defaults |
 | WM8731 DAC mute | ADC capture continues while DAC output is muted |
 | WM8731 line mute | Only the selected input channel is silenced |
+| WM8731 DAC channel swap | R7.LRSWAP swaps DAC samples in captured serial/ideal-line WAVs, preserving ADC order and nominal converter delays |
 | WM8731 both-channel load | Update the opposite channel's volume/mute fields |
 | PCM endpoints | Signed 24-bit extrema +8,388,607 and −8,388,608; no copied firmware limiter |
 | SAI wiring | Reversed A/B RX/TX works; enabling directions that disagree with the board fails |
@@ -129,7 +130,8 @@ mute and reset. The normal serial input path bypasses that pre-ADC stage;
 it must not apply gain/filtering twice. De-emphasis and unsupported sample-clock
 ratios are rejected. This does not reproduce the full ADC/DAC response.
 
-CI runs the unmodified production firmware on all three profiles. Each must
+Local validation runs the unmodified production firmware on all three profiles.
+CI is kept off for this work; no OS matrix or workflow changes are added. Each must
 complete startup, produce valid stereo PCM with correct tuning and continuity,
 and detect silence, lost receive DMA, cacheable buffers and inaccessible DTCM
 faults. Rev5 additionally boots through the ideal line stage. The existing desktop sweep
@@ -516,10 +518,26 @@ gates after a successful process exit. ARM-written buffers and their grades are
 preserved as `*.storage*.bin` and `*.storage*.txt`. The full suite and `probe`
 include these checks; `storage` runs them alone.
 
-The conformance v7 report records the requested run scope and hashes the native
+The conformance report records the requested run scope and hashes the native
 model, platform, core manifest, managed host and Python-disabled managed engine.
 Its required full-suite list does not claim those checks ran in a focused mode;
 the mode's success summary states the actual scope.
+
+The v9 report distinguishes FMC's shared SDRAM service port from independent
+AXI read/write channels. RM0433 22.9.3 figures119/120 use the same DATA pins
+for reads and writes. Mixed CPU/DMA tests exercise both direction orders and
+completion-time stalls; an unrelated target can still progress. A queued
+direction is selected by oldest arrival and its initiator by AXI QoS/LRU.
+Serializing the whole supplied service window is a scenario choice: exact FMC
+direction arbitration, FIFO acceptance, command overlap, turnaround and refresh
+scheduling still require modeling or independent traces. It is not a measured
+controller latency or a new hardware deadline guarantee.
+
+WM8731 R7.LRSWAP follows Table15 of the linked Rev4.9 datasheet: the DAC
+channels swap while ADC ordering stays unchanged. Public I2C/SAI tests capture
+WAV output in serial and ideal-line modes, checking the latter's existing
+20/18-frame ADC/DAC delay surrogate. No unpublished converter or de-emphasis
+filter coefficients are inferred from those channel-routing checks.
 
 Reference data must identify physical revision, codec marking, firmware ELF hash,
 settings, clock configuration, input/calibration and measurement method. Digital

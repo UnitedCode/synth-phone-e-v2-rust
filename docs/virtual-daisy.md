@@ -289,6 +289,9 @@ analog circuitry remain unmodeled. `*.wav.codec.txt` records the boundary,
 nominal delays and whether the surrogate was applied. The serial PCM boundary
 does not add converter latency. Rev4/Rev7 reject ideal-line input. Unsupported active WM8731 sample-clock
 ratios, de-emphasis, microphone and analog-bypass paths fail explicitly.
+WM8731 R7.LRSWAP reverses DAC channels at both supported audio boundaries;
+ADC channel order is unchanged (datasheet Table15). Other active digital
+formats remain explicitly unsupported.
 
 The memory map constrains internal flash to 128 KiB and SDRAM to 64 MiB; it
 retains the actual SRAM/DTCM regions. Generic H743 extra flash and huge unused FMC
@@ -364,7 +367,14 @@ they cannot write flash twice. DMA preserves NDTR and IRQ state until the
 destination completes, including deferred EN clear. Reset ties use a deterministic
 port order because the initial hardware ranking is not specified.
 `*.dma.txt` separately records live DMA grants and simultaneous-request contests.
-DMA service is polled on the 1µs event grid. Separate AXI read/write service lanes,
+DMA service is polled on the 1µs event grid. FMC SDRAM read/write requests now
+reserve a shared service port, reflecting the shared DATA pins in RM0433
+22.9.3 figures119/120. The oldest waiting direction is selected, then that
+direction's AXI QoS/LRU arbiter selects its initiator. This direction-selection
+rule is a deterministic scenario, not a documented silicon scheduling policy.
+It serializes the complete supplied service windows; FMC FIFO acceptance,
+read-ahead, command overlap and direction-turnaround cycles remain unmodeled.
+Other AXI targets retain separate read/write service lanes. Those lanes,
 AHB round-robin service and request arrival times are explicit model choices;
 pipeline/target overlap remains incomplete. Coupled stalls are functional
 scenarios, not cycle-accurate hardware deadline estimates.
@@ -426,7 +436,8 @@ include the exact `firmware.elf` and `firmware.sha256`, generated `daisy.repl`,
 `baseline.wav`, fault WAVs, `.wav.stats`, host/peripheral logs, RTT logs and DTCM
 captures. `.memory.txt` reports cache fills/writebacks and cacheable DMA traffic;
 `.bus.txt` records DMA status/control/count, and `.wav.clock.txt` records clock
-rates and the programmed PLL/SAI fields. CI uploads these on success and failure.
+rates and the programmed PLL/SAI fields. Validation is local; CI remains off
+for this work, with no OS matrix or workflow changes.
 `cpu-core.txt` fingerprints the native core and its pinned source revisions;
 `architecture-probe.bin`, `*.architecture.bin` and `*.architecture.txt` preserve
 the ARM test program, processor-written outcomes and Rust grade. CPU builds are

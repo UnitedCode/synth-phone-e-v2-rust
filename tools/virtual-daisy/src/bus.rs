@@ -30,7 +30,11 @@ pub struct Fabric {
 }
 impl Fabric {
     fn lane(target: usize, write: bool) -> usize {
-        (target - 1) * 2 + usize::from(write && target <= 7)
+        // RM0433 22.9.3, figures 119/120: FMC SDRAM transfers use the
+        // same DATA pins in both directions. AXI's independent channels do
+        // not provide two physical SDRAM ports. Reserve the service window;
+        // this does not model FMC FIFO acceptance or command pipelining.
+        (target - 1) * 2 + usize::from(write && target <= 7 && target != 5)
     }
     pub fn submit(
         &mut self,
@@ -113,7 +117,13 @@ impl Fabric {
             };
             let target = first.target;
             let write = first.write;
-            let mask = candidates.iter().fold(0, |m, t| m | (1 << (t.ini - 1)));
+            // At a shared port, the oldest queued direction wins, then use
+            // that direction's AXI QoS/LRU arbiter. Cross-direction scheduling
+            // is a deterministic scenario rule, not a silicon priority claim.
+            let mask = candidates
+                .iter()
+                .filter(|t| target != 5 || t.write == write)
+                .fold(0, |m, t| m | (1 << (t.ini - 1)));
             if candidates.len() > 1 {
                 self.contests += 1;
             }
@@ -128,7 +138,11 @@ impl Fabric {
             let index = self
                 .waiting
                 .iter()
-                .position(|t| Self::lane(t.target, t.write) == lane && t.ini == winner)
+                .position(|t| {
+                    Self::lane(t.target, t.write) == lane
+                        && (target != 5 || t.write == write)
+                        && t.ini == winner
+                })
                 .unwrap();
             let mut t = self.waiting.remove(index).unwrap();
             if let Some((word, hit)) = t.flash {

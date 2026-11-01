@@ -1,5 +1,70 @@
 use virtual_daisy::Peripheral;
 
+#[test]
+fn wm8731_lrswap_changes_captured_dac_channels_without_swapping_adc_channels() {
+    use std::ffi::CString;
+    use virtual_daisy::{daisy_sai_input, daisy_sai_save, daisy_sai_tick_codec};
+    for ideal in [0, 1] {
+        let mut codec = active();
+        register(&mut codec, 5, 1); // Disable HPF to isolate channel order.
+        register(&mut codec, 7, 9 | (1 << 5)); // Table 15: DAC-only LRSWAP.
+        let mut sai = Peripheral::new(7);
+        sai.write(4, (6 << 5) | 1 | (3 << 16)).unwrap();
+        sai.write(0x24, (6 << 5) | 2 | (3 << 16)).unwrap();
+        let input = [0.5_f32, -0.75].repeat(22);
+        unsafe { daisy_sai_input(&mut sai, input.as_ptr(), 22) };
+        for frame in 0..22 {
+            sai.write(0x40, 0x0010_0000).unwrap(); // +0.125, left
+            sai.write(0x40, 0x00e0_0000).unwrap(); // -0.25, right
+            assert_eq!(
+                unsafe { daisy_sai_tick_codec(&mut sai, &mut codec, ideal) },
+                0
+            );
+            let adc = [sai.read(0x20).unwrap(), sai.read(0x20).unwrap()];
+            assert_eq!(
+                adc,
+                if ideal == 0 || frame >= 20 {
+                    [0x0040_0000, 0xffa0_0000]
+                } else {
+                    [0; 2]
+                }
+            );
+        }
+        // No new LRC frame: do not swap or delay the previous captured frame
+        // again when the master SAI block is disabled.
+        sai.write(4, (6 << 5) | 1).unwrap();
+        assert_eq!(
+            unsafe { daisy_sai_tick_codec(&mut sai, &mut codec, ideal) },
+            0
+        );
+        let path =
+            std::env::temp_dir().join(format!("daisy-lrswap-{}-{ideal}.wav", std::process::id()));
+        let cpath = CString::new(path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            unsafe { daisy_sai_save(&mut sai, cpath.as_ptr(), 48014) },
+            0
+        );
+        let samples: Vec<f32> = hound::WavReader::open(&path)
+            .unwrap()
+            .into_samples()
+            .map(Result::unwrap)
+            .collect();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(format!("{}.stats", path.display())).unwrap();
+        assert_eq!(samples.len(), 44, "exactly 22 stereo frames were clocked");
+        for (frame, samples) in samples.chunks_exact(2).enumerate() {
+            assert_eq!(
+                samples,
+                if ideal == 0 || frame >= 18 {
+                    &[-0.25, 0.125]
+                } else {
+                    &[0.0; 2]
+                }
+            );
+        }
+    }
+}
+
 fn register(codec: &mut Peripheral, index: u8, value: u16) {
     codec
         .i2c_write(&[(index << 1) | ((value >> 8) as u8), value as u8])
