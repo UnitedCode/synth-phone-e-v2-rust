@@ -88,7 +88,7 @@ public static class DaisyHost
         ((DaisyGpio)machine["sysbus.gpioPortD"]).ConfigureStraps(uint.Parse(args[7]));
         Console.WriteLine("Board: " + args[6]);
         var cpu = (CortexM)machine["sysbus.cpu"];
-        if(((DaisyCortexM)cpu).FetchTagVersion!=9) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
+        if(((DaisyCortexM)cpu).FetchTagVersion!=10) throw new InvalidOperationException("Missing native instruction-fetch/runtime adapter");
         Console.WriteLine("Native instruction-fetch tag verified");
         cpu.VectorTableOffset = 0x08000000;
         cpu.SP = bus.ReadDoubleWord(0x08000000);
@@ -101,6 +101,7 @@ public static class DaisyHost
         if(args[5]=="wait-irq" || args[5]=="wait-irq-fault" || args[5]=="wait-irq-target") {InterruptProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="storage" || args[5]=="storage-irq-fault" || args[5]=="storage-data-fault" || args[5]=="storage-timer-fault") {StorageProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="cpu" || args[5]=="cpu-div-fault" || args[5]=="cpu-lazy-fault" || args[5]=="cpu-align-fault" || args[5]=="cpu-ram" || args[5]=="cpu-eager" || args[5]=="cpu-eager-ram") {CpuProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="bus" || args[5]=="bus-dma-valid" || args[5]=="bus-fault-control") {BusProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -258,6 +259,25 @@ public static class DaisyHost
         File.WriteAllBytes(prefix+".storage-cache.bin",bus.ReadBytes(0x2001a024UL,28));
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM QSPI storage/polling interrupt probe executed; results require Rust grading");
+    }
+    private static void BusProbes(Emulation emulation,Machine machine,string prefix,string kind) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        var architecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
+        bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"bus-probe.elf"));
+        cpu.VectorTableOffset=0x6000;cpu.SP=0x2001f000;cpu.PC=bus.ReadDoubleWord(0x6004);
+        architecture.SuppressBusErrors=kind=="bus-fault-control";
+        emulation.RunFor(TimeInterval.FromMilliseconds(2));
+        if(kind=="bus-dma-valid") {
+            bus.WriteDoubleWord(0x52005000,1U|(3U<<24));bus.WriteDoubleWord(0x52005014,0x0d002503);
+        }
+        ((DaisyDma)machine["sysbus.dma1"]).OnGPIO(0,true); // Exactly one peripheral request.
+        emulation.RunFor(TimeInterval.FromMicroseconds(20));
+        File.WriteAllBytes(prefix+".fault.bin",bus.ReadBytes(0x20019000UL,256));
+        using(var output=new BinaryWriter(File.Create(prefix+".fault-sites.bin")))
+            foreach(uint word in new uint[]{7,11,15,27,31,35}) output.Write(bus.ReadDoubleWord(bus.ReadDoubleWord(0x20019000+4*word)));
+        architecture.Save(prefix+".memory.txt");
+        ((DaisyDma)machine["sysbus.dma1"]).Save(prefix+".dma.txt");
+        Console.WriteLine("ARM QSPI bus fault probe executed; results require Rust grading");
     }
     private static void CpuProbes(Emulation emulation,Machine machine,string prefix,string kind) {
         var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];

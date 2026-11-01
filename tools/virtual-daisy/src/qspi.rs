@@ -3,6 +3,14 @@
 use crate::nor::NorFlash;
 use std::collections::VecDeque;
 
+const MAPPED_DISABLED: &str = "QSPI memory-mapped read while disabled or in another mode";
+const MAPPED_RANGE: &str = "QSPI mapped read exceeds FSIZE";
+/// RM0433 section23.3.14 requires a bus-error response for these two cases.
+/// Protocols, missing models and stopped-clock behavior stay unsupported.
+pub fn mapped_bus_error(error: &str) -> bool {
+    matches!(error, MAPPED_DISABLED | MAPPED_RANGE)
+}
+
 #[derive(Default)]
 pub struct Qspi {
     registers: [u32; 13],
@@ -507,14 +515,20 @@ impl Qspi {
             .map(|i| self.chip.peek(address.wrapping_add(i as u32)))
             .collect()
     }
+    pub fn mapped_bus_fault(&self, address: u32, bytes: usize) -> bool {
+        !self.mapped
+            || self.registers[0] & 1 == 0
+            || bytes == 0
+            || u64::from(address) + bytes as u64 > 1_u64 << (((self.registers[1] >> 16) & 31) + 1)
+    }
     fn check_mapped(&self, address: u32, bytes: usize) -> Result<(), &'static str> {
         if !self.mapped || self.registers[0] & 1 == 0 {
-            return Err("QSPI memory-mapped read while disabled or in another mode");
+            return Err(MAPPED_DISABLED);
         }
         self.validate_header()?;
         let maximum = 1_u64 << (((self.registers[1] >> 16) & 31) + 1);
         if bytes == 0 || u64::from(address) + bytes as u64 > maximum {
-            return Err("QSPI mapped read exceeds FSIZE");
+            return Err(MAPPED_RANGE);
         }
         if self.clock_configured && self.kernel_clock.is_none() {
             return Err("QSPI mapped read with stopped kernel clock");

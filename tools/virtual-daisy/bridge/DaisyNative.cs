@@ -147,6 +147,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             peek=Marshal.GetDelegateForFunctionPointer<Request>(NativeLibrary.GetExport(library,"daisy_dma_peek"));
             irqs = Marshal.GetDelegateForFunctionPointer<Irqs>(NativeLibrary.GetExport(library, "daisy_dma_irqs"));
             grant=Marshal.GetDelegateForFunctionPointer<Grant>(NativeLibrary.GetExport(library,"daisy_dma_grant"));
+            busError=Marshal.GetDelegateForFunctionPointer<Grant>(NativeLibrary.GetExport(library,"daisy_dma_bus_error"));
             save=Marshal.GetDelegateForFunctionPointer<SaveDma>(NativeLibrary.GetExport(library,"daisy_dma_save"));
             var connections = new Dictionary<int, IGPIO>();
             for(int i = 0; i < 8; i++) connections[i] = new GPIO();
@@ -188,7 +189,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 if(inFlight) {
                     uint address=writing ? destination:source;
                     token=architecture.DmaPort(address,writing,token);
-                    if(token==0) {
+                    if(token==ulong.MaxValue-1) {
+                        if(busError(native.State,activeStream)!=0) throw new InvalidOperationException("Invalid DMA bus-error completion");
+                        inFlight=false;token=0;disableAfterFlight=false;UpdateIrqs();notify=true;
+                    } else if(token==0) {
                         if(!writing) {word=Memory(source) ? architecture.Read(source,4,false):machine.SystemBus.ReadDoubleWord(source);writing=true;}
                         else {
                             if(Memory(destination)) architecture.Write(destination,4,word,false); else machine.SystemBus.WriteDoubleWord(destination,word);
@@ -216,6 +220,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly Request peek;
         private readonly Irqs irqs;
         private readonly Grant grant;
+        private readonly Grant busError;
         private readonly SaveDma save;
         private bool collecting;
         private uint pending;

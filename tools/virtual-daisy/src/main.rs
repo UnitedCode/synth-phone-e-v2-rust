@@ -1,4 +1,5 @@
 //! Run the unmodified production ELF on a functional virtual Daisy.
+mod bus_probe;
 mod conformance;
 mod core;
 mod cpu_probe;
@@ -144,6 +145,10 @@ impl Host<'_> {
             ".cpu-sites.bin",
             ".cpu.txt",
             ".cpu-negative.txt",
+            ".fault.bin",
+            ".fault-sites.bin",
+            ".fault.txt",
+            ".fault-negative.txt",
         ] {
             let path = grade::artifact(&capture, suffix);
             if path.exists() {
@@ -204,6 +209,9 @@ impl Host<'_> {
             "cpu-ram",
             "cpu-eager",
             "cpu-eager-ram",
+            "bus",
+            "bus-dma-valid",
+            "bus-fault-control",
         ]
         .contains(&fault)
         {
@@ -255,6 +263,28 @@ fn cpu_checks(host: &Host<'_>, tone: &Path) -> Result<()> {
             format!("{kind}=caught\n{error}\n"),
         )?;
     }
+    bus_probe::prepare(host.directory)?;
+    let tx_address = if host.board == Board::Rev5 {
+        0x40015840
+    } else {
+        0x40015820
+    };
+    for kind in ["bus", "bus-dma-valid"] {
+        let capture = host.boot(kind, tone, kind)?;
+        bus_probe::check(&capture, kind == "bus-dma-valid", tx_address)?;
+    }
+    let broken = host.boot("bus-fault-control", tone, "bus-fault-control")?;
+    let error = bus_probe::check(&broken, false, tx_address)
+        .err()
+        .ok_or("Suppressed bus faults escaped grading")?
+        .to_string();
+    if !error.contains("ARM bus phase 1 exception: expected 0x5, got 0x0") {
+        return Err(format!("Unexpected bus-fault control: {error}").into());
+    }
+    fs::write(
+        grade::artifact(&broken, ".fault-negative.txt"),
+        format!("suppressed_data_busfault=caught\n{error}\n"),
+    )?;
     Ok(())
 }
 
@@ -439,7 +469,7 @@ fn run(
         if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
             return Err("Firmware changed during CPU check".into());
         }
-        let summary="ARM fault/FPU probes with automatic/lazy TCM/SRAM frames and disabled divide/alignment/lazy-save controls passed; production startup/audio and other ARM probes NOT RUN\n";
+        let summary="ARM CPU faults/FPU, QSPI/FLASH bus errors and DMA QSPI completion/error probes passed, including all negative controls; production startup/audio and other ARM probes NOT RUN\n";
         fs::write(directory.join("cpu-summary.txt"), summary)?;
         print!("{summary}");
         return Ok(());
@@ -724,7 +754,7 @@ fn run(
         return Err("Firmware changed during the run".into());
     }
     let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nBus-contention negative control: caught by audio/FIFO gates and delayed DMA\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nARM flash programming/erase: status, deferred completion, STM/STRD retries and stale I-cache checks passed\nFlash wait-bypass negative control: caught by CPU result gate\nARM dirty writeback/DSB: deferred shared-port completion and early-marker control passed\nARM exception entry/return: busy flash vector, single SRAM frame and wait-bypass control passed\nARM normal-load IRQ preemption: early handler, restarted load and blocked-preemption control passed\nCPU/DMA stalls: coupled functional service scenario; not cycle accurate\nSDRAM timing: open-row read/transfer service scenario; row/refresh scheduling unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, full store buffers, late arrival/tail-chain timing, pipeline overlap, calibrated CPU timing and complete codec response remain unfinished or unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
-    let summary=format!("{summary}ARM CPU divide/alignment/MPU/XN/NOCP faults, FPv5-D16 identification, f64 arithmetic and automatic/lazy TCM/SRAM frames: passed\n");
+    let summary=format!("{summary}ARM CPU divide/alignment/MPU/XN/NOCP faults, FPv5-D16 identification, f64 arithmetic and automatic/lazy TCM/SRAM frames: passed\nQSPI/FLASH data and instruction bus faults, escalation and DMA QSPI TC/TE/IRQ: passed\n");
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())

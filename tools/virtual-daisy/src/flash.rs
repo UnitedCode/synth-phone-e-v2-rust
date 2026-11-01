@@ -1,6 +1,11 @@
 //! STM32H750 bank-one user flash (RM0433 4.3/4.7/4.9).
 //! Durations select DS12556 typical/max scenarios, not measured board latency.
 use std::collections::VecDeque;
+const KEY_BUS_ERROR: &str = "FLASH key sequence bus error";
+const INTERRUPTED_KEY_BUS_ERROR: &str = "interrupted FLASH key sequence bus error";
+pub fn bus_error(error: &str) -> bool {
+    matches!(error, KEY_BUS_ERROR | INTERRUPTED_KEY_BUS_ERROR)
+}
 pub const EOP: u32 = 1 << 16;
 pub const PGSERR: u32 = 1 << 18;
 pub const STRBERR: u32 = 1 << 19;
@@ -135,7 +140,7 @@ impl Flash {
             if width != 4 || self.blocked || self.cr & 1 == 0 {
                 self.blocked = true;
                 self.cr |= 1;
-                return Err("FLASH key sequence bus error");
+                return Err(KEY_BUS_ERROR);
             }
             match (self.key, value) {
                 (0, 0x45670123) => self.key = 1,
@@ -146,7 +151,7 @@ impl Flash {
                 _ => {
                     self.blocked = true;
                     self.cr |= 1;
-                    return Err("FLASH key sequence bus error");
+                    return Err(KEY_BUS_ERROR);
                 }
             }
             return Ok(());
@@ -154,7 +159,7 @@ impl Flash {
         if self.key == 1 {
             self.blocked = true;
             self.cr |= 1;
-            return Err("interrupted FLASH key sequence bus error");
+            return Err(INTERRUPTED_KEY_BUS_ERROR);
         }
         if width != 4 {
             return Err("unsupported flash register access width");
