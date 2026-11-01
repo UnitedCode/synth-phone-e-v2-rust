@@ -70,6 +70,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public IntPtr ExceptionPointer {get;}
         public bool ImageLoading { get; set; }
         public bool CpuWaitBypass { get; set; }
+        public bool SuppressBusErrors {get;set;}
         public void Synchronize(bool reportCpu=false) {
             if(reportCpu && machine.SystemBus.TryGetCurrentCPU(out var current)) current.SyncTime();
             var rcc=(DaisyRcc)machine["sysbus.rcc"];
@@ -89,12 +90,20 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 return;
             }
             ulong ns=access(native.State,cpu.MemoryContext,address,width,ref value,isWrite?1U:0U);
+            if(ns==ulong.MaxValue-1) {
+                if(SuppressBusErrors) {value=0;return;}
+                throw new BusAccessException(BusAccessError.AddressError);
+            }
             if(ns==ulong.MaxValue) throw new InvalidOperationException("Unsupported CPU bus access");
             if(ns!=0) {value=0;cpu.StallMemoryAccess();}
         }
         public uint Register(uint space,long offset,uint value,bool write,uint width=4) {
             Synchronize(true);
             ulong result=register(native.State,space,(ulong)offset,value,write?1U:0U,width);
+            if(result>>32==2) {
+                if(SuppressBusErrors) return 0;
+                throw new BusAccessException(BusAccessError.AddressError);
+            }
             if(result>>32!=0) throw new InvalidOperationException($"Unsupported flash/AXI register access at 0x{offset:X}");
             return (uint)result;
         }

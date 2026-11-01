@@ -167,7 +167,9 @@ impl Dma {
             (peripheral, memory)
         };
         let readable_flash = (0x0800_0000..0x0802_0000).contains(&memory) && memory <= 0x0801_fffc;
-        if !(crate::memory::SystemMemory::is_ram(memory, 4) || readable_flash) {
+        let readable_qspi =
+            stream.cr & (1 << 6) != 0 && crate::memory::SystemMemory::is_qspi(memory, 4);
+        if !(crate::memory::SystemMemory::is_ram(memory, 4) || readable_flash || readable_qspi) {
             self.status[index / 4] |= 1 << ([0, 6, 16, 22][index % 4] + 3);
             stream.cr &= !1;
             return Ok(None);
@@ -192,6 +194,18 @@ impl Dma {
             }
         }
         Ok(Some(transfer))
+    }
+    pub fn bus_error(&mut self, index: usize) -> Result<(), &'static str> {
+        let stream = self
+            .streams
+            .get_mut(index)
+            .ok_or("invalid DMA error stream")?;
+        if stream.cr & 1 == 0 {
+            return Err("DMA bus error on disabled stream");
+        }
+        self.status[index / 4] |= 1 << ([0, 6, 16, 22][index % 4] + 3);
+        stream.cr &= !1;
+        Ok(())
     }
     pub fn irqs(&self) -> u32 {
         self.streams

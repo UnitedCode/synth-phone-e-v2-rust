@@ -383,6 +383,7 @@ pub unsafe extern "C" fn daisy_memory_write(
 
 /// # Safety
 /// Live, serialized architecture state. Called before a translated block runs.
+/// Status: 0=ready, 1=retranslate, 2=wait, 3=unsupported, 4=instruction BusFault.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_runtime_fetch(
     state: *mut Peripheral,
@@ -400,6 +401,11 @@ pub unsafe extern "C" fn daisy_runtime_fetch(
             }
         }
         Ok(true) => 1,
+        Err(error)
+            if qspi::mapped_bus_error(error) && memory.instruction_bus_fault_at_start(address) =>
+        {
+            4
+        }
         Err(_) => 3,
     }
 }
@@ -424,6 +430,7 @@ pub unsafe extern "C" fn daisy_alignment(
 
 /// # Safety
 /// Live architecture state and a valid mutable u64 value. Context is guest PC+SP.
+/// Returns service ns, MAX for unsupported behavior, MAX-1 for a modeled bus error.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_cpu_access(
     state: *mut Peripheral,
@@ -441,6 +448,7 @@ pub unsafe extern "C" fn daisy_cpu_access(
         &mut *value,
     ) {
         Ok(wait) => wait,
+        Err(error) if qspi::mapped_bus_error(error) => u64::MAX - 1,
         Err(error) => {
             eprintln!("CPU bus error: context={context:#x} address={address:#x} width={width} write={write}: {error}");
             u64::MAX
@@ -579,12 +587,14 @@ pub unsafe extern "C" fn daisy_shared_reg(
     };
     match result {
         Ok(v) => u64::from(v),
+        Err(error) if space == 0 && flash::bus_error(error) => 2 << 32,
         Err(_) => 1 << 32,
     }
 }
 /// # Safety
 /// Live architecture state. token0 issues a new DMA port operation, other tokens
 /// poll completion. 0=ready, 1=admission blocked, other values are live tokens.
+/// MAX=unsupported; MAX-1=bus error, which the DMA stream must complete as TEIF.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_dma_port(
     state: *mut Peripheral,
@@ -603,6 +613,7 @@ pub unsafe extern "C" fn daisy_dma_port(
     match memory.dma_submit(address, write != 0) {
         Ok(Some(id)) => id + 2,
         Ok(None) => 1,
+        Err(error) if qspi::mapped_bus_error(error) => u64::MAX - 1,
         Err(_) => u64::MAX,
     }
 }
@@ -807,6 +818,13 @@ pub unsafe extern "C" fn daisy_dma_peek(state: *mut Peripheral, stream: u32) -> 
 /// `state` must be live with serialized access.
 pub unsafe extern "C" fn daisy_dma_irqs(state: *mut Peripheral) -> u32 {
     (*state).dma.irqs()
+}
+
+/// # Safety
+/// Live serialized DMA state; called after a modeled external bus-error response.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_dma_bus_error(state: *mut Peripheral, stream: u32) -> u32 {
+    u32::from((*state).dma.bus_error(stream as usize).is_err())
 }
 
 /// # Safety

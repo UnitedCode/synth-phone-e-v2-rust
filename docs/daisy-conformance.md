@@ -299,7 +299,7 @@ the AXI SRAM read target busy while an IRQ stacks into D2 SRAM; the handler must
 still run early and the abandoned load must restart after return.
 The private managed assembly dispatches only its initial budget check through the existing
 virtual getter; both arithmetic field reads remain intact. Each boot attests
-the pinned IL shape, Python guard and native adapter version9.
+the pinned IL shape, Python guard and native adapter version10.
 
 A separate no-std Rust ARM guest checks enabled divide/alignment faults,
 16 MPU regions, denied data and execute-never accesses, and disabled-coprocessor
@@ -320,6 +320,30 @@ without duplicate bus service when a later store stalls. This corrects the prior
 unmodeled-context abort. Separate disabled divide/alignment/lazy-save controls
 must exit normally and fail the intended result gate. `cpu` runs this focused
 suite; `probe` and `run` also include it. No CI workflow or OS matrix was added.
+
+The Rust bus bridge now distinguishes documented QSPI/FLASH error responses
+from missing or unsupported behavior. [RM0433 sections23.3.14 and4.5.1/4.7.12](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743-753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+require bus errors for disabled/unmapped/out-of-range QSPI reads and incorrect
+FLASH unlock writes. A separate Rust ARM guest verifies CFSR, BFAR, precise data
+PCs, instruction IBUSERR without BFARVALID, disabled-BusFault escalation, and
+persistent FLASH locking after a bad key. Register stores use an MPU
+Strongly-ordered region; posted-store timing remains outside this test.
+The suppressed-data-error control must finish and fail its exception gate.
+
+Instruction errors are delivered only when the first instruction of a translated
+block cannot fetch. A valid or cached prefix followed by a failing line remains
+explicitly unsupported; the bridge refuses to fabricate a block-start fault
+that would skip that prefix. Unknown protocols and stopped-clock behavior still
+fail as unsupported. A cached QSPI read requires no external response.
+
+DMA can now read mapped QSPI. A modeled read bus error sets TEIF, clears EN,
+preserves NDTR and raises the enabled transfer-error IRQ. A successful read
+commits one transfer and raises completion. The ARM guest programs the stream
+and acknowledges its real NVIC interrupt; the host supplies one synthetic DREQ
+after the guest sleeps. The guest selects its transmit register from the physical
+board straps. Both valid and disabled-controller sources are checked,
+including zero committed transfers on error. These are functional response
+tests on the existing 1µs DMA service grid, not calibrated bus-cycle timing.
 
 These tests verify functional service scenarios. Late arrival, complete
 tail-chaining timing, full MPU/fault-priority and BusFault coverage, FP numerical corner cases,

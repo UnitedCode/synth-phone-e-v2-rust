@@ -1250,6 +1250,27 @@ impl SystemMemory {
         self.instruction_fills += 1;
         Ok(index)
     }
+    /// A block-entry fault is precise only if its first instruction cannot
+    /// fetch. A valid/cached prefix followed by a bad line is still unsupported.
+    pub fn instruction_bus_fault_at_start(&self, address: u32) -> bool {
+        if !Self::is_qspi(address, 2) {
+            return false;
+        }
+        let base = address & !31;
+        let set = ((base / 32) % 256) as usize;
+        if self
+            .access_policy(address, true)
+            .ok()
+            .is_some_and(|p| p != Policy::Noncacheable)
+            && (set * 2..set * 2 + 2)
+                .any(|i| self.instructions[i].valid && self.instructions[i].address == base)
+        {
+            return false;
+        }
+        self.qspi
+            .as_ref()
+            .is_some_and(|q| q.lock().unwrap().mapped_bus_fault(address - 0x90000000, 2))
+    }
     pub fn read_instruction(&mut self, address: u32, width: usize) -> Result<u32> {
         Self::check(address, width)?;
         self.instruction_reads += 1;
