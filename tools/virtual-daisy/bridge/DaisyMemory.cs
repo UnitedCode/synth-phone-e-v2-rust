@@ -120,7 +120,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             if(cpu) {ulong data=value;CpuTransfer(address,width,true,ref data);return;}
             bool code;
-            lock(sync) { if(write(native.State, address, width, value, cpu ? 1U : 0U) != 0) throw new InvalidOperationException($"Unsupported RAM write: 0x{address:X}"); code=codePages.Contains(address>>12); }
+            lock(sync) {
+                uint result=write(native.State,address,width,value,0);
+                if(result==2) throw new BusAccessException(BusAccessError.AddressError);
+                if(result!=0) throw new InvalidOperationException($"Unsupported RAM write: 0x{address:X}");
+                code=codePages.Contains(address>>12);
+            }
             if(code && !cpu) this.cpu?.ClearTranslationCache(); // Native stores already invalidate translated blocks at a safe point.
         }
         public uint ReadScb(long offset) { lock(sync) return native.ReadDoubleWord(offset); }

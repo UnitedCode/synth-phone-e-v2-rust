@@ -18,7 +18,8 @@ fn programmed_sdram_timings_define_read_and_refresh_lower_bounds() {
     assert_eq!(timing.read_min_ns(32, false, false).unwrap(), 135);
     assert_eq!(timing.read_min_ns(4, true, false).unwrap(), 35);
     assert_eq!(timing.read_min_ns(4, false, true).unwrap(), 85);
-    assert_eq!(timing.refresh_interval_ns(), 15600);
+    // RM0433 FMC_SDRTR: COUNT+1 memory clocks, not COUNT or COUNT+20.
+    assert_eq!(timing.refresh_interval_ns(), 15610);
     assert_eq!(timing.refresh_busy_ns(8), 560);
 }
 
@@ -40,4 +41,7 @@ fn refresh_disable_and_reserved_controller_settings_are_explicit() {
     }
     assert!(SdramTiming::decode(valid | (3 << 13), 0, 100 << 1, rate).is_err());
     assert!(SdramTiming::decode(valid & !(3 << 10), 0, 100 << 1, rate).is_err());
+    assert!(SdramTiming::decode(valid | (3 << 2), 0, 100 << 1, rate).is_err());
+    // SDRTR forbids COUNT=TWR+TRP+TRC+TRCD+4, even above the41-cycle minimum.
+    assert!(SdramTiming::decode(valid, 0x0fffffff, 68 << 1, rate).is_err());
 }

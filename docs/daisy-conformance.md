@@ -167,8 +167,9 @@ cache-line read bounds are tested against worked register cases. Refresh COUNT
 uses SDCLK; RPIPE uses the faster FMC kernel clock, unlike CAS and row timings.
 The distinction follows [RM0433 section22.9.5's SDCR definitions](https://www.st.com/resource/en/reference_manual/dm00314099-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf). Refresh COUNT
 is a counter period; the documented 20-cycle calculation margin is not added
-to its runtime period. These are lower bounds, not a model of actual CPU stalls,
-bus arbitration, FMC queueing or SDRAM refresh interference.
+to its runtime period. These standalone analytical bounds do not predict CPU
+stalls. The subsequent shared-fabric and live SDRAM scenarios below add queueing,
+row state and refresh interference without claiming calibrated silicon timing.
 
 The WM8731 Rev4.9 Table32 specifies normal Type1 group delays of20/FS for ADC
 and18/FS for DAC. The ideal-line path now includes those nominal passband delay
@@ -421,7 +422,7 @@ ABORT latency, partially returned bursts and pin timing are not certified.
 These tests verify functional service scenarios. Physical late-arrival cutoffs,
 complete tail-chaining timing, full MPU/fault-priority and BusFault coverage, FP numerical corner cases,
 snapshot/reset during in-flight operations, bus turnaround, actual target
-overlap, FMC row/refresh scheduling and pipeline fetch arrival times still need
+overlap, exact FMC command scheduling and pipeline fetch arrival times still need
 implementation or independent validation. The source-backed tests do not justify
 a fixed silicon exception-entry latency or hardware deadline claim.
 
@@ -456,7 +457,7 @@ functional coupling; they do not calibrate CPU headroom.
 | Firmware boot and selected audio path | Executed in simulation | Same ELF on an identified physical revision |
 | Serial data, reset and control behavior | Source-backed cases | Captured control transactions and SAI words/edges, including reset and faults |
 | Interrupt/buffer ownership | Functional DMA and IRQ tests | Hardware DMA HT/TC, NVIC and task traces with timestamps and simultaneous UI/MIDI load |
-| Performance and deadlines | Functional caches/runtime refetch, shared CPU/DMA stalls, live flash buffer/programming/erase, deferred dirty writes/DSB, resumable exception service, load-wait IRQ preemption and late-arrival/tail-chain frame reuse | Pipeline/speculation and silicon victim policy, complete store buffers, physical late-arrival cutoff and tail-chain cycles, FMC row/refresh behavior, actual overlap and calibrated CPU/bus costs |
+| Performance and deadlines | Functional caches/runtime refetch, shared CPU/DMA stalls, live flash buffer/programming/erase, deferred dirty writes/DSB, resumable exception service, load-wait IRQ preemption, late-arrival/tail-chain frame reuse and FMC row/refresh/read-ahead service | Pipeline/speculation and silicon victim policy, complete store buffers, physical late-arrival cutoff and tail-chain cycles, exact FMC queue/command overlap and calibrated CPU/bus costs |
 | Clock rates and drift | RCC/PLL/SAI rational derivation, 1µs event grid, DWT/core and timer prescalers | PLL/oscillator lock and jitter, clock-domain crossing delays, oscillator tolerance, independent frequency measurements |
 | Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal and passband-delay stage | Full ADC/DAC filters, internal rounding and startup behavior, independent impulse/frequency responses per codec |
 | Analog sound | No analog model | Calibrated gain, impedance, headroom, clipping, noise and distortion measurements |
@@ -528,16 +529,55 @@ AXI read/write channels. RM0433 22.9.3 figures119/120 use the same DATA pins
 for reads and writes. Mixed CPU/DMA tests exercise both direction orders and
 completion-time stalls; an unrelated target can still progress. A queued
 direction is selected by oldest arrival and its initiator by AXI QoS/LRU.
-Serializing the whole supplied service window is a scenario choice: exact FMC
-direction arbitration, FIFO acceptance, command overlap, turnaround and refresh
-scheduling still require modeling or independent traces. It is not a measured
+Serializing service windows is a scenario choice: exact FMC
+direction arbitration, FIFO acceptance, command overlap and turnaround still
+require independent traces. It is not a measured
 controller latency or a new hardware deadline guarantee.
 
 WM8731 R7.LRSWAP follows Table15 of the linked Rev4.9 datasheet: the DAC
 channels swap while ADC ordering stays unchanged. Public I2C/SAI tests capture
 WAV output in serial and ideal-line modes, checking the latter's existing
-20/18-frame ADC/DAC delay surrogate. No unpublished converter or de-emphasis
+nominal ADC/DAC delay surrogate. No unpublished converter or de-emphasis
 filter coefficients are inferred from those channel-routing checks.
+
+Conformance v10 adds the live row/bank state, recovery constraints, periodic
+refresh and the FMC command path. The SDRTR timer uses COUNT+1 memory clocks,
+correcting the earlier COUNT-only period. Cold/active/conflicting rows, independent
+banks, TRAS/TWR, refresh priority/PALL, delayed-refresh RE/CRE/REIE, IRQ48,
+manual NRFS/TMRD, self-refresh/TXSR, power-down refresh, WP and documented reset
+values are checked through public interfaces. FMC is registered with RCC so
+its gate and reset reach the real managed peripheral rather than unused flags.
+An ARM guest independently programs MMIO, writes and reads rows/banks, exercises
+read-ahead and receives IRQ48. Masked-IRQ and wrong-target controls must fail its
+processor-written completion result after successful guarded execution.
+The same guest checks a configured-geometry overflow as a precise BusFault,
+including CFSR, BFAR and exception number. DMA admission and response APIs return
+the corresponding bus-error category so the existing TEIF path can handle it.
+
+For the Seed 32-bit bus, RBURST uses consumable read-ahead tags with data-ready
+times, row limits, oldest eviction and write/precharge/refresh flushing. The
+detailed RM0433 read-cycle section specifies six 32-bit FIFO lines, whereas the
+feature list says six 64-bit lines. The revision history explicitly corrects it
+to six 64-bit entries. The model follows that correction with per-word validity
+as a declared narrow-read packing scenario. Exact packing remains unverified.
+FIFO acknowledgements use a
+one-kernel-clock scenario; exact response latency, write-FIFO acceptance depth,
+pin-level command overlap and low-power transition edges remain unverified.
+Other bus widths with RBURST and in-flight clock stops fail explicitly.
+
+WM8731 normal/USB sample tables now use rational clock ratios for every listed
+SR/BOSR combination, CLKIDIV2 and CLKODIV2. Table32's four nominal ADC/DAC delay
+pairs are 12/11, 20/18, 3/5 and 6/5 frames. Live codec rates must agree with the
+shared SAI LRC and generated MCLK for powered converters; invalid combinations
+fail instead of emitting plausible PCM. This extends the delay surrogate, not
+the unpublished complete converter response. Filter-mode changes restart that
+surrogate and do not claim to reproduce silicon reconfiguration transients.
+The hardware-mode codecs also reject missing MCLK. Necessary ratio checks use
+the [AKM AK4556 clock-mode table](https://www.alldatasheet.jp/html-pdf/206730/AKM/AK4556/879/15/AK4556.html)
+and [TI PCM3060 system-clock requirements](https://www.ti.com/lit/ds/symlink/pcm3060.pdf).
+PCM3060's shared ADC/DAC wiring requires an ADC-compatible ratio;128/192fs is
+DAC-only. The AK4556 ratio union does not establish its physical CKS straps,
+speed selection, full operating-frequency limits or transition behavior.
 
 Reference data must identify physical revision, codec marking, firmware ELF hash,
 settings, clock configuration, input/calibration and measurement method. Digital

@@ -5,7 +5,7 @@ pub struct Rate {
     pub denominator: u64,
 }
 impl Rate {
-    fn new(numerator: u64, denominator: u64) -> Self {
+    pub(crate) fn new(numerator: u64, denominator: u64) -> Self {
         fn gcd(mut a: u64, mut b: u64) -> u64 {
             while b != 0 {
                 (a, b) = (b, a % b);
@@ -255,6 +255,20 @@ impl ClockTree {
     }
     pub fn fmc_rate(&self) -> Result<Option<Rate>, &'static str> {
         self.external_memory_rate(self.read(0x4c) & 3)
+    }
+    pub fn sai_mclk(&self, cr1: u32, frcr: u32) -> Result<Rate, &'static str> {
+        if cr1 & (1 << 19) != 0 {
+            return Err("SAI MCLK output disabled");
+        }
+        let frame = self.sample_rate(cr1, frcr)?;
+        let ratio = 256 * (1 + u64::from((cr1 >> 26) & 1));
+        Ok(Rate::new(
+            frame
+                .numerator
+                .checked_mul(ratio)
+                .ok_or("SAI MCLK overflow")?,
+            frame.denominator,
+        ))
     }
     pub fn qspi_rate(&self) -> Result<Option<Rate>, &'static str> {
         self.external_memory_rate((self.read(0x4c) >> 4) & 3)

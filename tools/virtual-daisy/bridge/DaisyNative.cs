@@ -13,18 +13,37 @@ using Antmicro.Renode.Time;
 
 namespace Antmicro.Renode.Peripherals.Miscellaneous
 {
-    public sealed class DaisyFmc : DaisyNative,IDoubleWordPeripheral
+    public sealed class DaisyFmc : DaisyNative,IDoubleWordPeripheral,IDisposable
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint SaveNative(IntPtr state,IntPtr clock,[MarshalAs(UnmanagedType.LPUTF8Str)] string path);
-        public DaisyFmc(string libraryPath,DaisyRcc rcc) :base(libraryPath,1,0x1000) { this.rcc=rcc; var library=NativeLibrary.Load(libraryPath); save=Marshal.GetDelegateForFunctionPointer<SaveNative>(NativeLibrary.GetExport(library,"daisy_fmc_save")); }
-        public new uint ReadDoubleWord(long offset) {lock(sync) return base.ReadDoubleWord(offset);}
-        public new void WriteDoubleWord(long offset,uint value) {lock(sync) base.WriteDoubleWord(offset,value);}
-        public new void Reset() {lock(sync) base.Reset();}
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint IrqNative(IntPtr state);
+        public DaisyFmc(IMachine machine,string libraryPath,DaisyRcc rcc,DaisyArchitecture architecture) :base(libraryPath,1,0x1000) {
+            this.rcc=rcc;this.architecture=architecture;
+            var library=NativeLibrary.Load(libraryPath);
+            save=Marshal.GetDelegateForFunctionPointer<SaveNative>(NativeLibrary.GetExport(library,"daisy_fmc_save"));
+            irq=Marshal.GetDelegateForFunctionPointer<IrqNative>(NativeLibrary.GetExport(library,"daisy_fmc_irq"));
+            clock=machine.ObtainManagedThread(Tick,1000000);clock.Start();
+        }
+        private void Tick() {architecture.Synchronize();lock(sync) IRQ.Set(irq(State)!=0);}
+        public new uint ReadDoubleWord(long offset) {architecture.Synchronize(true);lock(sync) {IRQ.Set(irq(State)!=0);return base.ReadDoubleWord(offset);}}
+        public new void WriteDoubleWord(long offset,uint value) {
+            architecture.Synchronize(true);
+            lock(sync) base.WriteDoubleWord(offset,value);
+            // Advance old configuration before the write, then install the new
+            // configuration at that exact virtual timestamp without lock inversion.
+            Tick();
+        }
+        public new void Reset() {lock(sync) {base.Reset();IRQ.Unset();}}
+        public GPIO IRQ {get;}=new GPIO();
+        public void Dispose() {clock.Dispose();}
         public uint WithState(Func<IntPtr,uint> operation) {lock(sync) return operation(State);}
         public void Save(string path) { if(rcc.WithState(clock=>WithState(fmc=>save(fmc,clock,path)))!=0) throw new InvalidOperationException("Invalid or unmodeled FMC timing configuration"); }
         private readonly object sync=new object();
         private readonly DaisyRcc rcc;
         private readonly SaveNative save;
+        private readonly IrqNative irq;
+        private readonly DaisyArchitecture architecture;
+        private readonly IManagedThread clock;
     }
     public class DaisyNative : IDoubleWordPeripheral, IKnownSize
     {
@@ -244,6 +263,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
     public class DaisySai : IDoubleWordPeripheral, IKnownSize, IDisposable
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint CodecTickNative(IntPtr state, IntPtr codec, uint idealLine);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint CodecClockNative(IntPtr codec,IntPtr clock,uint cr1,uint frcr);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void FaultNative(IntPtr state, uint dropRx);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint ConfigureNative(IntPtr state, uint rxChannel);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint RateNative(IntPtr state, double rate);
@@ -262,6 +282,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             var configure = Marshal.GetDelegateForFunctionPointer<ConfigureNative>(NativeLibrary.GetExport(library, "daisy_sai_configure"));
             if(configure(native.State, rxChannel) != 0) throw new InvalidOperationException("Unsupported SAI board wiring");
             codecTick = Marshal.GetDelegateForFunctionPointer<CodecTickNative>(NativeLibrary.GetExport(library, "daisy_sai_tick_codec"));
+            codecClock=Marshal.GetDelegateForFunctionPointer<CodecClockNative>(NativeLibrary.GetExport(library,"daisy_codec_clocks"));
             setRate = Marshal.GetDelegateForFunctionPointer<RateNative>(NativeLibrary.GetExport(library, "daisy_sai_rate"));
             fault = Marshal.GetDelegateForFunctionPointer<FaultNative>(NativeLibrary.GetExport(library, "daisy_sai_fault"));
             requests = Marshal.GetDelegateForFunctionPointer<Requests>(NativeLibrary.GetExport(library, "daisy_sai_requests"));
@@ -278,6 +299,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             // acquiring RCC's lock in the opposite direction.
             uint frames = rcc.Frames(cr1, frcr, 1000);
             double rate = frames==0 ? 0 : rcc.ExactRate(cr1,frcr);
+            if(frames!=0 && rcc.WithState(clockState=>codec.WithState(codecState=>codecClock(codecState,clockState,cr1,frcr)))!=0)
+                throw new InvalidOperationException("Codec ADC/DAC rates disagree with the physical SAI clocks");
             lock(sync)
             {
                 if(frames!=0 && setRate(native.State,rate)!=0) throw new InvalidOperationException("Invalid SAI frame rate");
@@ -311,6 +334,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly DaisyDma dma;
         private readonly IManagedThread clock;
         private readonly CodecTickNative codecTick;
+        private readonly CodecClockNative codecClock;
         private readonly RateNative setRate;
         private uint cr1, frcr;
         private readonly FaultNative fault;

@@ -130,6 +130,7 @@ public static class DaisyHost
         if(args[5]=="fetch" || args[5]=="fetch-prefix-control") {FetchProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5].StartsWith("transition-")) {TransitionProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="vector" || args[5]=="vector-cached" || args[5]=="vector-enabled" || args[5]=="vector-noerror") {VectorProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="sdram" || args[5]=="sdram-irq-control" || args[5]=="sdram-port-control") {SdramProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -287,6 +288,20 @@ public static class DaisyHost
         File.WriteAllBytes(prefix+".storage-cache.bin",bus.ReadBytes(0x2001a024UL,28));
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM QSPI storage/polling interrupt probe executed; results require Rust grading");
+    }
+    private static void SdramProbes(Emulation emulation,Machine machine,string prefix,string kind) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        var architecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
+        bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"sdram-probe.elf"));
+        cpu.VectorTableOffset=0x6000;cpu.SP=0x3001f000;cpu.PC=bus.ReadDoubleWord(0x6004);
+        emulation.RunFor(TimeInterval.FromMicroseconds(100));
+        if(bus.ReadDoubleWord(0x20019c00)!=0x42) throw new InvalidOperationException("ARM SDRAM guest not ready");
+        if(kind=="sdram-irq-control") bus.WriteDoubleWord(0xe000e184,1U<<16);
+        architecture.InjectBusLoad(kind=="sdram-port-control" ? 7U:5U,100000);
+        emulation.RunFor(TimeInterval.FromMicroseconds(200));
+        File.WriteAllBytes(prefix+".sdram.bin",bus.ReadBytes(0x20019c00UL,128));
+        architecture.Save(prefix+".memory.txt");
+        Console.WriteLine("ARM SDRAM rows/refresh IRQ fixture executed; results require Rust grading");
     }
     private static void VectorProbes(Emulation emulation,Machine machine,string prefix,string kind) {
         var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];

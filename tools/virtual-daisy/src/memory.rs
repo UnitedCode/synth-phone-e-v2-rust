@@ -339,6 +339,7 @@ impl SystemMemory {
     ) {
         self.hclk = Some(hclk);
         self.pclk = Some(pclk);
+        self.fabric.configure_sdram(sdram.clone());
         self.sdram = sdram;
     }
     fn ns(rate: crate::clock::Rate, cycles: u64) -> u64 {
@@ -869,7 +870,9 @@ impl SystemMemory {
         target: usize,
         service: u64,
     ) -> Result<Option<u64>> {
-        if target == 3 && !write {
+        if target == 5 {
+            self.fabric.submit_sdram(ini, address, bytes, write)
+        } else if target == 3 && !write {
             let beat = Self::ns(
                 self.hclk.ok_or("flash clock stopped")?,
                 (bytes as u64).div_ceil(8),
@@ -993,6 +996,13 @@ impl SystemMemory {
         }
     }
     fn store_byte(&mut self, address: u32, value: u8) {
+        if (0xc0000000..=0xc3ffffff).contains(&address) {
+            self.fabric.invalidate_sdram_fifo();
+        }
+        if (0xc0000000..=0xc3ffffff).contains(&address)
+            && self.sdram.as_ref().is_some_and(|s|s.write_protected()) {
+            return;
+        }
         self.pages.entry(address >> 12).or_insert_with(|| {
             Box::new([if Self::is_flash(address, 1) { 0xff } else { 0 }; 4096])
         })[(address & 4095) as usize] = value;
@@ -1433,6 +1443,9 @@ impl SystemMemory {
     }
     pub fn read_dma(&mut self, address: u32, width: usize) -> Result<u32> {
         Self::check(address, width)?;
+        if (0xc0000000..=0xc3ffffff).contains(&address) && self.sdram.is_some() {
+            self.fabric.validate_sdram(address,width)?;
+        }
         if self
             .policy(address)
             .is_ok_and(|policy| policy != Policy::Noncacheable)
@@ -1454,6 +1467,9 @@ impl SystemMemory {
     }
     pub fn write_dma(&mut self, address: u32, width: usize, value: u32) -> Result<()> {
         Self::check(address, width)?;
+        if (0xc0000000..=0xc3ffffff).contains(&address) && self.sdram.is_some() {
+            self.fabric.validate_sdram(address,width)?;
+        }
         if Self::is_qspi(address, width) {
             return Err("QSPI mapped aperture is read-only");
         }
@@ -1472,9 +1488,10 @@ impl SystemMemory {
         Ok(())
     }
     pub fn stats(&self) -> String {
+        let sdram=self.fabric.sdram_report();
         let cache=format!("data_cache_enabled={}\ncache_line_fills={}\ncache_line_writebacks={}\ndirty_lines={}\ndma_cacheable_bytes={}\ninstruction_cache_enabled={}\ninstruction_fetch_reads={}\ninstruction_cache_fills={}\nruntime_blocks={}\nruntime_instruction_slots={}\nruntime_retranslations={}\n", u32::from(self.ccr & (1 << 16) != 0), self.fills, self.writebacks, self.cache.iter().filter(|line| line.valid && line.dirty).count(), self.dma_cacheable_bytes,u32::from(self.ccr&(1<<17)!=0),self.instruction_reads,self.instruction_fills,self.runtime_blocks,self.runtime_instructions,self.runtime_retranslations);
         let timing=format!("abandoned_bus_requests={}\nabandoned_cpu_waits={}\nabandoned_cpu_wait_ns={}\nflash_buffer_hits={}\nflash_array_reads={}\nwriteback_pending_lines={}\nwriteback_drain_yields={}\nexception_entry_wait_yields={}\nexception_return_wait_yields={}\nexception_stack_words={}\nvector_reads={}\nvector_cache_hits={}\ncache_writeback_timing=DEFERRED_FABRIC_COMPLETION\nexception_bus_timing=RESUMABLE_PORT_SERVICE_SCENARIO\nstore_buffer_and_pipeline_overlap=UNMODELED\n",self.abandoned_bus_requests,self.abandoned_waits,self.abandoned_wait_ns,self.fabric.flash_buffer_hits,self.fabric.flash_buffer_misses,self.pending_writebacks.len(),self.writeback_drain_yields,self.entry_wait_yields,self.return_wait_yields,self.exception_stack_words,self.vector_reads,self.vector_cache_hits);
-        format!("{cache}{timing}runtime_cached_checks={}\ncpu_bus_wait_ns={}\ncpu_bus_wait_yields={}\ndma_bus_wait_yields={}\nfabric_completed={}\nfabric_contests={}\nbus_stall_scope=COUPLED_FUNCTIONAL_SERVICE_SCENARIO\ndma_service_grid_ns=1000\n{}",self.runtime_cached_checks,self.cpu_wait_ns,self.cpu_wait_yields,self.dma_wait_yields,self.fabric.completed,self.fabric.contests,self.flash.stats())
+        format!("{sdram}{cache}{timing}runtime_cached_checks={}\ncpu_bus_wait_ns={}\ncpu_bus_wait_yields={}\ndma_bus_wait_yields={}\nfabric_completed={}\nfabric_contests={}\nbus_stall_scope=COUPLED_FUNCTIONAL_SERVICE_SCENARIO\ndma_service_grid_ns=1000\n{}",self.runtime_cached_checks,self.cpu_wait_ns,self.cpu_wait_yields,self.dma_wait_yields,self.fabric.completed,self.fabric.contests,self.flash.stats())
     }
     pub fn write_scb(&mut self, offset: u64, value: u32) -> Result<()> {
         self.blocks.clear();
