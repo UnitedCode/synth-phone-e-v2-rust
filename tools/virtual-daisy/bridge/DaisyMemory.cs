@@ -56,7 +56,13 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public uint ReadMode(uint address,uint width,uint mode) {
             if(mode==1) {ulong data=0;CpuTransfer(address,width,false,ref data);return (uint)data;}
             uint result;
-            lock(sync) { if(mode==2) codePages.Add(address>>12); ulong value=read(native.State,address,width,mode); if(value>>32!=0) throw new InvalidOperationException($"Unsupported memory access: 0x{address:X}"); result=(uint)value; }
+            lock(sync) {
+                if(mode==2) codePages.Add(address>>12);
+                ulong value=read(native.State,address,width,mode);
+                if(value>>32==2) throw new BusAccessException(BusAccessError.AddressError);
+                if(value>>32!=0) throw new InvalidOperationException($"Unsupported memory access: 0x{address:X}");
+                result=(uint)value;
+            }
             if(mode==0) AfterExecution(); // DMA mapped reads may arm a timeout.
             return result;
         }

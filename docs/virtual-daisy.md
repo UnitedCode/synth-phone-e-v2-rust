@@ -123,7 +123,9 @@ FP frames with DTCM and shared SRAM stacks. It checks precise stacked PCs,
 saved/restored FP state, unchanged memory after faulting stores, and negative
 controls for disabled divide/alignment/lazy preservation. It also runs the
 QSPI/FLASH bus-error guest, HardFault escalation and valid/error DMA QSPI reads
-with a synthetic peripheral request and real NVIC acknowledgement. A mapped-code
+with a synthetic peripheral request and real NVIC acknowledgement. DMA cases
+include an out-of-range source and controller disable/ABORT while a read is
+pending, requiring TEIF without decrementing NDTR. A mapped-code
 guest checks execution before a failing fetch and a Thumb32 instruction spanning
 FSIZE, with a corrupt-prefix control. Its summary explicitly
 excludes production startup/audio. The synthetic guest never replaces or patches

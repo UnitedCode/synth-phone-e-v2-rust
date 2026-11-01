@@ -360,9 +360,15 @@ preserves NDTR and raises the enabled transfer-error IRQ. A successful read
 commits one transfer and raises completion. The ARM guest programs the stream
 and acknowledges its real NVIC interrupt; the host supplies one synthetic DREQ
 after the guest sleeps. The guest selects its transmit register from the physical
-board straps. Both valid and disabled-controller sources are checked,
-including zero committed transfers on error. These are functional response
-tests on the existing 1µs DMA service grid, not calibrated bus-cycle timing.
+board straps. Valid, disabled and out-of-range sources are checked. Additional
+cases disable the controller or request ABORT after a live read ticket is
+admitted but before its response. A documented bus error from that response
+now reaches the same Rust DMA completion path as an admission-time error,
+without committing a transfer. Unsupported reads still terminate as model
+errors. All error cases require unchanged NDTR, EN clear, TEIF and exactly one
+guest IRQ. These are functional response tests on the existing 1µs DMA service
+grid. Controller state is evaluated at the modeled read response; physical
+ABORT latency, partially returned bursts and pin timing are not certified.
 
 These tests verify functional service scenarios. Late arrival, complete
 tail-chaining timing, full MPU/fault-priority and BusFault coverage, FP numerical corner cases,

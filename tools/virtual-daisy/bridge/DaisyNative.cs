@@ -169,6 +169,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void BeginBatch() { lock(sync) { collecting=true; } }
         public bool EndBatch() { lock(sync) { collecting=false; return StartNext(); } }
         public void Save(string path) { lock(sync) { if(save(native.State,path)!=0) throw new InvalidOperationException("Could not save DMA arbitration statistics"); } }
+        public void RequirePendingRead(uint address) {
+            lock(sync) if(!inFlight || writing || source!=address || token<2 || token>=ulong.MaxValue-1)
+                throw new InvalidOperationException("DMA read fixture did not reach an admitted pending response");
+        }
         private bool StartNext() {
             if(inFlight) return false;
             uint winner=grant(native.State,pending);
@@ -190,21 +194,28 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                     uint address=writing ? destination:source;
                     token=architecture.DmaPort(address,writing,token);
                     if(token==ulong.MaxValue-1) {
-                        if(busError(native.State,activeStream)!=0) throw new InvalidOperationException("Invalid DMA bus-error completion");
-                        inFlight=false;token=0;disableAfterFlight=false;UpdateIrqs();notify=true;
+                        CompleteBusError();notify=true;
                     } else if(token==0) {
-                        if(!writing) {word=Memory(source) ? architecture.Read(source,4,false):machine.SystemBus.ReadDoubleWord(source);writing=true;}
-                        else {
-                            if(Memory(destination)) architecture.Write(destination,4,word,false); else machine.SystemBus.WriteDoubleWord(destination,word);
-                            ulong actual=request(native.State,activeStream);
-                            if(actual!=((ulong)source<<32|destination)) throw new InvalidOperationException("DMA descriptor changed before transfer completion");
-                            if(disableAfterFlight) {long offset=0x10+activeStream*0x18; native.WriteDoubleWord(offset,native.ReadDoubleWord(offset)&~1U);}
-                            inFlight=false;UpdateIrqs();notify=true;
+                        try {
+                            if(!writing) {word=Memory(source) ? architecture.Read(source,4,false):machine.SystemBus.ReadDoubleWord(source);writing=true;}
+                            else {
+                                if(Memory(destination)) architecture.Write(destination,4,word,false); else machine.SystemBus.WriteDoubleWord(destination,word);
+                                ulong actual=request(native.State,activeStream);
+                                if(actual!=((ulong)source<<32|destination)) throw new InvalidOperationException("DMA descriptor changed before transfer completion");
+                                if(disableAfterFlight) {long offset=0x10+activeStream*0x18; native.WriteDoubleWord(offset,native.ReadDoubleWord(offset)&~1U);}
+                                inFlight=false;UpdateIrqs();notify=true;
+                            }
+                        } catch(BusAccessException) {
+                            CompleteBusError();notify=true;
                         }
                     }
                 } else notify=pending!=0;
             }
             if(notify) Ready?.Invoke();
+        }
+        private void CompleteBusError() {
+            if(busError(native.State,activeStream)!=0) throw new InvalidOperationException("Invalid DMA bus-error completion");
+            inFlight=false;token=0;disableAfterFlight=false;UpdateIrqs();
         }
         private void UpdateIrqs() { uint mask = irqs(native.State); for(int i = 0; i < 8; i++) Connections[i].Set((mask & (1U << i)) != 0); }
         public void Reset() { lock(sync) { native.Reset(); pending=0; collecting=false;inFlight=false;token=0; UpdateIrqs(); } }
