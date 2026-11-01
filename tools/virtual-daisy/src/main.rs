@@ -1,6 +1,7 @@
 //! Run the unmodified production ELF on a functional virtual Daisy.
 mod conformance;
 mod core;
+mod cpu_probe;
 mod grade;
 mod platform;
 mod probe;
@@ -26,6 +27,7 @@ enum RunMode {
     Timing,
     Startup,
     Storage,
+    Cpu,
 }
 
 fn checked(command: &mut Command) -> Result<()> {
@@ -138,6 +140,10 @@ impl Host<'_> {
             ".storage-cache.bin",
             ".storage.txt",
             ".storage-negative.txt",
+            ".cpu.bin",
+            ".cpu-sites.bin",
+            ".cpu.txt",
+            ".cpu-negative.txt",
         ] {
             let path = grade::artifact(&capture, suffix);
             if path.exists() {
@@ -191,6 +197,13 @@ impl Host<'_> {
             "storage-irq-fault",
             "storage-data-fault",
             "storage-timer-fault",
+            "cpu",
+            "cpu-div-fault",
+            "cpu-align-fault",
+            "cpu-lazy-fault",
+            "cpu-ram",
+            "cpu-eager",
+            "cpu-eager-ram",
         ]
         .contains(&fault)
         {
@@ -198,6 +211,51 @@ impl Host<'_> {
         }
         Ok(capture)
     }
+}
+
+fn cpu_checks(host: &Host<'_>, tone: &Path) -> Result<()> {
+    cpu_probe::prepare(host.directory)?;
+    for (label, kind) in [
+        ("cpu-probes", "cpu"),
+        ("cpu-ram", "cpu-ram"),
+        ("cpu-eager", "cpu-eager"),
+        ("cpu-eager-ram", "cpu-eager-ram"),
+    ] {
+        let capture = host.boot(label, tone, kind)?;
+        cpu_probe::check(
+            &capture,
+            kind.ends_with("-ram"),
+            kind.starts_with("cpu-eager"),
+        )?;
+    }
+    for (kind, expected) in [
+        (
+            "cpu-div-fault",
+            "ARM CPU phase 1 exception: expected 0x6, got 0x0",
+        ),
+        (
+            "cpu-lazy-fault",
+            "ARM CPU lazy completion: expected 0x0, got 0x1",
+        ),
+        (
+            "cpu-align-fault",
+            "ARM CPU phase 2 exception: expected 0x6, got 0x0",
+        ),
+    ] {
+        let broken = host.boot(kind, tone, kind)?;
+        let error = cpu_probe::check(&broken, false, false)
+            .err()
+            .ok_or("ARM CPU control escaped grading")?
+            .to_string();
+        if !error.contains(expected) {
+            return Err(format!("Unexpected ARM CPU control: {error}").into());
+        }
+        fs::write(
+            grade::artifact(&broken, ".cpu-negative.txt"),
+            format!("{kind}=caught\n{error}\n"),
+        )?;
+    }
+    Ok(())
 }
 
 fn run(
@@ -223,6 +281,7 @@ fn run(
         "probe-summary.txt",
         "startup-summary.txt",
         "storage-summary.txt",
+        "cpu-summary.txt",
     ] {
         let summary = directory.join(name);
         if summary.exists() {
@@ -343,6 +402,7 @@ fn run(
             RunMode::Timing => "timing",
             RunMode::Startup => "startup",
             RunMode::Storage => "storage",
+            RunMode::Cpu => "cpu",
         },
     )?;
     let tone = directory.join("tone.f32le");
@@ -369,6 +429,18 @@ fn run(
         )?;
         let summary = format!("Production firmware startup passed at {elapsed} virtual ns; ARM probes and full audio/fault suites NOT RUN\n");
         fs::write(directory.join("startup-summary.txt"), &summary)?;
+        print!("{summary}");
+        return Ok(());
+    }
+    if matches!(mode, RunMode::Cpu | RunMode::Probes | RunMode::Full) {
+        cpu_checks(&host, &tone)?;
+    }
+    if mode == RunMode::Cpu {
+        if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
+            return Err("Firmware changed during CPU check".into());
+        }
+        let summary="ARM fault/FPU probes with automatic/lazy TCM/SRAM frames and disabled divide/alignment/lazy-save controls passed; production startup/audio and other ARM probes NOT RUN\n";
+        fs::write(directory.join("cpu-summary.txt"), summary)?;
         print!("{summary}");
         return Ok(());
     }
@@ -566,7 +638,7 @@ fn run(
         let summary = if mode == RunMode::Timing {
             "ARM writeback/exception timing probes passed; legacy cache/flash probes and production audio NOT RUN\n"
         } else {
-            "ARM cache, internal/external flash, mapped execution and writeback/exception probes passed; production firmware/audio NOT RUN\n"
+            "ARM CPU faults/FPU, cache, internal/external flash, mapped execution and writeback/exception probes passed; production firmware/audio NOT RUN\n"
         };
         fs::write(directory.join("probe-summary.txt"), summary)?;
         print!("{summary}");
@@ -652,6 +724,7 @@ fn run(
         return Err("Firmware changed during the run".into());
     }
     let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nBus-contention negative control: caught by audio/FIFO gates and delayed DMA\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nARM flash programming/erase: status, deferred completion, STM/STRD retries and stale I-cache checks passed\nFlash wait-bypass negative control: caught by CPU result gate\nARM dirty writeback/DSB: deferred shared-port completion and early-marker control passed\nARM exception entry/return: busy flash vector, single SRAM frame and wait-bypass control passed\nARM normal-load IRQ preemption: early handler, restarted load and blocked-preemption control passed\nCPU/DMA stalls: coupled functional service scenario; not cycle accurate\nSDRAM timing: open-row read/transfer service scenario; row/refresh scheduling unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, full store buffers, late arrival/tail-chain timing, pipeline overlap, calibrated CPU timing and complete codec response remain unfinished or unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
+    let summary=format!("{summary}ARM CPU divide/alignment/MPU/XN/NOCP faults, FPv5-D16 identification, f64 arithmetic and automatic/lazy TCM/SRAM frames: passed\n");
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())
@@ -670,7 +743,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if args.len() >= 3
-        && ["run", "probe", "timing", "startup", "storage"]
+        && ["run", "probe", "timing", "startup", "storage", "cpu"]
             .contains(&args[0].to_string_lossy().as_ref())
     {
         let mut board = None;
@@ -738,7 +811,9 @@ fn main() -> Result<()> {
             input,
             board,
             ideal_line,
-            if args[0] == "storage" {
+            if args[0] == "cpu" {
+                RunMode::Cpu
+            } else if args[0] == "storage" {
                 RunMode::Storage
             } else if args[0] == "startup" {
                 RunMode::Startup
@@ -751,5 +826,5 @@ fn main() -> Result<()> {
             },
         );
     }
-    Err("Usage: virtual-daisy run|probe|timing|startup|storage RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

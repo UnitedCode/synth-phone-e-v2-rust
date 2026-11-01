@@ -405,6 +405,24 @@ pub unsafe extern "C" fn daisy_runtime_fetch(
 }
 
 /// # Safety
+/// Live architecture state. Called only for potentially unaligned CPU accesses.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_alignment(
+    state: *mut Peripheral,
+    address: u32,
+    alignment: u32,
+    forced: u32,
+) -> u32 {
+    (*state)
+        .memory
+        .lock()
+        .unwrap()
+        .alignment_fault(address, alignment, forced != 0)
+        .map(u32::from)
+        .unwrap_or(u32::MAX)
+}
+
+/// # Safety
 /// Live architecture state and a valid mutable u64 value. Context is guest PC+SP.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_cpu_access(

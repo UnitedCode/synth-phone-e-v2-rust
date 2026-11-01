@@ -35,6 +35,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             contains = Marshal.GetDelegateForFunctionPointer<ContainsMemory>(NativeLibrary.GetExport(library, "daisy_memory_is_ram"));
             save = Marshal.GetDelegateForFunctionPointer<SaveNative>(NativeLibrary.GetExport(library, "daisy_memory_save"));
             RuntimeFetchPointer=NativeLibrary.GetExport(library,"daisy_runtime_fetch");
+            AlignmentPointer=NativeLibrary.GetExport(library,"daisy_alignment");
             BarrierPointer=NativeLibrary.GetExport(library,"daisy_barrier");
             ExceptionPointer=NativeLibrary.GetExport(library,"daisy_exception");
             synchronize=Marshal.GetDelegateForFunctionPointer<SyncNative>(NativeLibrary.GetExport(library,"daisy_bus_sync"));
@@ -64,6 +65,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void AfterExecution() {qspi?.AfterMemoryAccess();}
         public IntPtr NativeState => native.State;
         public IntPtr RuntimeFetchPointer { get; }
+        public IntPtr AlignmentPointer { get; }
         public IntPtr BarrierPointer {get;}
         public IntPtr ExceptionPointer {get;}
         public bool ImageLoading { get; set; }
@@ -191,12 +193,13 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public DaisyNvic(IMachine machine, DaisyArchitecture architecture, byte priorityMask = 0xF0) : base(machine, priorityMask: priorityMask) { this.machine=machine; this.architecture = architecture; FilterCcrDiv0Write = false; }
         public new uint ReadDoubleWord(long offset)
         {
-            if(offset == 0xd78 || offset == 0xd7c || offset == 0xd80 || offset == 0xd84) return architecture.ReadScb(offset);
+            if(offset == 0xd78 || offset == 0xd7c || offset == 0xd80 || offset == 0xd84 || offset == 0xf40 || offset == 0xf44 || offset == 0xf48) return architecture.ReadScb(offset);
             if(offset == 0xd14) return (base.ReadDoubleWord(offset) & ~(3U << 16)) | (architecture.ReadScb(offset) & (3U << 16));
             return base.ReadDoubleWord(offset);
         }
         public new void WriteDoubleWord(long offset, uint value)
         {
+            if(offset == 0xf40 || offset == 0xf44 || offset == 0xf48) return;
             if(offset == 0xd14) { architecture.WriteScb(offset, value); base.WriteDoubleWord(offset, value & ~(3U << 16)); Invalidate(); return; }
             if(offset == 0xd84 || (offset >= 0xf50 && offset <= 0xf74)) { architecture.WriteScb(offset, value); if(offset!=0xd84) Invalidate(); return; }
             if(offset >= 0xd94 && offset <= 0xdb8) architecture.WriteScb(offset, value);
