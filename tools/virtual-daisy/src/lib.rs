@@ -1068,6 +1068,12 @@ pub unsafe extern "C" fn daisy_qspi_schedule_changed(state: *mut Peripheral) -> 
     u32::from((*state).qspi.lock().unwrap().take_schedule_changed())
 }
 /// # Safety
+/// Live serialized QSPI state; lets the managed adapter skip idle timer checks.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_qspi_watches_memory(state: *mut Peripheral) -> u32 {
+    u32::from((*state).qspi.lock().unwrap().watches_memory())
+}
+/// # Safety
 /// Live QSPI state. Set before starting nonvolatile operations.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_qspi_maximum(state: *mut Peripheral, maximum: u32) -> u32 {

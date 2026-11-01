@@ -127,7 +127,11 @@ pub fn image(enable_irq: bool, corrupt_program: bool) -> Vec<u8> {
     t.write(0, 9 | (3 << 24) | (1 << 20)); // Timeout counter and TOIE.
     t.write(0x14, 0x0d002503);
     t.load(0, 0x90000120);
-    t.emit(&[0x6800]); // A cache miss arms a slow-clock timeout.
+    // A short guest delay crosses the CPU's execution quantum so the managed
+    // host schedules the slow deadline before the kernel clock changes.
+    t.emit(&[0x6800, 0xf3bf, 0x8f4f, 0xf3bf, 0x8f6f]);
+    t.load(1, 4096);
+    t.emit(&[0x3901, 0xd1fd]);
     t.load(0, 0x30);
     t.emit(&[0x6038, 0xbf30]); // Switch CKPER to HSI64; scheduled IRQ must move earlier.
     t.write(0, 3 | (3 << 24));

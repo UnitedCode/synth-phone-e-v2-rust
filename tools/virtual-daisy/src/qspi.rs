@@ -36,6 +36,9 @@ pub struct Qspi {
     chip: NorFlash,
 }
 impl Qspi {
+    pub fn watches_memory(&self) -> bool {
+        self.mapped && self.registers[0] & 9 == 9
+    }
     pub fn take_schedule_changed(&mut self) -> bool {
         std::mem::take(&mut self.schedule_changed)
     }

@@ -323,6 +323,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             irq=Marshal.GetDelegateForFunctionPointer<IrqNative>(NativeLibrary.GetExport(library,"daisy_qspi_irq"));
             maximum=Marshal.GetDelegateForFunctionPointer<MaximumNative>(NativeLibrary.GetExport(library,"daisy_qspi_maximum"));
             scheduleChanged=Marshal.GetDelegateForFunctionPointer<IrqNative>(NativeLibrary.GetExport(library,"daisy_qspi_schedule_changed"));
+            watchesMemory=Marshal.GetDelegateForFunctionPointer<IrqNative>(NativeLibrary.GetExport(library,"daisy_qspi_watches_memory"));
             Marshal.GetDelegateForFunctionPointer<AttachNative>(NativeLibrary.GetExport(library,"daisy_qspi_attach"))(architecture.NativeState,State);
             architecture.AttachQspi(this);
         }
@@ -332,7 +333,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             // RCC owns the outer lock, matching peripheral reset callbacks.
             rcc.WithState(clock=>{lock(sync) {
                 if(synchronize(State,clock,machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds)!=0) throw new InvalidOperationException("QSPI clock/time synchronization failed");
-                result=operation();IRQ.Set(irq(State)!=0);Schedule();
+                result=operation();memoryWatch=watchesMemory(State)!=0;IRQ.Set(irq(State)!=0);Schedule();
             }return 0;});
             return result;
         }
@@ -360,13 +361,15 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void WriteByte(long offset, byte value) { Write(offset, value, 1); }
         public void WriteWord(long offset, ushort value) { Write(offset, value, 2); }
         public void RefreshClock() {Timed(()=>0);}
-        public void AfterMemoryAccess() {if(scheduleChanged(State)!=0) RefreshClock();}
+        public void AfterMemoryAccess() {if(memoryWatch && scheduleChanged(State)!=0) RefreshClock();}
         public bool DisableDeadlineReschedule {get;set;}
         public void SetMaximum(bool enabled) {Timed(()=>{if(maximum(State,enabled?1U:0U)!=0) throw new InvalidOperationException("Invalid QSPI timing scenario change");return 0;});}
-        public new void Reset() {lock(sync) {generation++;scheduled=false;base.Reset();IRQ.Set(false);}}
+        public new void Reset() {lock(sync) {generation++;scheduled=false;memoryWatch=false;base.Reset();IRQ.Set(false);}}
         public void Dispose() {lock(sync) {disposed=true;generation++;scheduled=false;IRQ.Set(false);}}
         public GPIO IRQ {get;}=new GPIO();
         private readonly IrqNative scheduleChanged;
+        private readonly IrqNative watchesMemory;
+        private bool memoryWatch;
         private ulong scheduledTarget;
         private readonly IMachine machine;
         private readonly DaisyRcc rcc;
