@@ -10,6 +10,7 @@ mod platform;
 mod probe;
 mod storage_probe;
 mod transition_probe;
+mod vector_probe;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -162,6 +163,9 @@ impl Host<'_> {
             ".transition-return.bin",
             ".transition-return.memory.txt",
             ".transition-negative.txt",
+            ".vector.bin",
+            ".vector.txt",
+            ".vector-negative.txt",
         ] {
             let path = grade::artifact(&capture, suffix);
             if path.exists() {
@@ -236,8 +240,14 @@ impl Host<'_> {
             "transition-nested",
             "transition-return",
             "transition-fp",
+            "transition-psp",
+            "transition-fp-psp",
             "transition-late-control",
             "transition-tail-control",
+            "vector",
+            "vector-cached",
+            "vector-enabled",
+            "vector-noerror",
         ]
         .contains(&fault)
         {
@@ -345,6 +355,8 @@ fn cpu_checks(host: &Host<'_>, tone: &Path) -> Result<()> {
         "transition-nested",
         "transition-return",
         "transition-fp",
+        "transition-psp",
+        "transition-fp-psp",
     ] {
         let capture = host.boot(kind, tone, kind)?;
         if let Err(error) = transition_probe::check(&capture, kind) {
@@ -377,6 +389,27 @@ fn cpu_checks(host: &Host<'_>, tone: &Path) -> Result<()> {
             format!("{kind}=caught\n{error}\n"),
         )?;
     }
+    guest::prepare(
+        host.directory,
+        "vector",
+        include_str!("../guests/vector.rs"),
+    )?;
+    for kind in ["vector", "vector-cached", "vector-enabled"] {
+        let capture = host.boot(kind, tone, kind)?;
+        vector_probe::check(&capture, kind == "vector-cached", kind == "vector-enabled")?;
+    }
+    let capture = host.boot("vector-noerror", tone, "vector-noerror")?;
+    let error = vector_probe::check(&capture, false, false)
+        .err()
+        .ok_or("A valid IRQ vector escaped the VECTTBL gate")?
+        .to_string();
+    if !error.contains("ARM vector HFSR.VECTTBL without FORCED: expected 0x2, got 0x0") {
+        return Err(format!("Unexpected valid-vector control: {error}").into());
+    }
+    fs::write(
+        grade::artifact(&capture, ".vector-negative.txt"),
+        format!("valid_irq_vector=caught\n{error}\n"),
+    )?;
     Ok(())
 }
 

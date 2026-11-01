@@ -129,7 +129,9 @@ pending, requiring TEIF without decrementing NDTR. A mapped-code
 guest checks execution before a failing fetch and a Thumb32 instruction spanning
 FSIZE, with a corrupt-prefix control. A further guest checks frame reuse for
 late arrival/tail-chaining, equal priorities, genuine nesting and an IRQ during
-modeled unstack service, including disabled-feature controls. Its summary explicitly
+modeled unstack service, including disabled-feature controls. A NOR vector-table
+guest checks HardFault/VECTTBL with the original frame and cached vector use
+after QSPI disable; a valid-vector control must fail that fault gate. Its summary explicitly
 excludes production startup/audio. The synthetic guest never replaces or patches
 the production firmware artifact. All modes use the same guarded engine and record firmware/model
 hashes; input WAV replay is available only with `run`.

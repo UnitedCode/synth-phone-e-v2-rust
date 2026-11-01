@@ -129,6 +129,7 @@ public static class DaisyHost
         if(args[5]=="bus" || args[5]=="bus-dma-valid" || args[5]=="bus-dma-disable" || args[5]=="bus-dma-abort" || args[5]=="bus-dma-range" || args[5]=="bus-fault-control") {BusProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="fetch" || args[5]=="fetch-prefix-control") {FetchProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5].StartsWith("transition-")) {TransitionProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="vector" || args[5]=="vector-cached" || args[5]=="vector-enabled" || args[5]=="vector-noerror") {VectorProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -287,12 +288,26 @@ public static class DaisyHost
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM QSPI storage/polling interrupt probe executed; results require Rust grading");
     }
+    private static void VectorProbes(Emulation emulation,Machine machine,string prefix,string kind) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        var nvic=(DaisyNvic)machine["sysbus.nvic"];
+        bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"vector-probe.elf"));
+        cpu.VectorTableOffset=0x6000;cpu.SP=0x3001f000;cpu.PC=bus.ReadDoubleWord(0x6004);
+        bus.WriteDoubleWord(0x20019900,kind=="vector-cached" ? 1U:kind=="vector-noerror" ? 2U:kind=="vector-enabled" ? 4U:0U);
+        emulation.RunFor(TimeInterval.FromMilliseconds(2));
+        if(bus.ReadDoubleWord(0x20019800)!=0x42) throw new InvalidOperationException("ARM vector guest not ready");
+        nvic.SetPendingIRQ(16);
+        emulation.RunFor(TimeInterval.FromMicroseconds(100));
+        File.WriteAllBytes(prefix+".vector.bin",bus.ReadBytes(0x20019800UL,128));
+        nvic.Architecture.Save(prefix+".memory.txt");
+        Console.WriteLine("ARM exception-vector bus-error fixture executed; results require Rust grading");
+    }
     private static void TransitionProbes(Emulation emulation,Machine machine,string prefix,string kind) {
         var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
         var nvic=(DaisyNvic)machine["sysbus.nvic"];var architecture=nvic.Architecture;
         bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"transition-probe.elf"));
         cpu.VectorTableOffset=0x6000;cpu.SP=0x3001f000;cpu.PC=bus.ReadDoubleWord(0x6004);
-        bus.WriteDoubleWord(0x20019700,kind=="transition-equal" ? 1U:kind=="transition-nested" ? 2U:kind=="transition-return" ? 4U:kind=="transition-fp" ? 8U:0U);
+        bus.WriteDoubleWord(0x20019700,kind=="transition-equal" ? 1U:kind=="transition-nested" ? 2U:kind=="transition-return" ? 4U:kind=="transition-fp" ? 8U:kind=="transition-psp" ? 16U:kind=="transition-fp-psp" ? 24U:0U);
         bus.WriteDoubleWord(0x20019704,0);
         if(kind=="transition-late-control") cpu.DisableLateArrival();
         if(kind=="transition-tail-control") cpu.DisableTailChaining();
@@ -300,7 +315,7 @@ public static class DaisyHost
         if(bus.ReadDoubleWord(0x20019600)!=0x42) throw new InvalidOperationException("ARM transition guest not ready");
         architecture.InjectBusLoad(8,100000,true);
         nvic.SetPendingIRQ(kind=="transition-return" ? 17:16);
-        bool tail=kind=="transition-tail" || kind=="transition-tail-control" || kind=="transition-fp";
+        bool tail=kind=="transition-tail" || kind=="transition-tail-control" || kind=="transition-fp" || kind=="transition-psp" || kind=="transition-fp-psp";
         if(tail) nvic.SetPendingIRQ(17);
         emulation.RunFor(TimeInterval.FromMicroseconds(2));
         File.WriteAllBytes(prefix+".transition-early.bin",bus.ReadBytes(0x20019600UL,128));

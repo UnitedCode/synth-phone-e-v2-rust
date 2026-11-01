@@ -20,23 +20,44 @@ global_asm!(
     .syntax unified
     .thumb
     .section .vectors,"a",%progbits
-    .word 0x3001f000,probe_main
+    .word 0x3001f000,probe_reset
     .rept 14
     .word probe_unexpected
     .endr
     .word probe_low,probe_high
     .section .text.probe_entries,"ax",%progbits
     .thumb_func
+probe_reset:
+    ldr r0,=0x20019700
+    ldr r0,[r0]
+    tst r0,#16
+    beq probe_reset_main
+    ldr r0,=0x3001d000
+    msr psp,r0
+    movs r0,#2
+    msr control,r0
+    isb
+probe_reset_main:
+    b probe_main
+    .thumb_func
 probe_low:
     movs r0,#16
     mov r1,lr
     mov r2,sp
+    tst lr,#4
+    beq probe_low_frame_ready
+    mrs r2,psp
+probe_low_frame_ready:
     b probe_irq
     .thumb_func
 probe_high:
     movs r0,#17
     mov r1,lr
     mov r2,sp
+    tst lr,#4
+    beq probe_high_frame_ready
+    mrs r2,psp
+probe_high_frame_ready:
     ldr r3,=0x20019708
     str lr,[r3]
     bl probe_irq
@@ -117,12 +138,22 @@ unsafe extern "C" fn probe_main() -> ! {
     let sp: u32;
     asm!("mov {},sp", out(reg) sp, options(nostack));
     record(3, sp);
+    let msp: u32;
+    let psp: u32;
+    asm!("mrs {msp},msp", "mrs {psp},psp",msp=out(reg) msp,psp=out(reg) psp,options(nostack));
+    record(27, msp);
+    record(29, psp);
     record(0, 0x42);
     loop {
         if read_volatile(RESULTS.add(2)) == 3 {
             let sp: u32;
             asm!("mov {},sp", out(reg) sp, options(nostack));
             record(4, sp);
+            let msp: u32;
+            let psp: u32;
+            asm!("mrs {msp},msp", "mrs {psp},psp",msp=out(reg) msp,psp=out(reg) psp,options(nostack));
+            record(28, msp);
+            record(30, psp);
             record(5, read(0xe000e300));
             if read(0x20019700) & 8 != 0 {
                 let value: u32;
