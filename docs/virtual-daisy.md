@@ -69,9 +69,11 @@ The CPU starts with the SP/PC from the flash vector table, as the chip does.
 The ELF header's entry point is currently zero because of a pre-existing linker
 entry-symbol warning; it is not used as the reset vector.
 
-Use `probe` in place of `run` to execute just the generated ARM cache and flash
-programs, including their negative controls. `probe-summary.txt` explicitly says
-that production audio was not run. Set `VIRTUAL_DAISY_FLASH_MAXIMUM=1` to select
+Use `probe` in place of `run` to execute the generated ARM cache, flash,
+writeback/exception and interrupt-during-wait programs with their negative
+controls. `timing` runs only the latter two programs and their controls for
+faster feedback. `probe-summary.txt` identifies the omitted checks; neither
+command tests production audio. Set `VIRTUAL_DAISY_FLASH_MAXIMUM=1` to select
 the datasheet maximum-duration flash scenario; the default uses typical values.
 These are timing scenarios, not measured or guaranteed board latencies.
 
@@ -236,11 +238,11 @@ Rust-model registers/commands throw instead of returning invented success.
 pacing. The SAI phase accumulator preserves fractional clock rate over time,
 but events have 1-microsecond resolution. CYCCNT counts core-clock periods of
 virtual elapsed time; it cannot measure true M7 instruction costs. PLL lock,
-oscillator tolerance, CPU write buffers, dirty cache writeback timing and SDRAM
-refresh contention remain unmodeled. Data-cache replacement uses deterministic
+oscillator tolerance, the complete CPU store buffer and SDRAM refresh contention
+remain unmodeled. Dirty cache lines now use the shared fabric as described below.
+Data-cache replacement uses deterministic
 round-robin, not the silicon's replacement sequence, and the M7 dynamic
-read-allocation optimization is not reproduced. Cache barriers are effectively
-synchronous in this model. Flash and RAM are fetched through Rust when translated
+read-allocation optimization is not reproduced. Flash and RAM are fetched through Rust when translated
 blocks execute, including reuse. Lines for a linear block are fetched at entry;
 this does not reproduce individual pipeline fetch cycles, speculative paths or
 the exact victim sequence of silicon. Fetch statistics describe block-entry
@@ -263,11 +265,12 @@ timing scenario and coupled CPU/DMA wait counters. DS12556's typical/maximum
 program times depend on PSIZE; x64 uses 100/200µs and sector erase uses 1/2s.
 Bank erase uses the published mass-erase timing scenario (x64 5/10s); exact
 H750 bank latency is uncalibrated. Voltage, wear and temperature are not modeled.
-The separately tested read pipeline retains one active plus two waiting reads
-and 256-bit buffer reuse. The live CPU currently serializes its instruction/data
-requests; it does not reproduce that pipeline's full speculative overlap.
-The shared fabric enforces the same three-command read capacity. Live scheduling
-does not yet reuse the interface read buffer between uncached transactions.
+Both the separately tested pipeline and live shared fabric enforce one active
+plus two waiting flash reads. Live CPU and DMA requests reuse the 256-bit bank
+buffer on consecutive reads to the same flashword. Lookup occurs at grant;
+completion replaces the buffer. A hit avoids the array wait but retains the
+declared bus transfer cost. Programming/erase invalidates the buffer. Request
+arrival, interface turnaround and speculative overlap are not cycle accurate.
 
 The AXI GPV's six initiators expose read/write QoS and issuing overrides. The
 live arbitration model implements higher QoS first, least-recently-served
@@ -283,11 +286,33 @@ port order because the initial hardware ranking is not specified.
 `*.dma.txt` separately records live DMA grants and simultaneous-request contests.
 DMA service is polled on the 1µs event grid. Separate AXI read/write service lanes,
 AHB round-robin service and request arrival times are explicit model choices;
-pipeline/target overlap and dirty-writeback traffic remain incomplete. Coupled
-stalls are functional scenarios, not cycle-accurate hardware deadline estimates.
-Native exception-vector reads retain a functional memory view without bus delay;
-reads during flash busy fail explicitly. External stack/vector stalls and reset
-during nonvolatile operations still require implementation and validation.
+pipeline/target overlap remains incomplete. Coupled stalls are functional
+scenarios, not cycle-accurate hardware deadline estimates.
+
+Dirty eviction and clean maintenance snapshot a 32-byte line and enqueue a CPU
+write on the shared target. Physical memory changes only at completion, so DMA
+cannot observe an early clean. Later cached stores dirty the line again without
+changing an earlier snapshot. DSB waits for pending modeled writebacks; DMB
+orders subsequent modeled RAM accesses. The internal maintenance queue is not a
+model of silicon buffer depth. Same-line refill waits conservatively for pending
+writeback; forwarding, write merging, critical-word-first refill and full MMIO/
+TCM ordering remain incomplete.
+
+The native exception adapter checkpoints entry after acknowledging the IRQ and
+allocating its frame, then resumes vector/stack service without stacking twice.
+Vector fetch and stack stores use separate I/D requests. Vectors use the default
+memory map and instruction-cache view, bypassing MPU attributes. Busy flash
+vectors wait unless served from I-cache. External unstack reads are prepared and
+latched before restoring CPU state. A pending enabled IRQ can abandon a normal
+memory load's unconsumed wait budget and restart that load after the handler;
+Device/Strongly-ordered loads retain their wait. This does not reproduce late
+arrival, complete tail-chaining timing, precise fault delivery or the M7 pipeline.
+Abandoned requests release their CPU slots; already-issued fabric transactions
+retain occupancy/credits until response. A separate ARM case verifies that a
+blocked AXI SRAM read cannot prevent IRQ stacking into D2 SRAM.
+The ARM fixture verifies a basic SRAM frame and return; external floating-point
+frames and snapshots/reset during in-flight operations still need independent
+coverage. No fixed exception-entry cycle count is claimed.
 
 `tools/virtual-daisy/known-warnings.txt` contains exact observed warnings for these
 I2C timing fields, ADC calibration tags, UART fields and flash latency.
@@ -306,6 +331,12 @@ executable sections are rejected, and Python PWR/FMC models are replaced with
 Rust. Some packaged assembly metadata references IronPython; its interpreter is
 never initialized or executed. The installed emulator is unchanged. No Python
 test runner, helper script or fallback is used.
+
+The same private assembly changes the initial skipped-instruction budget check
+to dispatch its existing virtual getter, allowing the CPU adapter to cancel an
+interruptible memory wait on its CPU thread. Its two subsequent arithmetic reads
+are unchanged. The pinned IL shape is checked before patching and attested at
+each boot; an incompatible emulator fails explicitly.
 
 ## Results and next steps
 
@@ -328,6 +359,12 @@ runtime hook produces the wrong ARM return value. Exceptions and timeouts cannot
 count as that negative control passing.
 `flash-probe.bin`, `*.flash.bin`, `*.flash-probe.txt` and `*.flash-negative.txt`
 preserve the flash program, CPU-written results and wait-bypass rejection.
+`timing-probe.bin`, `*.timing*.bin` and `*.timing*.txt` preserve the DSB, busy
+vector and stack/return tests. Disabling DSB must expose an early marker;
+bypassing entry waits must expose an early handler timestamp. `interrupt-probe.bin`
+and `*.interrupt*.bin`/`*.interrupt*.txt` verify IRQ preemption and load restart;
+disabling preemption must miss the early IRQ marker. Each negative control must
+fail its particular result gate after successful execution and guard attestation.
 Replay the WAVs to judge
 timbre; objective pitch gates are only part of listening quality.
 

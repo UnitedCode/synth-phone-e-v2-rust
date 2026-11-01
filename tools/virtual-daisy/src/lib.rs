@@ -459,6 +459,55 @@ pub unsafe extern "C" fn daisy_bus_sync(
 pub unsafe extern "C" fn daisy_cpu_debt(state: *mut Peripheral) -> u64 {
     (*state).memory.lock().unwrap().take_cpu_debt()
 }
+/// # Safety
+/// Live architecture state. Called on the CPU thread when an eligible IRQ
+/// abandons the unconsumed part of a normal-memory wait budget.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_abandon_wait(state: *mut Peripheral, ns: u64) {
+    (*state).memory.lock().unwrap().abandon_wait(ns);
+}
+/// # Safety
+/// Live architecture state; metadata for the current CPU wait budget.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_wait_interruptible(state: *mut Peripheral) -> u32 {
+    u32::from((*state).memory.lock().unwrap().wait_interruptible)
+}
+
+/// # Safety
+/// Live architecture state, invoked by the native DSB/DMB instruction adapter.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_barrier(state: *mut Peripheral, kind: u32) -> u32 {
+    match (*state).memory.lock().unwrap().barrier(kind) {
+        Ok(0) => 0,
+        Ok(_) => 1,
+        Err(_) => 2,
+    }
+}
+
+/// # Safety
+/// Live architecture state. Native continuation adapter calls outside TB bodies.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_exception(state: *mut Peripheral, address: u32, phase: u32) -> u32 {
+    let mut memory = (*state).memory.lock().unwrap();
+    let result = match phase {
+        0 => memory.exception_entry(address),
+        1 => memory.finish_exception_entry().map(|_| 0),
+        2 => {
+            memory.finish_exception_return();
+            Ok(0)
+        }
+        0x120 | 0x168 => memory.exception_return(address, phase - 0x100),
+        _ => Err("unsupported native exception phase"),
+    };
+    match result {
+        Ok(0) => 0,
+        Ok(_) => 1,
+        Err(error) => {
+            eprintln!("Exception bus error: address={address:#x} phase={phase:#x}: {error}");
+            2
+        }
+    }
+}
 
 /// # Safety
 /// Live architecture state; time comes from the emulator's virtual clock.
@@ -502,6 +551,9 @@ pub unsafe extern "C" fn daisy_shared_reg(
         }
     } else if space == 2 && offset == 0 && write != 0 {
         memory.set_flash_maximum(value != 0).map(|_| 0)
+    } else if space == 3 && offset == 0 && write != 0 {
+        memory.bypass_exception_waits = value != 0;
+        Ok(0)
     } else {
         Err("invalid shared register space")
     };
@@ -537,13 +589,18 @@ pub unsafe extern "C" fn daisy_dma_port(
 /// # Safety
 /// Live architecture state; deterministic synthetic competing-master traffic.
 #[no_mangle]
-pub unsafe extern "C" fn daisy_bus_load(state: *mut Peripheral, target: u32, ns: u64) -> u32 {
+pub unsafe extern "C" fn daisy_bus_load(
+    state: *mut Peripheral,
+    target: u32,
+    ns: u64,
+    write: u32,
+) -> u32 {
     u32::from(
         (*state)
             .memory
             .lock()
             .unwrap()
-            .inject_bus_load(target as usize, ns)
+            .inject_bus_load_kind(target as usize, ns, write != 0)
             .is_err(),
     )
 }

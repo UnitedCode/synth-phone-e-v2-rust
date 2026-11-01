@@ -227,16 +227,19 @@ Rust PAC metadata says4. This model follows RM0433 and records the discrepancy
 for an eventual reset-register capture, rather than treating the PAC as proof.
 
 RM0433 section4.3.8 and Figure10 describe a flash bank's active command, two
-waiting reads and 256-bit read buffer. A standalone earliest-service model now
-tests queue-full backpressure, ordered completion and consecutive-word reuse.
+waiting reads and 256-bit read buffer. Both a standalone earliest-service model
+and the live CPU/DMA fabric test queue-full backpressure, ordered completion and
+consecutive-word reuse. Live buffer lookup occurs at grant, after earlier reads
+can replace it; completion updates the buffer. A hit retains transfer beats but
+does not charge another array wait. Programming/erase invalidates the bank buffer.
 FLASH_ACR LATENCY plus one interface cycle supplies its nonvolatile-read service
 bound; per-run reports retain the actual register and clock. It does not model
 AXI handshakes, ECC or pipeline overlap. Live CPU instruction/data requests are
 serialized functional transactions; the standalone read-pipeline test does not
 prove that the CPU issues overlapping flash commands correctly.
-The live fabric now enforces one active plus two waiting flash reads across
-masters. Reusing the interface buffer between live uncached reads still needs
-implementation; the standalone buffer test is not claimed as runtime coverage.
+The live fabric enforces the three-command capacity across masters. The 25ns
+cold/5ns hit test at HCLK200MHz and LATENCY4 verifies this declared service
+scenario, not an independently measured silicon latency.
 
 ### Coupled stalls and nonvolatile operations
 
@@ -255,13 +258,55 @@ SRAM and 32-bit local SRAM beats, two PCLK cycles for the SAI APB port, and the
 programmed SDRAM open-row read lower bound. AXI read/write target lanes are
 independent in this scenario. These individual assumptions do not establish a
 whole-system hardware timing bound. DMA service is polled every microsecond.
-Dirty-cache eviction/maintenance traffic, write buffers, bus turnaround, actual
-target overlap, FMC row tracking/refresh scheduling, pipeline fetch arrival times
-and precise MPU/BusFault exception delivery remain implementation gaps. Native
-interrupt-vector reads are identified separately from translated instructions;
-their existing functional memory view does not impose bus latency. A vector read
-while flash is busy fails explicitly. Exception entry/exit needs a resumable
-adapter before external-memory stack/vector stalls can be modeled safely.
+Dirty eviction and maintenance now snapshot 32-byte lines, use CPU issuing
+credits and share target write service with DMA. Physical bytes change on
+completion. An independent DMA observer verifies both delayed visibility and
+the immutability of an earlier clean when a later cached store changes the line.
+Same-line refill serializes behind a pending writeback. Buffer depth, forwarding,
+write merging, critical-word-first refill and complete store-buffer behavior
+remain implementation gaps.
+
+[PM0253 Rev5 section4.8.7](https://www.st.com/resource/en/programming_manual/dm00237416-stm32f7-series-and-stm32h7-series-cortexm7-processor-programming-manual-stmicroelectronics.pdf)
+requires DSB completion around cache maintenance. Native DSB now waits for all
+pending modeled writebacks. DMB orders subsequent modeled RAM accesses, without
+waiting at the barrier itself. This does not establish complete ordering for
+MMIO/TCM or the ordinary CPU store buffer. The generated ARM test competes with
+a 100µs SRAM write, cleans a line and executes DSB; its early marker must remain
+unset. Disabling the barrier callback must expose that marker early.
+
+[Arm Cortex-M7 TRM section2.7](https://documentation-service.arm.com/static/5e906b038259fe2368e2a7bb?token=)
+specifies parallel vector fetch/state saving and restart of abandoned normal
+memory operations after an IRQ. The native adapter now checkpoints entry after
+one acknowledgement/frame allocation, services vector and stack requests on I/D
+ports, then resumes before handler execution. Unstack reads are prepared before
+native state restoration. Vector loads use I-cache and the default memory map,
+ignoring MPU attributes, as specified by `MPUCheck` in the
+[Armv7-M ARM](https://www.pjrc.com/teensy/DDI0403Ee_arm_v7m_ref_manual.pdf).
+The ARM fixture programs flash while taking SVC through a cold flash vector,
+then checks a single SRAM frame, handler timestamp, restored SP/LR and return PC.
+Bypassing entry waits must produce an early handler timestamp. A warm vector
+unit test verifies that entry does not drain unrelated dirty writeback traffic.
+
+A second ARM fixture waits on a normal flash load while an IRQ with a TCM
+vector/stack becomes pending. The unconsumed skip budget is cancelled on the
+CPU thread; the handler must run before programming completes and the load must
+restart successfully afterward. Disabling preemption must miss the early IRQ
+marker. Device/Strongly-ordered load waits remain non-interruptible. The private
+adapter also detaches abandoned CPU request slots at entry. Already-issued
+transactions retain their fabric occupancy/credits until response, but cannot
+serialize handler accesses to an unrelated target. A third ARM fixture holds
+the AXI SRAM read target busy while an IRQ stacks into D2 SRAM; the handler must
+still run early and the abandoned load must restart after return.
+The private managed assembly dispatches only its initial budget check through the existing
+virtual getter; both arithmetic field reads remain intact. Each boot attests
+the pinned IL shape, Python guard and native adapter version8.
+
+These tests verify functional service scenarios. Late arrival, complete
+tail-chaining timing, precise MPU/BusFault delivery, external FP-frame coverage,
+snapshot/reset during in-flight operations, bus turnaround, actual target
+overlap, FMC row/refresh scheduling and pipeline fetch arrival times still need
+implementation or independent validation. The source-backed tests do not justify
+a fixed silicon exception-entry latency or hardware deadline claim.
 
 [RM0433 Rev8 sections4.3.9–4.3.10, 4.5.1 and4.7](https://www.st.com/resource/en/reference_manual/rm0433-stm32h742-stm32h743753-and-stm32h750-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
 specify the modeled key sequence and lock, PG/write-buffer behavior, 8/16/32/64-bit
@@ -294,7 +339,7 @@ functional coupling; they do not calibrate CPU headroom.
 | Firmware boot and selected audio path | Executed in simulation | Same ELF on an identified physical revision |
 | Serial data, reset and control behavior | Source-backed cases | Captured control transactions and SAI words/edges, including reset and faults |
 | Interrupt/buffer ownership | Functional DMA and IRQ tests | Hardware DMA HT/TC, NVIC and task traces with timestamps and simultaneous UI/MIDI load |
-| Performance and deadlines | Functional flash/RAM caches, runtime refetch, shared CPU/DMA stall scenarios, flash programming/erase, AXI admission/grants and SDRAM bounds | Pipeline/speculation and silicon victim policy, dirty writeback traffic, FMC row/refresh behavior, actual overlap and calibrated CPU/bus costs |
+| Performance and deadlines | Functional caches/runtime refetch, shared CPU/DMA stalls, live flash buffer/programming/erase, deferred dirty writes/DSB, resumable exception service and load-wait IRQ preemption | Pipeline/speculation and silicon victim policy, complete store buffers, late arrival/tail-chaining, FMC row/refresh behavior, actual overlap and calibrated CPU/bus costs |
 | Clock rates and drift | RCC/PLL/SAI rational derivation, 1µs event grid, DWT/core and timer prescalers | PLL/oscillator lock and jitter, clock-domain crossing delays, oscillator tolerance, independent frequency measurements |
 | Audio latency/filtering | Serial PCM; separate nominal WM8731 gain/DC-removal and passband-delay stage | Full ADC/DAC filters, internal rounding and startup behavior, independent impulse/frequency responses per codec |
 | Analog sound | No analog model | Calibrated gain, impedance, headroom, clipping, noise and distortion measurements |

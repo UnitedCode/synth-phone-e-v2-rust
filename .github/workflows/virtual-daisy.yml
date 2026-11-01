@@ -15,7 +15,9 @@ jobs:
       fail-fast: false
       matrix:
         board: [rev4, rev5, rev7]
-    timeout-minutes: 15
+    # Rev5 also runs the maximum-duration flash suite after its full audio/fault
+    # matrix. The 180-second per-emulator watchdog still detects individual hangs.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -78,6 +80,11 @@ jobs:
             audio-lab-results/daisy/${{ matrix.board }}/*.architecture.bin
             audio-lab-results/daisy/${{ matrix.board }}/flash-probe.bin
             audio-lab-results/daisy/${{ matrix.board }}/*.flash.bin
+            audio-lab-results/daisy/${{ matrix.board }}/timing-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/*.timing*.bin
+            audio-lab-results/daisy/${{ matrix.board }}/interrupt-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/interrupt-target-probe.bin
+            audio-lab-results/daisy/${{ matrix.board }}/*.interrupt*.bin
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.txt
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.log
             audio-lab-results/daisy/${{ matrix.board }}/maximum/*.bin

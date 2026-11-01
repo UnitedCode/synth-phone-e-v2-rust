@@ -221,3 +221,27 @@ fn architecture_reset_clears_shared_bus_configuration_and_abandoned_cpu_retries(
     );
     assert_eq!(memory.read_dma(0x30000000, 4).unwrap(), 42);
 }
+
+#[test]
+fn device_load_waits_are_not_abandoned_like_normal_memory_loads() {
+    use virtual_daisy::{clock::Rate, memory::SystemMemory};
+    for (attributes, interruptible) in [(0x03010023, false), (0x03080023, true)] {
+        let mut memory = SystemMemory::default();
+        let rate = Rate {
+            numerator: 200_000_000,
+            denominator: 1,
+        };
+        memory.configure_bus(rate, rate, None);
+        memory.write_scb(0xd9c, 0x30000000).unwrap();
+        memory.write_scb(0xda0, attributes).unwrap();
+        memory.write_scb(0xd94, 5).unwrap();
+        let mut value = 0;
+        assert!(
+            memory
+                .cpu_access(0x10002001f000, 0x30000000, 4, false, &mut value)
+                .unwrap()
+                > 0
+        );
+        assert_eq!(memory.wait_interruptible, interruptible);
+    }
+}

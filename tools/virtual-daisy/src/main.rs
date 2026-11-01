@@ -18,6 +18,12 @@ use std::{
 use virtual_daisy::board::Board;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const RATE: u32 = 48014;
+#[derive(PartialEq)]
+enum RunMode {
+    Full,
+    Probes,
+    Timing,
+}
 
 fn checked(command: &mut Command) -> Result<()> {
     if !command.status()?.success() {
@@ -107,6 +113,28 @@ struct Host<'a> {
 impl Host<'_> {
     fn boot(&self, label: &str, input: &Path, fault: &str) -> Result<PathBuf> {
         let capture = self.directory.join(label);
+        // A reused output directory must not provide a result from an old run.
+        for suffix in [
+            ".architecture.bin",
+            ".architecture.txt",
+            ".architecture-negative.txt",
+            ".flash.bin",
+            ".flash-probe.txt",
+            ".flash-negative.txt",
+            ".timing.bin",
+            ".timing-early.bin",
+            ".timing.txt",
+            ".timing-negative.txt",
+            ".interrupt.bin",
+            ".interrupt-early.bin",
+            ".interrupt.txt",
+            ".interrupt-negative.txt",
+        ] {
+            let path = grade::artifact(&capture, suffix);
+            if path.exists() {
+                fs::remove_file(path)?;
+            }
+        }
         let mut command = Command::new(self.dotnet);
         command
             .arg(self.managed.join("DaisyHost.dll"))
@@ -138,7 +166,21 @@ impl Host<'_> {
             &mut command,
             &self.directory.join(format!("{label}.host.log")),
         )?;
-        if !["architecture", "runtime-fault", "flash", "flash-wait-fault"].contains(&fault) {
+        grade::execution_evidence(&capture)?;
+        if ![
+            "architecture",
+            "runtime-fault",
+            "flash",
+            "flash-wait-fault",
+            "timing",
+            "dsb-fault",
+            "entry-fault",
+            "wait-irq",
+            "wait-irq-fault",
+            "wait-irq-target",
+        ]
+        .contains(&fault)
+        {
             grade::boot_evidence(&capture)?;
         }
         Ok(capture)
@@ -151,7 +193,7 @@ fn run(
     input_wav: Option<&Path>,
     board: Board,
     ideal_line: bool,
-    probes_only: bool,
+    mode: RunMode,
 ) -> Result<()> {
     if ideal_line && board != Board::Rev5 {
         return Err(
@@ -277,73 +319,165 @@ fn run(
         board,
         ideal_line,
     };
-    fs::write(directory.join("architecture-probe.bin"), probe::image())?;
-    let probes = host.boot("architecture-probes", &tone, "architecture")?;
-    probe::check(&probes)?;
-    let broken_runtime = host.boot("runtime-cache-fault", &tone, "runtime-fault")?;
-    let error = probe::check(&broken_runtime)
-        .err()
-        .ok_or("Disabled runtime fetching was not caught")?
-        .to_string();
-    if !error.contains("ARM coherence result 10: expected 0x3, got 0x2") {
-        return Err(format!("Unexpected runtime negative-control failure: {error}").into());
+    if mode != RunMode::Timing {
+        fs::write(directory.join("architecture-probe.bin"), probe::image())?;
+        let probes = host.boot("architecture-probes", &tone, "architecture")?;
+        probe::check(&probes)?;
+        let broken_runtime = host.boot("runtime-cache-fault", &tone, "runtime-fault")?;
+        let error = probe::check(&broken_runtime)
+            .err()
+            .ok_or("Disabled runtime fetching was not caught")?
+            .to_string();
+        if !error.contains("ARM coherence result 10: expected 0x3, got 0x2") {
+            return Err(format!("Unexpected runtime negative-control failure: {error}").into());
+        }
+        fs::write(
+            grade::artifact(&broken_runtime, ".architecture-negative.txt"),
+            format!("disabled_runtime_fetch=caught\n{error}\n"),
+        )?;
+        for counter in [
+            "instruction_fetch_reads",
+            "instruction_cache_fills",
+            "runtime_retranslations",
+        ] {
+            if grade::counter(&grade::artifact(&probes, ".memory.txt"), counter)? == 0 {
+                return Err(format!("ARM probe did not exercise {counter}").into());
+            }
+        }
+        fs::write(directory.join("flash-probe.bin"), probe::flash_image())?;
+        let flash = host.boot("flash-probes", &tone, "flash")?;
+        probe::check_flash(&flash)?;
+        let flash_stats = grade::artifact(&flash, ".memory.txt");
+        for counter in ["flash_programs", "flash_erases"] {
+            if grade::counter(&flash_stats, counter)? != 1 {
+                return Err(
+                    format!("ARM flash probe did not complete exactly one {counter}").into(),
+                );
+            }
+        }
+        let minimum_wait = if env::var_os("VIRTUAL_DAISY_FLASH_MAXIMUM").is_some_and(|v| v == "1") {
+            2_000_000_000
+        } else {
+            1_000_000_000
+        };
+        if grade::counter(&flash_stats, "cpu_bus_wait_ns")? < minimum_wait {
+            return Err("ARM flash probe did not consume the declared erase stall".into());
+        }
+        let broken_flash = host.boot("flash-wait-fault", &tone, "flash-wait-fault")?;
+        let error = probe::check_flash(&broken_flash)
+            .err()
+            .ok_or("Bypassed flash bus waits were not caught")?
+            .to_string();
+        if !error.contains("ARM flash result 2: expected 0xffffffff, got 0x47702009") {
+            return Err(format!("Unexpected flash wait negative-control failure: {error}").into());
+        }
+        fs::write(
+            grade::artifact(&broken_flash, ".flash-negative.txt"),
+            format!("flash_wait_bypass=caught\n{error}\n"),
+        )?;
     }
-    fs::write(
-        grade::artifact(&broken_runtime, ".architecture-negative.txt"),
-        format!("disabled_runtime_fetch=caught\n{error}\n"),
-    )?;
+    fs::write(directory.join("timing-probe.bin"), probe::timing_image())?;
+    let timing = host.boot("timing-probes", &tone, "timing")?;
+    probe::check_timing(&timing)?;
+    let stats = grade::artifact(&timing, ".memory.txt");
     for counter in [
-        "instruction_fetch_reads",
-        "instruction_cache_fills",
-        "runtime_retranslations",
+        "cache_line_writebacks",
+        "writeback_drain_yields",
+        "exception_entry_wait_yields",
+        "exception_return_wait_yields",
     ] {
-        if grade::counter(&grade::artifact(&probes, ".memory.txt"), counter)? == 0 {
-            return Err(format!("ARM probe did not exercise {counter}").into());
+        if grade::counter(&stats, counter)? == 0 {
+            return Err(format!("ARM timing probe did not exercise {counter}").into());
         }
     }
-    fs::write(directory.join("flash-probe.bin"), probe::flash_image())?;
-    let flash = host.boot("flash-probes", &tone, "flash")?;
-    probe::check_flash(&flash)?;
-    let flash_stats = grade::artifact(&flash, ".memory.txt");
-    for counter in ["flash_programs", "flash_erases"] {
-        if grade::counter(&flash_stats, counter)? != 1 {
-            return Err(format!("ARM flash probe did not complete exactly one {counter}").into());
+    if grade::counter(&stats, "exception_stack_words")? != 8 {
+        return Err("ARM timing probe did not stack exactly one basic frame".into());
+    }
+    for (label, fault, expected) in [
+        (
+            "dsb-fault",
+            "dsb-fault",
+            "ARM writeback early marker: expected 0, got 0xab",
+        ),
+        (
+            "entry-fault",
+            "entry-fault",
+            "ARM exception entry started too soon:",
+        ),
+    ] {
+        let capture = host.boot(label, &tone, fault)?;
+        let error = probe::check_timing(&capture)
+            .err()
+            .ok_or("Timing negative control was not caught")?
+            .to_string();
+        if !error.contains(expected) {
+            return Err(format!("Unexpected timing negative-control failure: {error}").into());
         }
-    }
-    let minimum_wait = if env::var_os("VIRTUAL_DAISY_FLASH_MAXIMUM").is_some_and(|v| v == "1") {
-        2_000_000_000
-    } else {
-        1_000_000_000
-    };
-    if grade::counter(&flash_stats, "cpu_bus_wait_ns")? < minimum_wait {
-        return Err("ARM flash probe did not consume the declared erase stall".into());
-    }
-    let broken_flash = host.boot("flash-wait-fault", &tone, "flash-wait-fault")?;
-    let error = probe::check_flash(&broken_flash)
-        .err()
-        .ok_or("Bypassed flash bus waits were not caught")?
-        .to_string();
-    if !error.contains("ARM flash result 2: expected 0xffffffff, got 0x47702009") {
-        return Err(format!("Unexpected flash wait negative-control failure: {error}").into());
+        fs::write(
+            grade::artifact(&capture, ".timing-negative.txt"),
+            format!("{fault}=caught\n{error}\n"),
+        )?;
     }
     fs::write(
-        grade::artifact(&broken_flash, ".flash-negative.txt"),
-        format!("flash_wait_bypass=caught\n{error}\n"),
+        directory.join("interrupt-probe.bin"),
+        probe::interrupt_image(),
     )?;
-    if probes_only {
+    fs::write(
+        directory.join("interrupt-target-probe.bin"),
+        probe::interrupt_target_image(),
+    )?;
+    let interrupt = host.boot("wait-irq", &tone, "wait-irq")?;
+    probe::check_interrupt(&interrupt)?;
+    if grade::counter(
+        &grade::artifact(&interrupt, ".memory.txt"),
+        "abandoned_cpu_waits",
+    )? == 0
+    {
+        return Err("ARM IRQ probe did not abandon a normal-memory wait".into());
+    }
+    let target_irq = host.boot("wait-irq-target", &tone, "wait-irq-target")?;
+    probe::check_interrupt(&target_irq)?;
+    let stats = grade::artifact(&target_irq, ".memory.txt");
+    if grade::counter(&stats, "abandoned_bus_requests")? == 0
+        || grade::counter(&stats, "exception_stack_words")? != 8
+    {
+        return Err("ARM IRQ probe did not abandon a bus request and stack one SRAM frame".into());
+    }
+    let broken = host.boot("wait-irq-fault", &tone, "wait-irq-fault")?;
+    let error = probe::check_interrupt(&broken)
+        .err()
+        .ok_or("Non-preemptible wait was not caught")?
+        .to_string();
+    if !error.contains("ARM interrupt early marker: expected 0xab, got 0x0") {
+        return Err(format!("Unexpected wait-preemption control failure: {error}").into());
+    }
+    fs::write(
+        grade::artifact(&broken, ".interrupt-negative.txt"),
+        format!("wait_preemption_bypass=caught\n{error}\n"),
+    )?;
+    if mode != RunMode::Full {
         if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
             return Err("Firmware changed during the probe run".into());
         }
-        fs::write(
-            directory.join("probe-summary.txt"),
-            "ARM cache and flash probes passed; production firmware/audio NOT RUN\n",
-        )?;
-        println!("ARM cache and flash probes passed; production firmware/audio NOT RUN");
+        let summary = if mode == RunMode::Timing {
+            "ARM writeback/exception timing probes passed; legacy cache/flash probes and production audio NOT RUN\n"
+        } else {
+            "ARM cache, flash and writeback/exception probes passed; production firmware/audio NOT RUN\n"
+        };
+        fs::write(directory.join("probe-summary.txt"), summary)?;
+        print!("{summary}");
         return Ok(());
     }
     let baseline = host.boot("baseline", &tone, "none")?;
     let report = grade::check(&baseline)?;
-    for counter in ["cpu_bus_wait_ns", "fabric_completed", "dma_bus_wait_yields"] {
+    for counter in [
+        "cpu_bus_wait_ns",
+        "fabric_completed",
+        "dma_bus_wait_yields",
+        "flash_buffer_hits",
+        "vector_reads",
+        "vector_cache_hits",
+    ] {
         if grade::counter(&grade::artifact(&baseline, ".memory.txt"), counter)? == 0 {
             return Err(format!("Production boot did not exercise {counter}").into());
         }
@@ -413,7 +547,7 @@ fn run(
     if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
         return Err("Firmware changed during the run".into());
     }
-    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nBus-contention negative control: caught by audio/FIFO gates and delayed DMA\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nARM flash programming/erase: status, deferred completion, STM/STRD retries and stale I-cache checks passed\nFlash wait-bypass negative control: caught by CPU result gate\nCPU/DMA stalls: coupled functional service scenario; not cycle accurate\nSDRAM timing: open-row read/transfer service scenario; row/refresh scheduling unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, exception-entry stalls, dirty writeback traffic, pipeline overlap, calibrated CPU timing and complete codec response remain unfinished or unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
+    let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nBus-contention negative control: caught by audio/FIFO gates and delayed DMA\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nARM flash programming/erase: status, deferred completion, STM/STRD retries and stale I-cache checks passed\nFlash wait-bypass negative control: caught by CPU result gate\nARM dirty writeback/DSB: deferred shared-port completion and early-marker control passed\nARM exception entry/return: busy flash vector, single SRAM frame and wait-bypass control passed\nARM normal-load IRQ preemption: early handler, restarted load and blocked-preemption control passed\nCPU/DMA stalls: coupled functional service scenario; not cycle accurate\nSDRAM timing: open-row read/transfer service scenario; row/refresh scheduling unmodeled\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, full store buffers, late arrival/tail-chain timing, pipeline overlap, calibrated CPU timing and complete codec response remain unfinished or unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())
@@ -431,7 +565,7 @@ fn main() -> Result<()> {
         println!("{}", grade::check(Path::new(&args[1]))?);
         return Ok(());
     }
-    if args.len() >= 3 && (args[0] == "run" || args[0] == "probe") {
+    if args.len() >= 3 && (args[0] == "run" || args[0] == "probe" || args[0] == "timing") {
         let mut board = None;
         let mut codec = None;
         let mut input = None;
@@ -494,8 +628,14 @@ fn main() -> Result<()> {
             input,
             board,
             ideal_line,
-            args[0] == "probe",
+            if args[0] == "timing" {
+                RunMode::Timing
+            } else if args[0] == "probe" {
+                RunMode::Probes
+            } else {
+                RunMode::Full
+            },
         );
     }
-    Err("Usage: virtual-daisy run|probe RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run|probe|timing RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

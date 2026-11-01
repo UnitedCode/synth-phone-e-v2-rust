@@ -29,13 +29,21 @@ pub fn counter(path: &Path, key: &str) -> Result<u64> {
     Ok(value)
 }
 
-pub fn boot_evidence(prefix: &Path) -> Result<()> {
+pub fn execution_evidence(prefix: &Path) -> Result<()> {
     let host = fs::read_to_string(artifact(prefix, ".host.log"))?;
     if !host.contains("Python execution guard verified")
         || !host.contains("Native instruction-fetch tag verified")
-        || !host.contains("PC:")
+        || !host.contains("IRQ-aware wait pacing adapter verified")
     {
         return Err("Missing execution/guard evidence".into());
+    }
+    Ok(())
+}
+
+pub fn boot_evidence(prefix: &Path) -> Result<()> {
+    execution_evidence(prefix)?;
+    if !fs::read_to_string(artifact(prefix, ".host.log"))?.contains("PC:") {
+        return Err("Missing production CPU progress evidence".into());
     }
     let rtt = fs::read_to_string(artifact(prefix, ".rtt"))?;
     if !rtt.contains("Startup done!!")

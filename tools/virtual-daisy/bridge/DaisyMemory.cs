@@ -21,9 +21,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong DebtNative(IntPtr state);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong RegNative(IntPtr state,uint space,ulong offset,uint value,uint write,uint width);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong PortNative(IntPtr state,uint address,uint write,ulong token);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint LoadNative(IntPtr state,uint target,ulong ns);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint LoadNative(IntPtr state,uint target,ulong ns,uint write);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint TimeNative(IntPtr state,ulong now);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint IrqNative(IntPtr state);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void AbandonNative(IntPtr state,ulong ns);
         public DaisyArchitecture(IMachine machine,string libraryPath)
         {
             this.machine=machine;
@@ -34,6 +35,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             contains = Marshal.GetDelegateForFunctionPointer<ContainsMemory>(NativeLibrary.GetExport(library, "daisy_memory_is_ram"));
             save = Marshal.GetDelegateForFunctionPointer<SaveNative>(NativeLibrary.GetExport(library, "daisy_memory_save"));
             RuntimeFetchPointer=NativeLibrary.GetExport(library,"daisy_runtime_fetch");
+            BarrierPointer=NativeLibrary.GetExport(library,"daisy_barrier");
+            ExceptionPointer=NativeLibrary.GetExport(library,"daisy_exception");
             synchronize=Marshal.GetDelegateForFunctionPointer<SyncNative>(NativeLibrary.GetExport(library,"daisy_bus_sync"));
             access=Marshal.GetDelegateForFunctionPointer<AccessNative>(NativeLibrary.GetExport(library,"daisy_cpu_access"));
             debt=Marshal.GetDelegateForFunctionPointer<DebtNative>(NativeLibrary.GetExport(library,"daisy_cpu_debt"));
@@ -42,6 +45,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             load=Marshal.GetDelegateForFunctionPointer<LoadNative>(NativeLibrary.GetExport(library,"daisy_bus_load"));
             advance=Marshal.GetDelegateForFunctionPointer<TimeNative>(NativeLibrary.GetExport(library,"daisy_time_sync"));
             flashIrq=Marshal.GetDelegateForFunctionPointer<IrqNative>(NativeLibrary.GetExport(library,"daisy_flash_irq"));
+            abandon=Marshal.GetDelegateForFunctionPointer<AbandonNative>(NativeLibrary.GetExport(library,"daisy_abandon_wait"));
+            waitInterruptible=Marshal.GetDelegateForFunctionPointer<IrqNative>(NativeLibrary.GetExport(library,"daisy_wait_interruptible"));
         }
         public uint Read(uint address, uint width, bool cpu)
         {
@@ -51,6 +56,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void AttachCPU(DaisyCortexM cpu) { this.cpu=cpu; }
         public IntPtr NativeState => native.State;
         public IntPtr RuntimeFetchPointer { get; }
+        public IntPtr BarrierPointer {get;}
+        public IntPtr ExceptionPointer {get;}
         public bool ImageLoading { get; set; }
         public bool CpuWaitBypass { get; set; }
         public void Synchronize(bool reportCpu=false) {
@@ -60,6 +67,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             if(rcc.WithState(clock=>fmc.WithState(controller=>synchronize(native.State,clock,controller,machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds)))!=0) throw new InvalidOperationException("Unsupported bus clock configuration");
         }
         public ulong TakeCpuDebt() { return debt(native.State); }
+        public void AbandonWait(ulong ns) {abandon(native.State,ns);}
+        public bool WaitInterruptible=>waitInterruptible(native.State)!=0;
         public void Advance() {if(advance(native.State,machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds)!=0) throw new InvalidOperationException("Bus time synchronization failed");}
         public bool FlashIrq => flashIrq(native.State)!=0;
         public void CpuTransfer(uint address,uint width,bool isWrite,ref ulong value) {
@@ -80,7 +89,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             return (uint)result;
         }
         public ulong DmaPort(uint address,bool write,ulong token) { ulong result=port(native.State,address,write?1U:0U,token==1 ? 0:token); if(result==ulong.MaxValue) throw new InvalidOperationException("Unmodeled DMA bus transfer"); return result; }
-        public void InjectBusLoad(uint target,ulong ns) {Synchronize();if(load(native.State,target,ns)!=0) throw new InvalidOperationException("Could not inject bus load");}
+        public void InjectBusLoad(uint target,ulong ns,bool write=false) {Synchronize();if(load(native.State,target,ns,write ? 1U:0U)!=0) throw new InvalidOperationException("Could not inject bus load");}
         public void LoadFlash(uint address,uint width,uint value) { lock(sync) { if(write(native.State,address,width,value,2)!=0) throw new InvalidOperationException("Invalid flash image load"); } }
         public void Write(uint address, uint width, uint value, bool cpu)
         {
@@ -92,7 +101,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public uint ReadScb(long offset) { lock(sync) return native.ReadDoubleWord(offset); }
         public bool Contains(uint address) { return contains(address, 4) != 0; }
         public void Save(string path) { lock(sync) { if(save(native.State, path) != 0) throw new InvalidOperationException("Could not save memory/cache statistics"); } }
-        public void WriteScb(long offset, uint value) { lock(sync) native.WriteDoubleWord(offset, value); }
+        public void WriteScb(long offset, uint value) { Synchronize(true);lock(sync) native.WriteDoubleWord(offset, value); }
         public void Reset() { lock(sync) native.Reset(); }
         private readonly object sync = new object();
         private readonly DaisyNative native;
@@ -111,6 +120,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private readonly LoadNative load;
         private readonly TimeNative advance;
         private readonly IrqNative flashIrq;
+        private readonly AbandonNative abandon;
+        private readonly IrqNative waitInterruptible;
     }
 
     public sealed class DaisyMemory : IExecutableIO
