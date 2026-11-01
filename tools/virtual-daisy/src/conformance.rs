@@ -57,6 +57,8 @@ pub fn write(
         ("qspi_translation_granularity","ONE_INSTRUCTION_TCG_BLOCK"),
         ("external_prefetch_only_and_posted_store_errors","UNSUPPORTED"),
         ("dma_qspi_reads_and_bus_errors","COUPLED_FUNCTIONAL_TC_TE_DISABLE_AND_IRQ"),
+        ("dma_qspi_error_check","ADMISSION_AND_READ_RESPONSE_CONTROLLER_STATE"),
+        ("qspi_abort_race_and_partial_burst_timing","UNVERIFIED"),
         ("arm_divide_alignment_mpu_nocp_faults","FUNCTIONAL_GUEST_PROBES_REQUIRED"),
         ("fpv5_d16_identification_and_f64","SOURCE_CHECKED_GUEST_PROBES_REQUIRED"),
         ("automatic_and_lazy_fp_frame_tcm_sram_and_return","FUNCTIONAL_RETRY_AND_PORT_SERVICE_SCENARIO"),

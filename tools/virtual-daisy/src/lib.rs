@@ -315,6 +315,7 @@ pub extern "C" fn daisy_new(kind: u32) -> *mut Peripheral {
 
 /// # Safety
 /// `state` is a live, serialized architecture state; width is 1, 2, or 4.
+/// Upper word: 0=data, 1=unsupported, 2=documented DMA read bus error.
 #[no_mangle]
 pub unsafe extern "C" fn daisy_memory_read(
     state: *mut Peripheral,
@@ -343,6 +344,7 @@ pub unsafe extern "C" fn daisy_memory_read(
     };
     match result {
         Ok(value) => u64::from(value),
+        Err(error) if cpu == 0 && qspi::mapped_bus_error(error) => 2_u64 << 32,
         Err(_) => 1_u64 << 32,
     }
 }

@@ -216,6 +216,9 @@ impl Host<'_> {
             "cpu-eager-ram",
             "bus",
             "bus-dma-valid",
+            "bus-dma-disable",
+            "bus-dma-abort",
+            "bus-dma-range",
             "bus-fault-control",
             "fetch",
             "fetch-prefix-control",
@@ -276,7 +279,13 @@ fn cpu_checks(host: &Host<'_>, tone: &Path) -> Result<()> {
     } else {
         0x40015820
     };
-    for kind in ["bus", "bus-dma-valid"] {
+    for kind in [
+        "bus",
+        "bus-dma-valid",
+        "bus-dma-disable",
+        "bus-dma-abort",
+        "bus-dma-range",
+    ] {
         let capture = host.boot(kind, tone, kind)?;
         bus_probe::check(&capture, kind == "bus-dma-valid", tx_address)?;
     }

@@ -101,7 +101,7 @@ public static class DaisyHost
         if(args[5]=="wait-irq" || args[5]=="wait-irq-fault" || args[5]=="wait-irq-target") {InterruptProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="storage" || args[5]=="storage-irq-fault" || args[5]=="storage-data-fault" || args[5]=="storage-timer-fault") {StorageProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="cpu" || args[5]=="cpu-div-fault" || args[5]=="cpu-lazy-fault" || args[5]=="cpu-align-fault" || args[5]=="cpu-ram" || args[5]=="cpu-eager" || args[5]=="cpu-eager-ram") {CpuProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
-        if(args[5]=="bus" || args[5]=="bus-dma-valid" || args[5]=="bus-fault-control") {BusProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="bus" || args[5]=="bus-dma-valid" || args[5]=="bus-dma-disable" || args[5]=="bus-dma-abort" || args[5]=="bus-dma-range" || args[5]=="bus-fault-control") {BusProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="fetch" || args[5]=="fetch-prefix-control") {FetchProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
@@ -278,10 +278,21 @@ public static class DaisyHost
         cpu.VectorTableOffset=0x6000;cpu.SP=0x2001f000;cpu.PC=bus.ReadDoubleWord(0x6004);
         architecture.SuppressBusErrors=kind=="bus-fault-control";
         emulation.RunFor(TimeInterval.FromMilliseconds(2));
-        if(kind=="bus-dma-valid") {
+        if(kind=="bus-dma-valid" || kind=="bus-dma-disable" || kind=="bus-dma-abort" || kind=="bus-dma-range") {
             bus.WriteDoubleWord(0x52005000,1U|(3U<<24));bus.WriteDoubleWord(0x52005014,0x0d002503);
         }
+        if(kind=="bus-dma-range") {
+            uint cr=bus.ReadDoubleWord(0x40020010);
+            bus.WriteDoubleWord(0x40020010,cr&~1U);
+            bus.WriteDoubleWord(0x4002001c,0x90800000);
+            bus.WriteDoubleWord(0x40020010,cr);
+        }
         ((DaisyDma)machine["sysbus.dma1"]).OnGPIO(0,true); // Exactly one peripheral request.
+        if(kind=="bus-dma-disable" || kind=="bus-dma-abort") {
+            emulation.RunFor(TimeInterval.FromMicroseconds(2));
+            ((DaisyDma)machine["sysbus.dma1"]).RequirePendingRead(0x90000000);
+            bus.WriteDoubleWord(0x52005000,kind=="bus-dma-disable" ? 0U:3U|(3U<<24));
+        }
         emulation.RunFor(TimeInterval.FromMicroseconds(20));
         File.WriteAllBytes(prefix+".fault.bin",bus.ReadBytes(0x20019000UL,256));
         using(var output=new BinaryWriter(File.Create(prefix+".fault-sites.bin")))
