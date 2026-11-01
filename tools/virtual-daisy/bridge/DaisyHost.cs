@@ -252,7 +252,7 @@ public static class DaisyHost
         emulation.RunFor(TimeInterval.FromMicroseconds(2950));
         File.WriteAllBytes(prefix+".storage-program.bin",bus.ReadBytes(0x2001a000UL,28));
         bus.WriteDoubleWord(0x2001a020,1);
-        emulation.RunFor(TimeInterval.FromMilliseconds(301));
+        emulation.RunFor(TimeInterval.FromMilliseconds(Environment.GetEnvironmentVariable("VIRTUAL_DAISY_FLASH_MAXIMUM")=="1" ? 301UL:71UL));
         File.WriteAllBytes(prefix+".storage.bin",bus.ReadBytes(0x2001a000UL,28));
         File.WriteAllBytes(prefix+".storage-cache.bin",bus.ReadBytes(0x2001a024UL,28));
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");

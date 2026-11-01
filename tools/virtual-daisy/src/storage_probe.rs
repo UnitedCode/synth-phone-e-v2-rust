@@ -143,7 +143,7 @@ pub fn image(enable_irq: bool, corrupt_program: bool) -> Vec<u8> {
     t.write(0x18, 0x123); // Unaligned address selects the containing 4KiB sector.
     wait_ready_irq(&mut t);
     read_array(&mut t, 5);
-    t.emit(&[0x20ab, 0x6028, 0xe7fe]);
+    t.emit(&[0x20ab, 0x6028, 0xbf30, 0xe7fd]); // Completed guest sleeps until any next IRQ.
     let mut code = t.finish();
     assert!(code.len() < 0x400);
     code.resize(0x400, 0xbf00); // Handler fixed at ITCM 0x9800.

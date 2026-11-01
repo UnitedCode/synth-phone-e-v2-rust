@@ -7,6 +7,7 @@ mod codec;
 mod dma;
 mod flash;
 mod gpio;
+pub mod host;
 pub mod memory;
 pub mod nor;
 pub mod qspi;

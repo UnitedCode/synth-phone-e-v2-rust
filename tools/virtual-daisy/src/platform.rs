@@ -9,7 +9,12 @@ pub fn prepare(
 ) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(directory)?;
     let directory = fs::canonicalize(directory)?;
-    let mut platform = fs::read_to_string(renode.join("platforms/cpus/stm32h7.repl"))?;
+    // Only rendered into quoted REPL values below. Normalize Windows extended
+    // paths and escape string metacharacters without changing actual IO paths.
+    let library_text = virtual_daisy::host::repl_path(library)?;
+    let library = Path::new(&library_text);
+    let mut platform =
+        fs::read_to_string(renode.join("platforms/cpus/stm32h7.repl"))?.replace("\r\n", "\n");
     platform = platform.replace("cpu: CPU.CortexM @", "cpu: Miscellaneous.DaisyCortexM @");
     platform = platform.replace(
         "    cpuType: \"cortex-m7\"",

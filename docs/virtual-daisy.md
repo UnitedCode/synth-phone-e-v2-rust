@@ -18,8 +18,16 @@ as **UNVERIFIED**; a functional pass cannot certify it.
 ## Run
 
 Install Rust's `thumbv7em-none-eabihf` target, a .NET 8 SDK, and the official
-prebuilt Renode 1.17.0 release for Linux x86-64 or macOS ARM64. CMake and a C
+prebuilt Renode 1.17.0 release matching the host architecture. Windows x64,
+Linux x64/ARM64 and macOS ARM64/Intel runtime identifiers are recognized; a
+matching native runtime directory must actually be present. CMake and a C
 compiler are also required for the pinned native instruction-fetch adapter.
+On Windows, use a native x64 Rust/.NET SDK, MinGW-w64 GCC with winpthreads,
+and Ninja on PATH. The native CPU adapter uses GCC/Ninja rather than MSVC;
+Rust's own host linker still follows the installed Rust toolchain. On macOS,
+Xcode Command Line Tools provide Clang; on Linux use GCC or Clang. Curl and tar
+must be available as executables. No administrator/symlink permission is needed
+for the private native-library directory.
 The runner downloads SHA256-verified Renode infrastructure and tlib source
 archives and builds a private ARM-M core. The adapter tags instruction
 fetches separately from data loads and calls Rust before each translated block
@@ -47,6 +55,33 @@ CI pins and verifies the Linux archive SHA256. The command builds the native
 Rust peripherals, the unchanged production firmware with its existing lockfile,
 and the mandatory C# Renode API bridge. `dotnet` must resolve to an SDK, not just
 a runtime. Set `VIRTUAL_DAISY_DOTNET` to an SDK executable if needed.
+
+On Windows, extract the official `renode-1.17.0.windows-portable.zip` and use its
+`renode_1.17.0-portable` directory. Its SHA256 is
+`18bcf145422039e8702c3e5f9864c7787561bfd5deb7a3ee6e168ecf19e2b9db`.
+Use PowerShell's structured command arguments; paths may contain spaces and Unicode:
+
+```powershell
+rustup target add thumbv7em-none-eabihf
+$labTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
+cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target $labTarget -- startup 'C:\Tools\renode_1.17.0-portable' 'C:\Phone Tests\startup' --board rev5
+```
+
+Replace `startup` with `storage`, `probe` or `run` for the corresponding scope.
+Rust source and test targets cross-check for Windows and Linux locally. Both the
+Rust model DLL and the pinned CPU adapter link as Windows x64 PE libraries; their
+required exports and runtime imports have been inspected. The managed adapter
+patch also applies to the official Windows package. Native Windows execution
+remains unverified; cross-linking is not a Windows boot test.
+
+The portable-copy path has booted the production ELF and passed the ARM storage
+suite on macOS ARM64 and native Linux ARM64, using paths with spaces and Unicode.
+Linux validation uses an offline local container and a read-only checkout;
+managed intermediate files now stay under the selected output directory.
+Completed storage guests sleep rather than spin, and typical/maximum erase
+tests use their respective duration scenarios. No cross-platform CI jobs were
+added; the existing workflow is unchanged. This portability change uses local
+verification and skips CI per the development budget.
 
 `--board` is required. `rev4`, `rev5`, and `rev7` select physical wiring,
 revision GPIO straps and codec control together. An optional `--codec ak4556`,

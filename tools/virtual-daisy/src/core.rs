@@ -123,11 +123,7 @@ fn archive(cache: &Path, name: &str, url: &str, sha: &str) -> Result<PathBuf> {
 }
 
 pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
-    let rid = match (env::consts::OS, env::consts::ARCH) {
-        ("macos", "aarch64") => "osx-arm64",
-        ("linux", "x86_64") => "linux-x64",
-        _ => return Err("Fetch-tag core supports macOS ARM64 and Linux x86-64".into()),
-    };
+    let rid = virtual_daisy::host::runtime_id(env::consts::OS, env::consts::ARCH)?;
     let cache = env::var_os("VIRTUAL_DAISY_CORE_CACHE")
         .map(PathBuf::from)
         .unwrap_or_else(|| directory.join("cpu-core"));
@@ -279,16 +275,21 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
         fs::write(translate, code)?;
         fs::write(source.join(".fetch-tag-v1"), &source_stamp)?;
     }
-    let build = cache.join("build");
-    checked(
-        Command::new("cmake")
-            .arg("-S")
-            .arg(source.join("src/Emulator/Cores"))
-            .arg("-B")
-            .arg(&build)
-            .args(["-DTARGET_ARCH=arm-m", "-DCMAKE_BUILD_TYPE=Release"])
-            .arg(format!("-DTLIB_COMMIT_SHA={TLIB}")),
-    )?;
+    let build = cache.join("build").join(rid);
+    let mut configure = Command::new("cmake");
+    configure
+        .arg("-S")
+        .arg(virtual_daisy::host::tool_path(
+            &source.join("src/Emulator/Cores"),
+        )?)
+        .arg("-B")
+        .arg(virtual_daisy::host::tool_path(&build)?)
+        .args(["-DTARGET_ARCH=arm-m", "-DCMAKE_BUILD_TYPE=Release"])
+        .arg(format!("-DTLIB_COMMIT_SHA={TLIB}"));
+    if cfg!(windows) {
+        configure.args(["-G", "Ninja", "-DCMAKE_C_COMPILER=gcc"]);
+    }
+    checked(&mut configure)?;
     checked(
         Command::new("cmake")
             .arg("--build")
@@ -296,39 +297,12 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
             .args(["-j", "4"]),
     )?;
     let core = build.join("tlib/translate-arm-m-le.so");
-    let platform = managed.join("platform-lib");
-    // Private override, never mutate the installed Renode runtime or a symlink target.
-    if platform.symlink_metadata().is_ok() {
-        if platform.is_symlink() {
-            fs::remove_file(&platform)?;
-        } else {
-            fs::remove_dir_all(&platform)?;
-        }
-    }
-    fs::create_dir_all(&platform)?;
-    for entry in fs::read_dir(renode.join("platform-lib"))? {
-        let entry = entry?;
-        let destination = platform.join(entry.file_name());
-        if entry.file_name() == rid {
-            fs::create_dir_all(&destination)?;
-            for file in fs::read_dir(entry.path())? {
-                let file = file?;
-                let target = destination.join(file.file_name());
-                if file.file_name() == "translate-arm-m-le.so" {
-                    fs::copy(&core, target)?;
-                } else {
-                    #[cfg(unix)]
-                    std::os::unix::fs::symlink(file.path(), target)?;
-                }
-            }
-        } else {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(entry.path(), destination)?;
-        }
-    }
-    if !platform.join(rid).join("translate-arm-m-le.so").is_file() {
-        return Err("Renode native platform directory missing".into());
-    }
+    virtual_daisy::host::stage_runtime(
+        &renode.join("platform-lib"),
+        &managed.join("platform-lib"),
+        rid,
+        &core,
+    )?;
     fs::write(directory.join("cpu-core.txt"),format!("infrastructure_commit={INFRA}\ntlib_commit={TLIB}\nfetch_tag_version=8\ncore_sha256={:x}\n",Sha256::digest(fs::read(core)?)))?;
     Ok(())
 }
