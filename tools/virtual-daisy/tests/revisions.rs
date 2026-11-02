@@ -29,6 +29,7 @@ fn wm8731_dac_mute_preserves_adc_capture() {
 #[test]
 fn rev4_and_rev7_receive_on_b_and_transmit_on_a() {
     let mut sai = Peripheral::new(7);
+    sai.write(0xc, 63).unwrap();
     sai.configure_audio(1).unwrap();
     let input = [-0.5, 0.25];
     unsafe {
@@ -126,6 +127,7 @@ fn wm8731_reset_restores_documented_register_defaults() {
 #[test]
 fn pcm_input_uses_the_entire_signed_24_bit_range() {
     let mut sai = Peripheral::new(7);
+    sai.write(0xc, 63).unwrap();
     let input = [1.0, -1.0];
     unsafe {
         daisy_sai_input(&mut sai, input.as_ptr(), 1);
@@ -154,6 +156,7 @@ fn wm8731_line_mute_only_silences_its_selected_input_channel() {
     }
     let mut sai = Peripheral::new(7);
     let input = [0.5, -0.25];
+    sai.write(0xc, 63).unwrap();
     unsafe {
         daisy_sai_input(&mut sai, input.as_ptr(), 1);
     }
@@ -202,7 +205,15 @@ fn wm8731_both_channel_load_updates_the_opposite_volume_and_mute() {
 #[test]
 fn unimplemented_active_codec_polarity_is_rejected_instead_of_ignored() {
     let mut codec = Peripheral::new(4);
-    wm_register(&mut codec, 7, 0x29); // 24-bit LJ with L/R swap.
+    for (index, value) in [(0, 23), (1, 23), (4, 0x12), (6, 0x42), (7, 9), (9, 1)] {
+        wm_register(&mut codec, index, value);
+    }
+    assert_eq!(
+        codec.read(0x100).unwrap(),
+        1,
+        "valid active ADC before the polarity change"
+    );
+    wm_register(&mut codec, 7, 0x19); // Unsupported LRP polarity; LRSWAP is bit5.
     wm_register(&mut codec, 9, 1);
     assert!(codec.read(0x100).is_err());
 }
@@ -226,14 +237,15 @@ fn unstrapped_revision_pins_float_instead_of_being_forced_high() {
 fn wm8731_accepts_rm0433_master_receive_and_slave_transmit_modes() {
     // RM0433 SAI_xCR1 MODE: 01 master RX, 10 slave TX.
     let mut sai = Peripheral::new(7);
+    sai.write(0xc, 63).unwrap();
     assert!(sai.write(4, (6 << 5) | 1 | (3 << 16)).is_ok());
     assert!(sai.write(0x24, (6 << 5) | 2 | (3 << 16)).is_ok());
 }
 
 #[test]
 fn sai_dma_requests_stop_at_the_programmed_fifo_threshold() {
-    // RM0433: quarter-full TX requests stop at two words; FLVL uses ranges,
-    // including 010 at exactly 1/4 and 100 at exactly 3/4 capacity.
+    // Quarter-full TX requests stop at two words. The SR table's TX FLVL
+    // ranges include 001 at exactly 1/4 and 011 at exactly 3/4 capacity.
     let mut sai = Peripheral::new(7);
     sai.write(0x28, 1).unwrap();
     sai.write(0x24, (6 << 5) | 2 | (1 << 17)).unwrap();
@@ -241,10 +253,10 @@ fn sai_dma_requests_stop_at_the_programmed_fifo_threshold() {
     sai.write(0x40, 0).unwrap();
     assert_eq!(unsafe { daisy_sai_requests(&mut sai) }, 2);
     sai.write(0x40, 0).unwrap();
-    assert_eq!(sai.read(0x38).unwrap() >> 16, 2);
+    assert_eq!(sai.read(0x38).unwrap() >> 16, 1);
     assert_eq!(unsafe { daisy_sai_requests(&mut sai) }, 0);
     for _ in 0..4 {
         sai.write(0x40, 0).unwrap();
     }
-    assert_eq!(sai.read(0x38).unwrap() >> 16, 4);
+    assert_eq!(sai.read(0x38).unwrap() >> 16, 3);
 }

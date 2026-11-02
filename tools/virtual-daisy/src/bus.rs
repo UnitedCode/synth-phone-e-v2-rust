@@ -551,6 +551,11 @@ impl SdramTiming {
             return Err("reserved SDRAM row address width");
         }
         let field = |shift: u32| u64::from(((timing >> shift) & 15_u32) + 1);
+        // RM0433 SDTR: controller constraints are additional to the external
+        // chip's tWR. Invalid programming has no certified data/timing result.
+        if field(16) + field(24) < field(8) || field(16) + field(24) + field(20) < field(12) {
+            return Err("SDRAM TWR violates TRAS/TRCD or TRC/TRCD/TRP recovery constraints");
+        }
         let refresh = u64::from((refresh >> 1) & 8191);
         if (1..41).contains(&refresh) {
             return Err("SDRAM COUNT must be zero or at least 41");

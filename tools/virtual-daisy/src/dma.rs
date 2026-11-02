@@ -102,6 +102,10 @@ impl Dma {
                 let inactive = stream.cr & (1 << 18) != 0
                     && ((register == 12) == (stream.cr & (1 << 19) != 0));
                 if !inactive {
+                    if stream.cr & (1 << 18) != 0 {
+                        self.status[index / 4] |= 1 << ([0, 6, 16, 22][index % 4] + 3);
+                        stream.cr &= !1;
+                    }
                     return Ok(());
                 }
             }
@@ -116,6 +120,8 @@ impl Dma {
                         || (value >> 11) & 3 != 2
                         || (value >> 13) & 3 != 2
                         || (value >> 6) & 3 > 1
+                        || value & ((15 << 21) | (1 << 5)) != 0
+                        || stream.fcr & 4 != 0
                     {
                         return Err("unsupported DMA audio transfer format");
                     }
@@ -144,7 +150,7 @@ impl Dma {
         if stream.remaining == 0 {
             return Err("DMA counter underflow");
         }
-        let memory_base = if stream.cr & (1 << 19) != 0 {
+        let memory_base = if stream.cr & ((1 << 18) | (1 << 19)) == ((1 << 18) | (1 << 19)) {
             stream.m1
         } else {
             stream.m0

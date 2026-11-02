@@ -28,6 +28,7 @@ pub struct NorFlash {
     recovery_until: u64,
     write_protect_low: bool,
     maximum: bool,
+    continuous: Option<u8>,
 }
 impl Default for NorFlash {
     fn default() -> Self {
@@ -47,10 +48,35 @@ impl Default for NorFlash {
             recovery_until: 0,
             write_protect_low: false,
             maximum: false,
+            continuous: None,
         }
     }
 }
 impl NorFlash {
+    pub fn continuous_opcode(&self) -> Option<u8> {
+        self.continuous
+    }
+    /// Decode an SDR read packet. Mode-less dummy phases retain the existing
+    /// functional non-AX scenario; explicit mode bytes govern continuous reads.
+    pub fn framed_read(
+        &mut self,
+        opcode: u8,
+        address: u32,
+        read: usize,
+        instruction: bool,
+        mode: Option<u8>,
+    ) -> Result<Vec<u8>, &'static str> {
+        if (instruction && self.continuous.is_some())
+            || (!instruction && self.continuous != Some(opcode))
+        {
+            return Err("IS25LP continuous-read instruction phase mismatch");
+        }
+        let result = self.execute(opcode, address, &[], read, self.qpi)?;
+        if matches!(opcode, 0xbb | 0xeb) {
+            self.continuous = mode.filter(|&byte| byte >> 4 == 0xa).map(|_| opcode);
+        }
+        Ok(result)
+    }
     /// Translation/debug backing view: no serial command, time or cache effects.
     pub fn peek(&self, address: u32) -> u8 {
         self.byte(address)
@@ -66,6 +92,8 @@ impl NorFlash {
         match opcode {
             3 if !self.qpi => Ok(0),
             0x0b if !self.qpi => Ok(8),
+            0x3b | 0x6b if !self.qpi => Ok(8),
+            0xbb if !self.qpi => Ok([4, 4, 8, 8][usize::from((self.read_parameters >> 3) & 3)]),
             0x0b | 0xeb => Ok([6, 4, 8, 10][usize::from((self.read_parameters >> 3) & 3)]),
             5 | 0x48 | 0x9f | 0xaf | 0x90 => Ok(0),
             0xab => Ok(if self.qpi { 6 } else { 24 }),
@@ -76,6 +104,12 @@ impl NorFlash {
         match opcode {
             3 => Some(50_000_000),
             0x0b if !self.qpi => Some(133_000_000),
+            0x3b | 0x6b if !self.qpi => Some(133_000_000),
+            0xbb if !self.qpi => Some(if self.read_parameters & 0x10 == 0 {
+                104_000_000
+            } else {
+                133_000_000
+            }),
             0x0b | 0xeb => Some(
                 [104_000_000, 84_000_000, 133_000_000, 133_000_000]
                     [usize::from((self.read_parameters >> 3) & 3)],
@@ -98,7 +132,7 @@ impl NorFlash {
             0x9f | 0xaf => Ok([0x9d, 0x60, 0x17][(index % 3) as usize]),
             0xab => Ok(0x16),
             0x90 => Ok([0x9d, 0x16][((u64::from(address) + index) & 1) as usize]),
-            3 | 0x0b | 0xeb if self.pending.is_none() => {
+            3 | 0x0b | 0xeb | 0x3b | 0x6b | 0xbb if self.pending.is_none() => {
                 self.array_byte(self.read_address(address, index as u32))
             }
             _ => Err("unsupported or unavailable IS25LP064A read stream"),
@@ -122,6 +156,19 @@ impl NorFlash {
         }
     }
     pub fn transact(
+        &mut self,
+        opcode: u8,
+        address: u32,
+        data: &[u8],
+        read: usize,
+        qpi: bool,
+    ) -> Result<Vec<u8>, &'static str> {
+        if self.continuous.is_some() {
+            return Err("IS25LP continuous-read mode requires an address without instruction");
+        }
+        self.execute(opcode, address, data, read, qpi)
+    }
+    fn execute(
         &mut self,
         opcode: u8,
         address: u32,
@@ -192,6 +239,9 @@ impl NorFlash {
                     | 5
                     | 0x0b
                     | 0xeb
+                    | 0x3b
+                    | 0x6b
+                    | 0xbb
                     | 0x48
                     | 0x7a
                     | 0x30
@@ -273,12 +323,17 @@ impl NorFlash {
                     .map(|i| self.array_byte(self.read_address(address, i as u32)))
                     .collect::<Result<Vec<_>, _>>()
             }
+            0x3b | 0x6b | 0xbb if !qpi && (opcode != 0x6b || self.quad_enabled()) => {
+                return (0..read)
+                    .map(|i| self.array_byte(self.read_address(address, i as u32)))
+                    .collect()
+            }
             0x0b | 0xeb if opcode != 0xeb || qpi || self.quad_enabled() => {
                 return (0..read)
                     .map(|i| self.array_byte(self.read_address(address, i as u32)))
                     .collect::<Result<Vec<_>, _>>()
             }
-            2 => {
+            2 | 0x32 | 0x38 if opcode == 2 || (!qpi && self.quad_enabled()) => {
                 if self.write_enable && !data.is_empty() && !self.protected(address, 1) {
                     let base = address & !(255) & (CAPACITY - 1);
                     let bytes = data

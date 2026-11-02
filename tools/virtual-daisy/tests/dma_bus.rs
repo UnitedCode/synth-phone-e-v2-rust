@@ -1,6 +1,59 @@
 use virtual_daisy::{daisy_dma_irqs, daisy_dma_request, Peripheral};
 
 #[test]
+fn single_buffer_dma_uses_m0_even_if_the_double_buffer_ct_bit_is_set() {
+    let mut dma = Peripheral::new(6);
+    dma.write(0x14, 1).unwrap();
+    dma.write(0x18, 0x40015820).unwrap();
+    dma.write(0x1c, 0x30000000).unwrap();
+    dma.write(0x20, 0x30000100).unwrap();
+    dma.write(0x10, 1 | (2 << 11) | (2 << 13) | (1 << 19))
+        .unwrap();
+    assert_eq!(
+        unsafe { daisy_dma_request(&mut dma, 0) },
+        (0x40015820_u64 << 32) | 0x30000000
+    );
+}
+
+#[test]
+fn unsupported_fifo_burst_and_peripheral_flow_modes_do_not_run_as_direct_single_beats() {
+    for (fcr, extra) in [(4, 0), (0, 1 << 21), (0, 1 << 23), (0, 1 << 5)] {
+        let mut dma = Peripheral::new(6);
+        dma.write(0x14, 4).unwrap();
+        dma.write(0x18, 0x40015820).unwrap();
+        dma.write(0x1c, 0x30000000).unwrap();
+        dma.write(0x24, fcr).unwrap();
+        assert!(dma.write(0x10, 1 | (2 << 11) | (2 << 13) | extra).is_err());
+    }
+}
+
+#[test]
+fn writing_the_active_double_buffer_sets_teif_and_disables_the_stream() {
+    for ct in [0, 1] {
+        let mut dma = Peripheral::new(6);
+        dma.write(0x14, 2).unwrap();
+        dma.write(0x18, 0x40015820).unwrap();
+        dma.write(0x1c, 0x30000000).unwrap();
+        dma.write(0x20, 0x30000100).unwrap();
+        dma.write(0x10, 1 | 4 | (2 << 11) | (2 << 13) | (1 << 18) | (ct << 19))
+            .unwrap();
+        let active = if ct == 0 { 0x1c } else { 0x20 };
+        let inactive = if ct == 0 { 0x20 } else { 0x1c };
+        dma.write(inactive, 0x30000200).unwrap();
+        assert_eq!(dma.read(inactive).unwrap(), 0x30000200);
+        let before = dma.read(active).unwrap();
+        dma.write(active, 0x30000300).unwrap();
+        assert_eq!(dma.read(0).unwrap() & 8, 8, "TEIF on active buffer update");
+        assert_eq!(dma.read(active).unwrap(), before);
+        assert_eq!(dma.read(0x10).unwrap() & 1, 0);
+        assert_eq!(dma.read(0x14).unwrap(), 2);
+        assert_eq!(unsafe { daisy_dma_irqs(&mut dma) }, 1);
+        dma.write(8, 8).unwrap();
+        assert_eq!(unsafe { daisy_dma_irqs(&mut dma) }, 0);
+    }
+}
+
+#[test]
 fn pending_dma_descriptor_does_not_decrement_ndtr_or_raise_completion_irq() {
     let mut dma = Peripheral::new(6);
     dma.write(0x14, 1).unwrap();

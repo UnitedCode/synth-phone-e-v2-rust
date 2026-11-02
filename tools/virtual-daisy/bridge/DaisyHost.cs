@@ -131,6 +131,7 @@ public static class DaisyHost
         if(args[5].StartsWith("transition-")) {TransitionProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="vector" || args[5]=="vector-cached" || args[5]=="vector-enabled" || args[5]=="vector-noerror") {VectorProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
         if(args[5]=="sdram" || args[5]=="sdram-irq-control" || args[5]=="sdram-port-control") {SdramProbes(emulation,machine,args[3],args[5]);emulation.Dispose();return;}
+        if(args[5]=="sai" || args[5]=="sai-irq-control" || args[5]=="sai-mask-control") {SaiProbes(emulation,machine,args[3],args[5],args[6]=="rev5" ? 0U:1U);emulation.Dispose();return;}
         var sai = (DaisySai)machine["sysbus.sai1"];
         byte[] bytes = File.ReadAllBytes(args[4]);
         if(bytes.Length % 8 != 0 || !BitConverter.IsLittleEndian) throw new InvalidOperationException("Expected little-endian stereo f32 input");
@@ -288,6 +289,19 @@ public static class DaisyHost
         File.WriteAllBytes(prefix+".storage-cache.bin",bus.ReadBytes(0x2001a024UL,28));
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM QSPI storage/polling interrupt probe executed; results require Rust grading");
+    }
+    private static void SaiProbes(Emulation emulation,Machine machine,string prefix,string kind,uint rx) {
+        var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
+        bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"sai-probe.elf"));
+        bus.WriteDoubleWord(0x20019d80,rx);
+        cpu.VectorTableOffset=0x6000;cpu.SP=0x3001f000;cpu.PC=bus.ReadDoubleWord(0x6004);
+        emulation.RunFor(TimeInterval.FromMicroseconds(100));
+        if(bus.ReadDoubleWord(0x20019d00)!=0x42) throw new InvalidOperationException("ARM SAI guest not ready");
+        bus.WriteDoubleWord(0x40015814UL+(kind=="sai-mask-control" ? 1-rx:rx)*32UL,2);
+        if(kind!="sai-irq-control") bus.WriteDoubleWord(0xe000e108,1U<<23);
+        emulation.RunFor(TimeInterval.FromMicroseconds(100));
+        File.WriteAllBytes(prefix+".sai.bin",bus.ReadBytes(0x20019d00UL,128));
+        Console.WriteLine("ARM SAI reset/FIFO/mute IRQ87 fixture executed; results require Rust grading");
     }
     private static void SdramProbes(Emulation emulation,Machine machine,string prefix,string kind) {
         var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];

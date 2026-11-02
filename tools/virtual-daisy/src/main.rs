@@ -12,6 +12,7 @@ mod storage_probe;
 mod transition_probe;
 mod vector_probe;
 mod sdram_probe;
+mod sai_probe;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -170,6 +171,9 @@ impl Host<'_> {
             ".sdram.bin",
             ".sdram-probe.txt",
             ".sdram-negative.txt",
+            ".sai.bin",
+            ".sai-probe.txt",
+            ".sai-negative.txt",
         ] {
             let path = grade::artifact(&capture, suffix);
             if path.exists() {
@@ -255,6 +259,9 @@ impl Host<'_> {
             "sdram",
             "sdram-irq-control",
             "sdram-port-control",
+            "sai",
+            "sai-irq-control",
+            "sai-mask-control",
         ]
         .contains(&fault)
         {
@@ -265,6 +272,17 @@ impl Host<'_> {
 }
 
 fn cpu_checks(host: &Host<'_>, tone: &Path) -> Result<()> {
+    guest::prepare(host.directory,"sai",include_str!("../guests/sai.rs"))?;
+    let sai=host.boot("sai",tone,"sai")?;
+    sai_probe::check(&sai,host.board.rx_channel())?;
+    for kind in ["sai-irq-control","sai-mask-control"] {
+        let capture=host.boot(kind,tone,kind)?;
+        let error=sai_probe::check(&capture,host.board.rx_channel()).err().ok_or("SAI negative control escaped grading")?.to_string();
+        if !error.contains("ARM SAI completion: expected 0xab, got 0x42") {
+            return Err(format!("Unexpected SAI negative control: {error}").into());
+        }
+        fs::write(grade::artifact(&capture,".sai-negative.txt"),format!("{kind}=caught\n{error}\n"))?;
+    }
     guest::prepare(host.directory,"sdram",include_str!("../guests/sdram.rs"))?;
     let sdram=host.boot("sdram",tone,"sdram")?;
     sdram_probe::check(&sdram)?;
@@ -612,7 +630,7 @@ fn run(
         if fs::read(&elf)? != firmware || fs::read(directory.join("firmware.elf"))? != firmware {
             return Err("Firmware changed during CPU check".into());
         }
-        let summary="ARM SDRAM rows/read-ahead/refresh IRQ48, CPU faults/FPU, QSPI/FLASH bus errors, DMA QSPI completion/error, precise mapped-fetch and exception frame-transition probes passed, including all negative controls; production startup/audio and other ARM probes NOT RUN\n";
+        let summary="ARM SAI FIFO/mute IRQ87, SDRAM rows/read-ahead/refresh IRQ48, CPU faults/FPU, QSPI/FLASH bus errors, DMA QSPI completion/error, precise mapped-fetch and exception frame-transition probes passed, including all negative controls; production startup/audio and other ARM probes NOT RUN\n";
         fs::write(directory.join("cpu-summary.txt"), summary)?;
         print!("{summary}");
         return Ok(());
@@ -898,6 +916,7 @@ fn run(
     }
     let summary = format!("Production firmware ELF SHA256: {sha}\nBoard: {}\nAudio input boundary: {}\n{report}\nSilent-input negative control: caught by RMS gate\nLost RX DMA negative control: caught by RMS gate and FIFO overrun counter\nCacheable DMA negative control: caught by audio gates and cacheable DMA traffic counter\nDTCM DMA negative control: caught by audio gates, TEIF and cleared stream EN\nBus-contention negative control: caught by audio/FIFO gates and delayed DMA\nARM generated-code coherence: CPU/DMA, flash/RAM conflict and stale translation controls passed\nDisabled runtime-fetch negative control: caught by ARM result gate\nARM flash programming/erase: status, deferred completion, STM/STRD retries and stale I-cache checks passed\nFlash wait-bypass negative control: caught by CPU result gate\nARM dirty writeback/DSB: deferred shared-port completion and early-marker control passed\nARM exception entry/return: busy flash vector, single SRAM frame and wait-bypass control passed\nARM normal-load IRQ preemption: early handler, restarted load and blocked-preemption control passed\nCPU/DMA stalls: coupled functional service scenario; not cycle accurate\nSDRAM timing: row/bank/recovery, refresh priority, read-ahead and command service scenarios\nARM SDRAM rows, RCC reset, read-ahead and refresh IRQ48 with masked-IRQ/wrong-port controls: passed\nWM8731 ideal line stage: {}\nHardware equivalence: UNVERIFIED\nSilicon cache replacement/speculation, full store buffers, late arrival/tail-chain timing, pipeline overlap, calibrated CPU timing and complete codec response remain unfinished or unverified\n", board.description(),if ideal_line { "ideal-line" } else { "serial" },if board==Board::Rev5 { "gain/DC-removal and nominal 20/18-frame passband delay boot passed" } else { "not implemented for this codec" });
     let summary=format!("{summary}ARM CPU divide/alignment/MPU/XN/NOCP faults, FPv5-D16 identification, f64 arithmetic and automatic/lazy TCM/SRAM frames: passed\nQSPI/FLASH data and instruction bus faults, escalation and DMA QSPI TC/TE/IRQ: passed\nARM late-arrival/tail-chain frame reuse, equal priority, genuine nesting, pending-return IRQ and disabled-feature controls: passed\n");
+    let summary=format!("{summary}ARM SAI reset/FIFO/mute IRQ87 with masked-NVIC/wrong-block controls: passed\n");
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())

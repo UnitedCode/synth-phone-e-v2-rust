@@ -43,12 +43,29 @@ impl Peripheral {
             if mclk.numerator==0 || mclk.denominator==0 || frame.numerator==0 || frame.denominator==0 {
                 return Err("hardware codec requires a valid MCLK and LRC");
             }
+            if self.kind==10 && (u128::from(frame.numerator)<16_000*u128::from(frame.denominator)
+                || u128::from(frame.numerator)>96_000*u128::from(frame.denominator)
+                || u128::from(mclk.numerator)<2_048_000*u128::from(mclk.denominator)
+                || u128::from(mclk.numerator)>36_864_000*u128::from(mclk.denominator)) {
+                return Err("PCM3060 clocks exceed the shared ADC/DAC operating range");
+            }
             // Necessary clock ratios from AK4556 Table3 and PCM3060's ADC
             // system-clock requirements. AK pin-selected speed/range behavior
             // is not inferred from the union of its documented slave modes.
             let ratios:&[u64]=if self.kind==9 {&[128,192,256,384,512,768]} else {&[256,384,512,768]};
             if !ratios.iter().any(|&ratio|u128::from(mclk.numerator)*u128::from(frame.denominator)
-                ==u128::from(frame.numerator)*u128::from(mclk.denominator)*u128::from(ratio)) {
+                ==u128::from(frame.numerator)*u128::from(mclk.denominator)*u128::from(ratio)
+                && (self.kind!=9 || {
+                    // AK4556 Table2: union of speed modes for this ratio,
+                    // not evidence that the board's CKS straps select it.
+                    let (min,max,exclusive)=match ratio {
+                        128=>(108_000,216_000,true),192=>(96_000,192_000,true),
+                        256=>(8_000,108_000,false),384=>(8_000,96_000,false),
+                        512=>(8_000,54_000,false),_=>(8_000,48_000,false),
+                    };
+                    let hz=u128::from(frame.numerator);let denominator=u128::from(frame.denominator);
+                    hz<=max*denominator && if exclusive {hz>min*denominator} else {hz>=min*denominator}
+                })) {
                 return Err("hardware codec ADC/DAC system-clock ratio is unsupported");
             }
             return Ok(());
@@ -1073,6 +1090,13 @@ pub unsafe extern "C" fn daisy_sai_fault(state: *mut Peripheral, drop_rx: u32) {
 /// `state` must be live with serialized access.
 pub unsafe extern "C" fn daisy_sai_requests(state: *mut Peripheral) -> u32 {
     (*state).sai.requests()
+}
+
+/// # Safety
+/// Live serialized SAI state; returns the shared A/B interrupt level.
+#[no_mangle]
+pub unsafe extern "C" fn daisy_sai_irq(state: *mut Peripheral) -> u32 {
+    u32::from((*state).sai.irq())
 }
 #[no_mangle]
 /// # Safety

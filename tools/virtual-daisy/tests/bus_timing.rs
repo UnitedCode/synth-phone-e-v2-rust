@@ -1,5 +1,19 @@
 use virtual_daisy::{bus::SdramTiming, clock::Rate};
 #[test]
+fn sdram_write_recovery_rejects_both_documented_unsafe_timing_combinations() {
+    let control = (2 << 4) | (3 << 7) | (2 << 10);
+    let rate = Rate {
+        numerator: 200_000_000,
+        denominator: 1,
+    };
+    // RM0433 SDTR example: TRAS4, TRCD2 requires TWR>=2.
+    assert!(SdramTiming::decode(control, 0x01115371, 0, rate).is_ok());
+    assert!(SdramTiming::decode(control, 0x01105371, 0, rate).is_err());
+    // TRC7 - TRCD2 - TRP2 requires TWR>=3, even though TRAS4 only needs2.
+    assert!(SdramTiming::decode(control, 0x01116371, 0, rate).is_err());
+    assert!(SdramTiming::decode(control, 0x01126371, 0, rate).is_ok());
+}
+#[test]
 fn programmed_sdram_timings_define_read_and_refresh_lower_bounds() {
     // FMC=200MHz, SDCLK=/2, 32-bit bus, CAS3, RPIPE1;
     // TMRD2, TXSR8, TRAS5, TRC7, TWR3, TRP2, TRCD3.
