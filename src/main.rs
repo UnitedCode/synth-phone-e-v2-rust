@@ -146,7 +146,6 @@ mod rtic_app {
             let device = ctx.device;
             let ccdr = system::System::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
             let mut system = libdaisy::system_init!(core, device, ccdr, BLOCK_SIZE);
-            let saved_settings = crate::settings_storage::load(&mut system.flash);
 
             let buffer = [(0.0, 0.0); audio::BLOCK_SIZE_MAX];
 
@@ -327,19 +326,13 @@ mod rtic_app {
             info!("Startup done!! yo!");
             startup_complete_task::spawn().ok();
 
-            let mut app_state_machine = AppStateMachine::new();
-            if let Some(saved) = saved_settings {
-                app_state_machine.apply_saved_settings(saved);
-                info!("restored saved settings");
-            }
-
             (
                 Shared {
                     in_ring: RingBuffer::new(),
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
                     previous_pitch_shift_ratio: 1.0,
                     in_pointer_cached: 0,
-                    app_state_machine,
+                    app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
                     display_needs_update: true,
                     midi_events: heapless::spsc::Queue::new(),
@@ -533,6 +526,7 @@ mod rtic_app {
                 held_keys,
                 flash,
                 save_countdown: u16 = 0,
+                settings_loaded: bool = false,
             ],
             shared = [
                 app_state_machine,
@@ -543,6 +537,23 @@ mod rtic_app {
             priority = 3
         )]
         fn interface_handler(mut ctx: interface_handler::Context) {
+            // Saved settings are restored here on the first tick rather than in
+            // `init`: touching the state machine in `init` before building the
+            // resources stopped the compiler from constructing the big audio
+            // buffers in place, and the resulting ~55 KB init stack frame
+            // overflowed the stack at boot.
+            if !*ctx.local.settings_loaded {
+                *ctx.local.settings_loaded = true;
+                if let Some(saved) = crate::settings_storage::load(ctx.local.flash) {
+                    ctx.shared
+                        .app_state_machine
+                        .lock(|state| state.apply_saved_settings(saved));
+                    ctx.shared.display_needs_update.lock(|flag| *flag = true);
+                    display_update_task::spawn().ok();
+                    info!("restored saved settings");
+                }
+            }
+
             let before = ctx
                 .shared
                 .app_state_machine

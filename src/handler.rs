@@ -16,6 +16,7 @@ use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
 use synthphone_e_vocal_dsp::{
     process_vocal_effects_1024, MusicalSettings, ProcessingMode, VocalEffectsConfig,
 };
+const MELODY_TRIM: f32 = 6.0;
 
 pub fn audio_handler(
     audio: &mut audio::Audio,
@@ -75,7 +76,7 @@ pub fn audio_handler(
             ProcessingProfile::Vocode | ProcessingProfile::Harmony
         );
         voice_gain = snapshot.voice_volume as f32 * 0.1;
-        melody_gain = snapshot.melody_volume as f32 * 0.1;
+        melody_gain = snapshot.melody_volume as f32 * 0.1 * MELODY_TRIM;
         drum_gain = snapshot.drum_volume as f32 * 0.1;
         master_gain = snapshot.volume as f32 * 0.1;
     });
