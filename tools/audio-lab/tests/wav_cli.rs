@@ -89,3 +89,72 @@ fn stereo_input_is_rejected_without_creating_output() {
     assert!(String::from_utf8_lossy(&command.stderr).contains("mono"));
     assert!(!output.exists());
 }
+
+#[test]
+fn recorded_voice_ab_keeps_voice_unchanged_when_only_synth_level_changes() {
+    let scratch = Scratch::new();
+    let input = scratch.0.join("recording.wav");
+    let output = scratch.0.join("comparison");
+    let mut wav = hound::WavWriter::create(
+        &input,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: 48014,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        },
+    )
+    .unwrap();
+    for x in audio_lab::tone(224.492958, 0.45, &[(1, 0.2), (2, 0.05)]) {
+        wav.write_sample(x).unwrap();
+    }
+    wav.finalize().unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_audio-lab"))
+        .arg("levels-recording")
+        .arg(&input)
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let samples = |name: &str| {
+        hound::WavReader::open(output.join(name))
+            .unwrap()
+            .into_samples::<f32>()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert_eq!(
+        samples("before-autotune.wav"),
+        samples("after-balanced-autotune.wav")
+    );
+    let rms = |version: &str, source: &str| {
+        audio_lab::metrics(audio_lab::steady(&samples(&format!(
+            "{version}-{source}.wav"
+        ))))
+        .rms
+    };
+    // Reproduce the user's settings attempt: half voice, maximum notes. The
+    // older settings path scales keypad with voice, so its ratio cannot change.
+    let ratio = |version: &str, source: &str| {
+        audio_lab::levels::db_ratio(rms(version, source), rms(version, "autotune"))
+    };
+    assert!(
+        (ratio("before-settings", "keypad") - ratio("before-settings-adjusted", "keypad")).abs()
+            < 0.01
+    );
+    // With independent controls, the same attempt can move both note sources
+    // from quieter than the voice to louder, without changing the input file.
+    for source in ["keypad", "midi"] {
+        assert!(ratio("before-settings", source) < -3.0);
+        assert!(ratio("after-adjusted", source) > 6.0);
+    }
+    let before = audio_lab::metrics(&samples("before-midi.wav")).rms;
+    let after = audio_lab::metrics(&samples("after-balanced-midi.wav")).rms;
+    assert!(after > before * 1.5 && after < before * 3.0);
+    assert!(output.join("before-comparison.wav").is_file());
+    assert!(output.join("after-balanced-comparison.wav").is_file());
+}

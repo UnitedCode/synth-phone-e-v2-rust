@@ -5,10 +5,10 @@ use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
 const INV_SQRT: [f32; 9] = [
     0.0,        // unused (count = 0 handled separately)
     1.0,        // 1/sqrt(1)
-    0.70710678, // 1/sqrt(2)
+    core::f32::consts::FRAC_1_SQRT_2,
     0.57735027, // 1/sqrt(3)
     0.5,        // 1/sqrt(4)
-    0.44721360, // 1/sqrt(5)
+    0.447_213_6, // 1/sqrt(5)
     0.40824829, // 1/sqrt(6)
     0.37796447, // 1/sqrt(7)
     0.35355339, // 1/sqrt(8)
@@ -123,7 +123,7 @@ impl HybridVoice {
     pub fn apply_pitch_bend(&mut self, bend_ratio: f32) {
         if let Some(note) = self.note {
             if self.active_type == VoiceTypeId::Synth {
-                let base_freq = crate::midi::MidiEvent::note_to_frequency(note);
+                let base_freq = crate::midi::notes::frequency(note);
                 let bent_freq = base_freq * (1.0 + bend_ratio * 0.1);
                 self.synth.set_freq(bent_freq);
             }
@@ -172,7 +172,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
-        let frequency = crate::midi::MidiEvent::note_to_frequency(note);
+        let frequency = crate::midi::notes::frequency(note);
 
         // Ch 0: voice effects only — track frequency, no audio voice.
         if channel == VOICE_CTRL_CHANNEL {
@@ -268,21 +268,33 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
     #[inline(always)]
     pub fn get_mixed_sample(&mut self) -> f32 {
-        let mut sum = 0.0f32;
+        let (melody, drums) = self.get_mixed_sources();
+        melody + drums
+    }
+
+    /// Render each voice once; retain the shared polyphony gain while exposing
+    /// melodic notes separately so their calibration cannot change drum levels.
+    #[inline(always)]
+    pub fn get_mixed_sources(&mut self) -> (f32, f32) {
+        let mut melody = 0.0f32;
+        let mut drums = 0.0f32;
         let mut count = 0usize;
 
         for voice in &mut self.voices {
             let s = voice.get_sample();
             if s != 0.0 {
-                sum += s;
+                match voice.active_type {
+                    VoiceTypeId::Synth => melody += s,
+                    VoiceTypeId::Drum => drums += s,
+                }
                 count += 1;
             }
         }
 
         if count > 0 {
-            sum * INV_SQRT[count]
+            (melody * INV_SQRT[count], drums * INV_SQRT[count])
         } else {
-            0.0
+            (0.0, 0.0)
         }
     }
 
@@ -291,7 +303,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             self.voices[i].apply_pitch_bend(bend_ratio);
             if let Some(note) = self.voices[i].note {
-                let base_freq = crate::midi::MidiEvent::note_to_frequency(note);
+                let base_freq = crate::midi::notes::frequency(note);
                 self.cached_frequencies[i] = base_freq * (1.0 + bend_ratio * 0.1);
             }
         }

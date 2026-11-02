@@ -3,6 +3,22 @@ use std::time::Instant;
 use synthphone_e_vocal_dsp::{dsp::normalize_sample, MusicalSettings, VocalEffectsConfig};
 pub mod emulator;
 pub mod replay;
+#[path = "../../../src/output_mix.rs"]
+pub mod output_mix;
+#[path = "../../../src/midi/notes.rs"]
+pub mod midi_notes;
+#[path = "../../../src/audio/drum_synth.rs"]
+#[allow(clippy::manual_range_contains)] // Existing device percussion code, reused unchanged.
+pub mod drum_synth;
+#[path = "../../../src/midi/voice_generator.rs"]
+pub mod voice_generator;
+// The same source modules retain the device's module paths, without its UART HAL.
+pub mod midi { pub use crate::midi_notes as notes; }
+pub mod audio { pub use crate::drum_synth; }
+pub mod levels;
+pub mod recording_levels;
+#[path = "../../../src/state_machine/mod.rs"]
+pub mod state_machine;
 
 // Compile the same entry point and constants as the device, without its HAL.
 #[path = "../../../src/constants.rs"]

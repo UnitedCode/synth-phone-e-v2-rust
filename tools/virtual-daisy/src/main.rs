@@ -13,6 +13,7 @@ mod transition_probe;
 mod vector_probe;
 mod sdram_probe;
 mod sai_probe;
+mod level_check;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -46,6 +47,10 @@ fn checked(command: &mut Command) -> Result<()> {
 
 // A hung/crashed emulator cannot count as a successful negative control.
 fn bounded(command: &mut Command, log: &Path) -> Result<()> {
+    bounded_with_limit(command, log, Duration::from_secs(180))
+}
+
+fn bounded_with_limit(command: &mut Command, log: &Path, limit: Duration) -> Result<()> {
     let output = File::create(log)?;
     let mut child = command
         .stdin(Stdio::null())
@@ -60,7 +65,7 @@ fn bounded(command: &mut Command, log: &Path) -> Result<()> {
             }
             return Ok(());
         }
-        if start.elapsed() > Duration::from_secs(180) {
+        if start.elapsed() > limit {
             child.kill()?;
             child.wait()?;
             return Err(format!("Emulator timed out; see {}", log.display()).into());
@@ -924,6 +929,12 @@ fn run(
 
 fn main() -> Result<()> {
     let args: Vec<_> = env::args_os().skip(1).collect();
+    if args.len() == 2 && args[0] == "levels-analyze" {
+        return level_check::analyze(Path::new(&args[1]));
+    }
+    if args.len() == 7 && args[0] == "levels" {
+        return level_check::run(Path::new(&args[1]), Path::new(&args[2]), Path::new(&args[3]), Path::new(&args[4]), Path::new(&args[5]), Path::new(&args[6]));
+    }
     if args.len() == 1 && args[0] == "profiles" {
         for board in virtual_daisy::board::Board::ALL {
             println!("{}", board.description());
@@ -1018,5 +1029,5 @@ fn main() -> Result<()> {
             },
         );
     }
-    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy levels RENODE_RUNTIME PREPARED_DIRECTORY BEFORE.elf AFTER.elf INPUT.wav OUTPUT_DIRECTORY\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

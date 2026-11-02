@@ -2,6 +2,7 @@ use crate::midi::get_midi_queue_status;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use app_lib::vocal_frame::{default_config, process_frame};
+use app_lib::output_mix;
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -9,7 +10,7 @@ use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
 use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator, Waveform};
-use synthphone_e_vocal_dsp::dsp::{bitcrush, normalize_sample, sample_rate_reduce};
+use synthphone_e_vocal_dsp::dsp::{bitcrush, sample_rate_reduce};
 use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
@@ -29,7 +30,8 @@ pub fn audio_handler(
     let mut wave_type = Waveform::Sine;
     let mut bit_depth = 32;
     let mut volume_gain = 1.0f32;
-    let mut waveform_compensation = 1.0f32;
+    let mut voice_gain = 1.0f32;
+    let mut synth_gain = 1.0f32;
     shared.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
         sr_factor = snapshot.sample_reduction;
@@ -41,17 +43,8 @@ pub fn audio_handler(
         };
         bit_depth = snapshot.bit_rate;
         volume_gain = snapshot.volume as f32 / 10.0;
-        // Sine and triangle are perceptually quieter than saw/square at the same
-        // peak amplitude — they're spectrally pure, while saw/square spread energy
-        // across many harmonics, which the ear perceives as louder. Compensate so
-        // waveform choice doesn't also change perceived volume. Applied before the
-        // peak limiter below (not after) so boosted peaks still get clamped instead
-        // of hard-clipping at the DAC.
-        waveform_compensation = match wave_type {
-            Waveform::Sine => 1.4,
-            Waveform::Triangle => 1.2,
-            Waveform::Square | Waveform::Saw => 1.0,
-        };
+        voice_gain = output_mix::level_gain(snapshot.voice_volume);
+        synth_gain = output_mix::level_gain(snapshot.melody_volume);
     });
 
     if audio.get_stereo(buffer) {
@@ -61,7 +54,9 @@ pub fn audio_handler(
                 true => *left,
             };
 
-            shared.in_ring.lock(|in_ring| in_ring.push(sample));
+            // Attenuate a hot digitized microphone before the FFT, independently
+            // of the generated carriers and MIDI notes mixed farther downstream.
+            shared.in_ring.lock(|in_ring| in_ring.push(sample * voice_gain));
 
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
@@ -111,7 +106,7 @@ pub fn audio_handler(
                                                 msm.set_volume_from_midi(value);
                                             });
                                         }
-                                        34..=42 => {
+                                        34..=42 | 44..=45 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_menu_value_from_cc(controller, value);
                                             });
@@ -168,14 +163,8 @@ pub fn audio_handler(
             });
 
             // ************** ADD MIDI OUTPUT **************
-            // Get MIDI sample and mix it with the processed audio. Waveform
-            // compensation applies only to the synthesized note, not the live
-            // audio-in signal already folded into out_sample above.
-            let midi_sample = shared.voice_manager.lock(|vm| vm.get_mixed_sample());
-            out_sample = out_sample * 0.75 + (midi_sample * waveform_compensation) * 0.1;
-
-            // Normalize final output
-            out_sample = normalize_sample(out_sample, 0.8) * volume_gain;
+            let (melody, drums) = shared.voice_manager.lock(|vm| vm.get_mixed_sources());
+            out_sample = output_mix::mix_with_synth_gain(out_sample, melody, drums, wave_type, volume_gain, synth_gain);
             // **********************************************
 
             // Check and handle hop counter
@@ -357,6 +346,7 @@ pub fn handle_vocal_effects(
     let mut pitch_ratio = 1.0f32;
     let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
+    let mut synth_gain = 1.0f32;
     ctx.app_state_machine.lock(|asm| {
         let snapshot = asm.snapshot();
         match snapshot.current_state {
@@ -368,6 +358,7 @@ pub fn handle_vocal_effects(
             AppState::Splash => {}
         }
         formant = snapshot.formant;
+        synth_gain = output_mix::level_gain(snapshot.melody_volume);
         key = snapshot.key;
         percussion = snapshot.percussion;
         // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
@@ -437,8 +428,9 @@ pub fn handle_vocal_effects(
                 let carrier_hz = get_frequency(key, note, pitch_ratio, true);
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
+                let gain = output_mix::keypad_gain(wave_type) * synth_gain;
                 for _ in 0..HOP_SIZE {
-                    carrier_buffer.push(osc.next_value());
+                    carrier_buffer.push(osc.next_value() * gain);
                 }
             } else {
                 for _ in 0..HOP_SIZE {

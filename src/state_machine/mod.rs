@@ -97,6 +97,8 @@ menu_items! {
     AutotuneSpeed => { field: autotune_speed,         name: "Autotune Speed", min: 1, max: 10 },
     Magnitude    => { field: magnitude,               name: "Magnitude",     min: 1, max: 10 },
     PadMatrix    => { field: pad_matrix,              name: "Pad Matrix",    min: 0, max: 1  },
+    VoiceVolume  => { field: voice_volume,            name: "Voice Level",   min: 0, max: 20 },
+    MelodyVolume => { field: melody_volume,           name: "Synth Level",   min: 0, max: 20 },
 }
 
 /// Storage for all adjustable menu values
@@ -115,6 +117,8 @@ pub struct MenuValues {
     pub autotune_speed: i8,
     pub magnitude: i8,
     pub pad_matrix: i8,
+    pub voice_volume: i8,
+    pub melody_volume: i8,
 }
 
 impl Default for MenuValues {
@@ -131,6 +135,8 @@ impl Default for MenuValues {
             autotune_speed: 5,
             magnitude: 5,
             pad_matrix: 0,
+            voice_volume: 10,
+            melody_volume: 10,
         }
     }
 }
@@ -329,6 +335,8 @@ pub struct AppStateMachineSnapshot {
     pub octave_preset: i8,
     pub note: i8,
     pub volume: i8,
+    pub voice_volume: i8,
+    pub melody_volume: i8,
     pub crush: i8,
     pub sample_reduction: i8,
     pub bit_rate: i8,
@@ -403,6 +411,8 @@ impl AppStateMachine {
             octave_preset: self.current_octave_preset,
             note: self.note,
             volume: self.volume,
+            voice_volume: self.values.voice_volume,
+            melody_volume: self.values.melody_volume,
             crush: self.current_bitcrush,
             sample_reduction,
             bit_rate,
@@ -511,7 +521,7 @@ impl AppStateMachine {
                 _ => {}
             },
 
-            (AppState::Processing(profile), AppEvent::KeypadRelease(_key)) => {
+            (AppState::Processing(_profile), AppEvent::KeypadRelease(_key)) => {
                 self.play_note(0); // stop tone for those modes
             }
 
@@ -567,6 +577,8 @@ impl AppStateMachine {
             ("Speed", self.values.autotune_speed),
             ("Magnitude", self.values.magnitude),
             ("Pad Matrix", self.values.pad_matrix),
+            ("Voice Level", self.values.voice_volume),
+            ("Synth Level", self.values.melody_volume),
         ];
 
         let total = menu_items.len();
@@ -671,6 +683,8 @@ impl AppStateMachine {
             40 => MenuItem::FormantMale,
             41 => MenuItem::FormantFemale,
             42 => MenuItem::Magnitude,
+            44 => MenuItem::VoiceVolume,
+            45 => MenuItem::MelodyVolume,
             _ => return,
         };
         let (min, max) = MenuValues::range(item);
@@ -717,6 +731,23 @@ fn wrap_value(current: i8, delta: i8, min: i8, max: i8) -> i8 {
 /// Unit tests for the state machine
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_levels_are_available_in_the_menu_and_over_midi() {
+        let mut app = super::AppStateMachine::new();
+        app.handle_event(super::AppEvent::SplashComplete);
+        app.handle_event(super::AppEvent::EncoderDoublePress);
+        for _ in 0..11 { app.handle_event(super::AppEvent::EncoderRotate(1)); }
+        assert_eq!(app.current().current_item, ("Voice Level", 10));
+        app.set_menu_value_from_cc(44, 32);
+        assert_eq!(app.current().current_item, ("Voice Level", 5));
+        app.handle_event(super::AppEvent::EncoderRotate(1));
+        assert_eq!(app.current().current_item, ("Synth Level", 10));
+        app.set_menu_value_from_cc(45, 127);
+        assert_eq!(app.current().current_item, ("Synth Level", 20));
+        app.set_menu_value_from_cc(44, 0);
+        app.handle_event(super::AppEvent::EncoderRotate(-1));
+        assert_eq!(app.current().current_item, ("Voice Level", 0));
+    }
     use super::*;
 
     fn effects_app() -> AppStateMachine {

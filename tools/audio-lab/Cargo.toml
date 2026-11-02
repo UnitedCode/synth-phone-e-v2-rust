@@ -11,6 +11,7 @@ publish = false
 synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "ac8cc3582d3f0c0ee53ab0ad9af840e9d80ce6bc"}
 hound = "3.5"
 libm = "0.2.15"
+log = "=0.4.28"
 
 [profile.release]
 opt-level = "s"

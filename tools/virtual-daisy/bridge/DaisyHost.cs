@@ -138,6 +138,7 @@ public static class DaisyHost
         var input = new float[bytes.Length / 4];
         Buffer.BlockCopy(bytes, 0, input, 0, bytes.Length);
         sai.LoadInput(input);
+        var stimuli=args.Length==11 ? File.ReadAllLines(args[10]).Select(line=>line.Split(',')).ToArray():Array.Empty<string[]>();
         sai.IdealLineInput = args[8] == "ideal-line";
         sai.SuppressReceive = args[5] == "drop-rx";
         using(var log = new StreamWriter(args[3] + ".rtt"))
@@ -148,6 +149,11 @@ public static class DaisyHost
             ulong rtt = symbols.Single();
             for(int step = 0; step < 100; step++)
             {
+                foreach(var stimulus in stimuli) {
+                    if(int.Parse(stimulus[0])!=step) continue;
+                    ApplyStimulus(machine,stimulus);
+                    Console.WriteLine("Stimulus: "+string.Join(",",stimulus));
+                }
                 emulation.RunFor(TimeInterval.FromSeconds(0.01));
                 if(step%10==0) {Console.WriteLine($"Audio progress: {(step+1)*10} ms, PC={cpu.PC}");imageArchitecture.Save(args[3]+".progress.txt");}
                 if(step == 20 && args[5] == "cacheable-dma") {
@@ -187,6 +193,30 @@ public static class DaisyHost
         ((DaisyNvic)machine["sysbus.nvic"]).SaveMemory(args[3] + ".memory.txt");
         File.WriteAllText(args[3]+".bus.txt",$"dma1_lisr={bus.ReadDoubleWord(0x40020000)}\ndma1_s0cr={bus.ReadDoubleWord(0x40020010)}\ndma1_s0ndtr={bus.ReadDoubleWord(0x40020014)}\n");
         emulation.Dispose();
+    }
+    // Mandatory Renode API dispatch only. Fixture steps/pins/bytes are supplied
+    // by the Rust audio-lab; this never edits guest instructions or RAM state.
+    private static void ApplyStimulus(Machine machine,string[] fields) {
+        switch(fields[1]) {
+        case "uart":
+            if(fields.Length!=4) throw new InvalidDataException("Invalid UART stimulus");
+            ((Antmicro.Renode.Peripherals.UART.IUART)machine["sysbus."+fields[2]]).WriteChar(byte.Parse(fields[3]));
+            break;
+        case "gpio":
+            if(fields.Length!=5 || (fields[4]!="0" && fields[4]!="1")) throw new InvalidDataException("Invalid GPIO stimulus");
+            ((DaisyGpio)machine["sysbus."+fields[2]]).OnGPIO(int.Parse(fields[3]),fields[4]=="1");
+            break;
+        case "link":
+        case "unlink":
+            if(fields.Length!=6) throw new InvalidDataException("Invalid keypad stimulus");
+            var column=(DaisyGpio)machine["sysbus."+fields[2]];
+            var row=(DaisyGpio)machine["sysbus."+fields[4]];
+            int output=int.Parse(fields[3]),inputPin=int.Parse(fields[5]);
+            if(fields[1]=="link") column.Connections[output].Connect(row,inputPin);
+            else {column.Connections[output].Disconnect();row.OnGPIO(inputPin,true);}
+            break;
+        default: throw new InvalidDataException("Unknown stimulus action");
+        }
     }
     private static void ArchitectureProbes(Emulation emulation,Machine machine,string prefix,bool disableRuntime)
     {

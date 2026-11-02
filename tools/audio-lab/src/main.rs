@@ -186,6 +186,8 @@ fn sweep(directory: &Path, strict: bool) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("levels-recording") if args.len() == 3 => audio_lab::recording_levels::run(&read_wav(&args[1])?, Path::new(&args[2])),
+        Some("levels") if args.len() == 2 => audio_lab::levels::run(Path::new(&args[1])),
         Some("emulate") if args.len() == 2 => audio_lab::emulator::run(Path::new(&args[1])),
         Some("sweep") if args.len() == 2 || (args.len() == 3 && args[2] == "--strict") => {
             sweep(Path::new(&args[1]), args.len() == 3)
@@ -206,6 +208,6 @@ fn main() -> Result<()> {
             println!("Output: {:?}\nRaw before limiter: {:?}", metrics(&output.audio), metrics(&output.raw));
             Ok(())
         }
-        _ => Err("Usage: audio-lab sweep OUTPUT_DIRECTORY [--strict]\n       audio-lab emulate OUTPUT_DIRECTORY\n       audio-lab render INPUT.wav OUTPUT.wav [pitch|dry|harmony|vocode] [KEY_0_TO_23]".into()),
+        _ => Err("Usage: audio-lab sweep OUTPUT_DIRECTORY [--strict]\n       audio-lab levels OUTPUT_DIRECTORY\n       audio-lab levels-recording INPUT.wav OUTPUT_DIRECTORY\n       audio-lab emulate OUTPUT_DIRECTORY\n       audio-lab render INPUT.wav OUTPUT.wav [pitch|dry|harmony|vocode] [KEY_0_TO_23]".into()),
     }
 }
