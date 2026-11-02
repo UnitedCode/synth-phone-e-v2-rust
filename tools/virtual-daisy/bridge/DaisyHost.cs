@@ -147,7 +147,9 @@ public static class DaisyHost
             IEnumerable<ulong> symbols;
             if(!((SystemBus)machine["sysbus"]).TryGetAllSymbolAddresses("_SEGGER_RTT", out symbols)) throw new InvalidOperationException("Firmware has no RTT symbol");
             ulong rtt = symbols.Single();
-            for(int step = 0; step < 100; step++)
+            int steps=int.Parse(Environment.GetEnvironmentVariable("VIRTUAL_DAISY_AUDIO_STEPS")??"100");
+            if(steps<1 || steps>1000) throw new InvalidDataException("Audio steps must be in 1..1000");
+            for(int step = 0; step < steps; step++)
             {
                 foreach(var stimulus in stimuli) {
                     if(int.Parse(stimulus[0])!=step) continue;
@@ -441,7 +443,10 @@ public static class DaisyHost
     }
     private static void CpuProbes(Emulation emulation,Machine machine,string prefix,string kind) {
         var bus=machine.SystemBus;var cpu=(DaisyCortexM)machine["sysbus.cpu"];
-        bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"cpu-probe.elf"));
+        var architecture=((DaisyNvic)machine["sysbus.nvic"]).Architecture;
+        architecture.ImageLoading=true;
+        try {bus.LoadELF(Path.Combine(Path.GetDirectoryName(prefix),"cpu-probe.elf"));} finally {architecture.ImageLoading=false;}
+        if(bus.ReadDoubleWord(0x0801001c)!=0x12345678 || bus.ReadDoubleWord(0x08010020)!=0x9abcdef0) throw new InvalidOperationException("Missing LDRD flash fixture");
         cpu.VectorTableOffset=0x6000;cpu.SP=kind.EndsWith("-ram") ? 0x3001f000U:0x2001f000U;
         cpu.PC=bus.ReadDoubleWord(0x6004);
         if(kind=="cpu-align-fault") cpu.DisableAlignment();

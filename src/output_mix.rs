@@ -1,9 +1,20 @@
-//! Shared final output stage. Gains are linear and master volume is common.
+//! Shared source trims and output stage, with a common master volume.
 use synthphone_e_vocal_dsp::{audio::Waveform, dsp::normalize_sample};
 
 /// 0=mute, 10=unity, 20=2x. Voice trim is applied before the vocal DSP.
 pub fn level_gain(level: i8) -> f32 {
     level.clamp(0, 20) as f32 * 0.1
+}
+
+/// Keep unity/max at 10/20, with finer attenuation below unity for quiet mics.
+/// The nonzero range is 0.01x..2x (46.02 dB); zero remains a true mute.
+pub fn synth_gain(level: i8) -> f32 {
+    let linear = level_gain(level);
+    if level <= 10 {
+        linear * linear
+    } else {
+        linear
+    }
 }
 
 pub fn waveform_gain(waveform: Waveform) -> f32 {
@@ -36,14 +47,24 @@ pub fn mix_with_synth_gain(
     master: f32,
     synth_gain: f32,
 ) -> f32 {
+    finish(
+        sum_sources(vocal, melody * synth_gain, drums, waveform),
+        master,
+    )
+}
+
+/// Unclipped source sum so Percussion can crush the whole mix before limiting.
+pub fn sum_sources(vocal: f32, melody: f32, drums: f32, waveform: Waveform) -> f32 {
     // Preserve the existing percussion gain; only melodic tones are calibrated.
     let drum_gain = match waveform {
         Waveform::Sine => 0.14,
         Waveform::Triangle => 0.12,
         Waveform::Square | Waveform::Saw => 0.1,
     };
-    let sample =
-        vocal * 0.75 + melody * waveform_gain(waveform) * 0.225 * synth_gain + drums * drum_gain;
+    vocal * 0.75 + melody * waveform_gain(waveform) * 0.225 + drums * drum_gain
+}
+
+pub fn finish(sample: f32, master: f32) -> f32 {
     // Master gain must also pass through the ceiling, including loud chords.
     normalize_sample(sample * master, 0.8)
 }

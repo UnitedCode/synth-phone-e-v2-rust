@@ -13,6 +13,7 @@ mod transition_probe;
 mod vector_probe;
 mod sdram_probe;
 mod sai_probe;
+mod settings_probe;
 mod level_check;
 use sha2::{Digest, Sha256};
 use std::{
@@ -36,6 +37,7 @@ enum RunMode {
     Startup,
     Storage,
     Cpu,
+    Settings,
 }
 
 fn checked(command: &mut Command) -> Result<()> {
@@ -49,7 +51,6 @@ fn checked(command: &mut Command) -> Result<()> {
 fn bounded(command: &mut Command, log: &Path) -> Result<()> {
     bounded_with_limit(command, log, Duration::from_secs(180))
 }
-
 fn bounded_with_limit(command: &mut Command, log: &Path, limit: Duration) -> Result<()> {
     let output = File::create(log)?;
     let mut child = command
@@ -86,6 +87,10 @@ fn fixture(path: &Path, silent: bool) -> Result<()> {
 }
 
 fn wav_input(source: &Path, destination: &Path) -> Result<()> {
+    wav_input_limit(source, destination, RATE as usize + RATE as usize / 10)
+}
+
+fn wav_input_limit(source: &Path, destination: &Path, maximum_frames: usize) -> Result<()> {
     let mut reader = hound::WavReader::open(source)?;
     let spec = reader.spec();
     if spec.sample_rate != RATE || ![1, 2].contains(&spec.channels) {
@@ -111,7 +116,7 @@ fn wav_input(source: &Path, destination: &Path) -> Result<()> {
     let mut output = File::create(destination)?;
     for frame in samples
         .chunks_exact(spec.channels as usize)
-        .take(RATE as usize + RATE as usize / 10)
+        .take(maximum_frames)
     {
         output.write_all(&frame[0].to_le_bytes())?;
         output.write_all(&frame[usize::from(spec.channels == 2)].to_le_bytes())?;
@@ -212,9 +217,14 @@ impl Host<'_> {
                 "VIRTUAL_DAISY_INFRASTRUCTURE",
                 self.managed.join("Infrastructure.dll"),
             );
-        bounded(
+        if fault == "settings" {
+            command.arg(self.directory.join("settings.stimulus"))
+                .env("VIRTUAL_DAISY_AUDIO_STEPS", "300");
+        }
+        bounded_with_limit(
             &mut command,
             &self.directory.join(format!("{label}.host.log")),
+            Duration::from_secs(if fault == "settings" {600} else {180}),
         )?;
         grade::execution_evidence(&capture)?;
         if ![
@@ -476,6 +486,7 @@ fn run(
         "summary.txt",
         "probe-summary.txt",
         "startup-summary.txt",
+        "settings-summary.txt",
         "storage-summary.txt",
         "cpu-summary.txt",
     ] {
@@ -599,6 +610,7 @@ fn run(
             RunMode::Startup => "startup",
             RunMode::Storage => "storage",
             RunMode::Cpu => "cpu",
+            RunMode::Settings => "settings",
         },
     )?;
     let tone = directory.join("tone.f32le");
@@ -613,6 +625,9 @@ fn run(
         board,
         ideal_line,
     };
+    if mode == RunMode::Settings {
+        return settings_probe::run(&host, &silence);
+    }
     if mode == RunMode::Startup {
         let capture = host.boot("startup", &tone, "startup")?;
         grade::boot_evidence(&capture)?;
@@ -946,7 +961,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if args.len() >= 3
-        && ["run", "probe", "timing", "startup", "storage", "cpu"]
+        && ["run", "probe", "timing", "startup", "storage", "cpu", "settings"]
             .contains(&args[0].to_string_lossy().as_ref())
     {
         let mut board = None;
@@ -1014,7 +1029,9 @@ fn main() -> Result<()> {
             input,
             board,
             ideal_line,
-            if args[0] == "cpu" {
+            if args[0] == "settings" {
+                RunMode::Settings
+            } else if args[0] == "cpu" {
                 RunMode::Cpu
             } else if args[0] == "storage" {
                 RunMode::Storage
@@ -1029,5 +1046,5 @@ fn main() -> Result<()> {
             },
         );
     }
-    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy levels RENODE_RUNTIME PREPARED_DIRECTORY BEFORE.elf AFTER.elf INPUT.wav OUTPUT_DIRECTORY\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu|settings RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy levels RENODE_RUNTIME PREPARED_DIRECTORY MAIN.elf CLANKERS.elf VOCAL_48014.wav OUTPUT_DIRECTORY\n       virtual-daisy levels-analyze OUTPUT_DIRECTORY\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

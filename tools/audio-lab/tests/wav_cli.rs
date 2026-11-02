@@ -3,9 +3,11 @@ use std::{path::PathBuf, process::Command};
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
-            "audio-lab-wav-{}-{}",
+            "audio-lab-wav-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -153,7 +155,7 @@ fn recorded_voice_ab_keeps_voice_unchanged_when_only_synth_level_changes() {
         assert!(ratio("after-adjusted", source) > 6.0);
     }
     let before = audio_lab::metrics(&samples("before-midi.wav")).rms;
-    let after = audio_lab::metrics(&samples("after-balanced-midi.wav")).rms;
+    let after = audio_lab::metrics(&samples("after-midi.wav")).rms;
     assert!(after > before * 1.5 && after < before * 3.0);
     assert!(output.join("before-comparison.wav").is_file());
     assert!(output.join("after-balanced-comparison.wav").is_file());

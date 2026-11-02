@@ -40,7 +40,7 @@ pub fn compare_with_levels(
         .into_iter()
         .map(|x| x * output_mix::level_gain(voice_level))
         .collect();
-    let synth_gain = output_mix::level_gain(synth_level);
+    let synth_gain = output_mix::synth_gain(synth_level);
     let vocal_raw = render(
         &input,
         &[],

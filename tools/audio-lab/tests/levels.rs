@@ -5,6 +5,56 @@ use audio_lab::{
 use synthphone_e_vocal_dsp::audio::Waveform;
 
 #[test]
+fn source_controls_remain_available_and_persist_with_main_settings() {
+    use audio_lab::state_machine::{AppEvent, AppStateMachine, MENU_ITEMS};
+    let mut app = AppStateMachine::new();
+    app.handle_event(AppEvent::SplashComplete);
+    app.handle_event(AppEvent::EncoderDoublePress);
+    for _ in 0..MENU_ITEMS.len() {
+        if app.current().current_item.0 == "Voice Level" {
+            break;
+        }
+        app.handle_event(AppEvent::EncoderRotate(1));
+    }
+    assert_eq!(app.current().current_item, ("Voice Level", 10));
+    app.set_menu_value_from_cc(44, 32);
+    app.set_menu_value_from_cc(45, 20);
+    let mut restored = AppStateMachine::new();
+    restored.apply_saved_settings(app.saved_settings());
+    assert_eq!(restored.snapshot().voice_volume, 5);
+    assert_eq!(restored.snapshot().melody_volume, 3);
+}
+
+#[test]
+fn muting_synth_does_not_reduce_percussion_through_polyphony_scaling() {
+    let mut mixed =
+        audio_lab::voice_generator::VoiceManager::<8>::new(audio_lab::constants::SAMPLE_RATE);
+    let mut drums =
+        audio_lab::voice_generator::VoiceManager::<8>::new(audio_lab::constants::SAMPLE_RATE);
+    mixed.note_on(57, 127, 1);
+    mixed.note_on(36, 100, 9);
+    drums.note_on(36, 100, 9);
+    for _ in 0..4096 {
+        let (melody, percussion) = mixed.get_mixed_sources_with_gains(false, 0.0, 1.0);
+        let (_, reference) = drums.get_mixed_sources_with_gains(false, 1.0, 1.0);
+        assert_eq!(melody, 0.0);
+        assert_eq!(percussion, reference);
+    }
+}
+
+#[test]
+fn synth_fader_has_over_forty_db_of_nonzero_adjustment_for_quiet_mics() {
+    let low = audio_lab::levels::compare_with_levels(Waveform::Triangle, 127, 0.05, 1.0, 20, 1);
+    let high = audio_lab::levels::compare_with_levels(Waveform::Triangle, 127, 0.05, 1.0, 20, 20);
+    for (low, high) in [(&low.keypad, &high.keypad), (&low.midi, &high.midi)] {
+        assert!(
+            db_ratio(metrics(steady(high)).rms, metrics(steady(low)).rms) > 40.0,
+            "nonzero synth range must cover quiet vocal input"
+        );
+    }
+}
+
+#[test]
 fn hot_input_can_be_trimmed_without_turning_down_keypad_or_midi() {
     let normal = compare(Waveform::Triangle, 127, 0.2, 1.0);
     let hot = audio_lab::levels::compare_with_levels(Waveform::Triangle, 127, 0.4, 1.0, 5, 10);

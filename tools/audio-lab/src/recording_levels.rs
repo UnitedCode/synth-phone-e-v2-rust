@@ -79,7 +79,7 @@ pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
             .collect();
         let voice_raw = render(&signal, &[], &config, &default).raw;
         let mut osc = Oscillator::new(110.0, SAMPLE_RATE, Waveform::Triangle);
-        let synth_gain = output_mix::level_gain(synth_level);
+        let synth_gain = if legacy {output_mix::level_gain(synth_level)} else {output_mix::synth_gain(synth_level)};
         let drive = if legacy {
             1.0
         } else {
@@ -97,7 +97,7 @@ pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
         voices.set_waveform(Waveform::Triangle);
         voices.note_on(45, 127, 1); // A2, matching the keypad's default note6.
         let melody: Vec<_> = (0..voice_raw.len())
-            .map(|_| voices.get_mixed_sample())
+            .map(|_| voices.get_mixed_sample(false, 1.0, 1.0))
             .collect();
         let voice: Vec<_> = voice_raw
             .iter()

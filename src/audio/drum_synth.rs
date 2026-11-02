@@ -1,4 +1,7 @@
 // Full GM1 percussion synthesis — notes 35–81, tuned for 90s 808/909 character.
+// Notes 82–105 continue past the GM map with held ringers and DTMF dial tones.
+
+use crate::percussion::{DTMF_FIRST_NOTE, KEYPAD_KEYS, RINGER_FIRST_NOTE};
 
 /// Bhaskara I sine approximation — max error 0.165 %, no lookup table.
 /// phase: 0..u32::MAX = 0..2π  →  output: −32767..32767
@@ -68,6 +71,273 @@ pub enum DrumType {
     OpenCuica,        // 79
     MuteTriangle,     // 80
     OpenTriangle,     // 81
+    /// Ringer (notes 82–93); index 0–11 into `RINGERS`.
+    Ringer(u8),
+    /// DTMF digit tone (notes 94–105); index 0–11 in keypad order 1–9, *, 0, #.
+    Dtmf(u8),
+}
+
+/// Envelope multiplier for releasing a held sound: 0xFFFF falls below the
+/// `is_finished` threshold (100) in ~240 samples ≈ 5 ms — short enough for tight
+/// rests, long enough not to click.
+const RELEASE_DECAY: u16 = 63_790;
+
+/// DTMF row (low) and column (high) frequencies in Hz, per ITU-T Q.23.
+const DTMF_ROW_HZ: [u32; 4] = [697, 770, 852, 941];
+const DTMF_COL_HZ: [u32; 3] = [1209, 1336, 1477];
+
+/// phase_inc = freq_hz * 89_443  (2^32 / 48_014.312 Hz ≈ 89_443)
+const fn hz_to_phase_inc(hz: u32) -> u32 {
+    hz * 89_443
+}
+
+const SAMPLE_RATE_HZ: u32 = 48_014;
+const SAMPLES_PER_MS: u32 = 48;
+/// Fade at every ring and note edge (~2 ms) so gating doesn't click.
+const EDGE_RAMP: u32 = 96;
+const FULL_GAIN: i32 = 32_767;
+
+/// Phase increment for MIDI notes 0–11 (C-1 … B-1); each octave up is one
+/// left shift, so melodies need no float math per sample.
+const SEMITONE_PHASE_INC: [u32; 12] = [
+    731_340, 774_828, 820_901, 869_715, 921_431, 976_222, 1_034_271, 1_095_772, 1_160_930,
+    1_229_962, 1_303_100, 1_380_586,
+];
+
+#[inline(always)]
+fn note_phase_inc(note: u8) -> u32 {
+    SEMITONE_PHASE_INC[(note % 12) as usize] << (note / 12)
+}
+
+/// One ringer sound (notes 82–93). Each loops with its real-world cadence,
+/// pauses included, while the key is held — like a phone left ringing.
+/// Letting go of the key cuts it off at any point.
+#[derive(Clone, Copy)]
+enum Ringer {
+    /// Tone ringer: `f1` and `f2` (Hz) summed, or alternated `warble_hz` times a
+    /// second. `cadence_ms` is on, off, on, off; both offs 0 means a steady ring.
+    Pattern {
+        f1: u16,
+        f2: u16,
+        warble_hz: u8,
+        square: bool,
+        cadence_ms: [u16; 4],
+    },
+    /// Electromechanical bell: a clapper swinging at `strike_hz` hits two gongs
+    /// alternately. Each gong is a fundamental plus an inharmonic overtone (Hz) —
+    /// the non-integer ratio is what makes it sound metallic instead of buzzy.
+    Bell {
+        gongs: [[u16; 2]; 2],
+        strike_hz: u8,
+        cadence_ms: [u16; 4],
+    },
+    /// Square-wave tune: (MIDI note, length in steps); note 0 is a rest.
+    /// `pause_ms` of silence follows each pass, as a ringtone loops.
+    Melody {
+        notes: &'static [(u8, u8)],
+        step_ms: u16,
+        pause_ms: u16,
+    },
+}
+
+/// Silence between passes of a melody ringtone.
+const MELODY_PAUSE_MS: u16 = 1500;
+
+/// Keypad key 1–12 → ringer. Tune by ear on hardware.
+///
+/// Cadences for 1, 4 and 9 follow the network standards (US 2 s on / 4 s off,
+/// UK 0.4-0.2-0.4 s then 2 s). The rest are device sounds with no standard;
+/// their timings are typical values.
+const RINGERS: [Ringer; 12] = [
+    // 1: Mechanical bell — 20 Hz ringing current swings the clapper between two
+    //    gongs, US cadence. Gong frequencies are starting values; tune by ear.
+    Ringer::Bell {
+        gongs: [[1050, 2690], [1290, 3410]],
+        strike_hz: 20,
+        cadence_ms: [2000, 4000, 0, 0],
+    },
+    // 2: 90s desk-phone burble — low, buzzy square trill, US cadence.
+    Ringer::Pattern {
+        f1: 600,
+        f2: 750,
+        warble_hz: 20,
+        square: true,
+        cadence_ms: [2000, 4000, 0, 0],
+    },
+    // 3: Early cell-phone "ring ring" — fast two-tone square trill, double burst.
+    Ringer::Pattern {
+        f1: 1300,
+        f2: 1700,
+        warble_hz: 30,
+        square: true,
+        cadence_ms: [500, 250, 500, 1500],
+    },
+    // 4: Electronic warble — 80s desk phone, US cadence.
+    Ringer::Pattern {
+        f1: 1000,
+        f2: 1250,
+        warble_hz: 16,
+        square: false,
+        cadence_ms: [2000, 4000, 0, 0],
+    },
+    // 5: Double warble, UK-style double cadence.
+    Ringer::Pattern {
+        f1: 800,
+        f2: 1000,
+        warble_hz: 12,
+        square: false,
+        cadence_ms: [400, 200, 400, 2000],
+    },
+    // 6: 90s cordless-phone trill — high, very fast square trill in short bursts.
+    Ringer::Pattern {
+        f1: 1800,
+        f2: 2400,
+        warble_hz: 40,
+        square: true,
+        cadence_ms: [800, 200, 800, 2000],
+    },
+    // 7: Pager beep.
+    Ringer::Pattern {
+        f1: 2000,
+        f2: 0,
+        warble_hz: 0,
+        square: true,
+        cadence_ms: [150, 100, 150, 2000],
+    },
+    // 8: Office chirp — two quick beeps.
+    Ringer::Pattern {
+        f1: 1200,
+        f2: 0,
+        warble_hz: 0,
+        square: true,
+        cadence_ms: [60, 40, 60, 2000],
+    },
+    // 9: UK double ring — 400 + 450 Hz.
+    Ringer::Pattern {
+        f1: 400,
+        f2: 450,
+        warble_hz: 0,
+        square: false,
+        cadence_ms: [400, 200, 400, 2000],
+    },
+    // 10: Gran Vals excerpt (Tárrega, 1902) — the "Nokia tune". Trial for a
+    //     personal build only; see GRAN_VALS before any release.
+    //     To go back: notes: MOUNTAIN_KING, step_ms: 130.
+    Ringer::Melody {
+        notes: GRAN_VALS,
+        step_ms: 140,
+        pause_ms: MELODY_PAUSE_MS,
+    },
+    // 11: Badinerie (Bach, Orchestral Suite No. 2) — opening phrase.
+    Ringer::Melody {
+        notes: BADINERIE,
+        step_ms: 90,
+        pause_ms: MELODY_PAUSE_MS,
+    },
+    // 12: Flight of the Bumblebee (Rimsky-Korsakov, 1900) — chromatic opening.
+    Ringer::Melody {
+        notes: BUMBLEBEE,
+        step_ms: 60,
+        pause_ms: MELODY_PAUSE_MS,
+    },
+];
+
+// Public-domain melodies, transcribed from the original scores (not from any
+// phone maker's ringtone). (MIDI note, steps); 0 = rest. 60 = C4, 72 = C5, 84 = C6.
+
+// TRADEMARK: the composition is public domain, but Nokia has registered this
+// excerpt as a sound trademark. Fine for a personal build; swap slot 10 back to
+// MOUNTAIN_KING before selling or distributing the firmware.
+#[rustfmt::skip]
+const GRAN_VALS: &[(u8, u8)] = &[
+    // E6 D6 F#5 G#5 · C#6 B5 D5 E5 · B5 A5 C#5 E5 · A5
+    (88, 1), (86, 1), (78, 2), (80, 2),
+    (85, 1), (83, 1), (74, 2), (76, 2),
+    (83, 1), (81, 1), (73, 2), (76, 2),
+    (81, 6),
+];
+
+// Unused while slot 10 trials GRAN_VALS.
+#[allow(dead_code)]
+#[rustfmt::skip]
+const MOUNTAIN_KING: &[(u8, u8)] = &[
+    // B5 C#6 D6 E6 F#6 D6 F#6 · F6 C#6 F6 · E6 C6 E6
+    (83, 1), (85, 1), (86, 1), (88, 1), (90, 1), (86, 1), (90, 2),
+    (89, 1), (85, 1), (89, 2), (88, 1), (84, 1), (88, 2),
+    // B5 C#6 D6 E6 F#6 D6 F#6 B6 · A6 F#6 D6 F#6 A6
+    (83, 1), (85, 1), (86, 1), (88, 1), (90, 1), (86, 1), (90, 1), (95, 1),
+    (93, 1), (90, 1), (86, 1), (90, 1), (93, 4),
+];
+
+#[rustfmt::skip]
+const BADINERIE: &[(u8, u8)] = &[
+    // B5 D6 B5 F#5 B5 F#5 D5 F#5 D5 B4 — falling B-minor figure
+    (83, 2), (86, 1), (83, 1), (78, 2), (83, 1), (78, 1), (74, 2), (78, 1), (74, 1), (71, 4),
+];
+
+#[rustfmt::skip]
+const BUMBLEBEE: &[(u8, u8)] = &[
+    // E6 D#6 D6 C#6 C6 F6 E6 D#6 · E6 D#6 D6 C#6 C6 C#6 D6 D#6 — twice
+    (88, 1), (87, 1), (86, 1), (85, 1), (84, 1), (89, 1), (88, 1), (87, 1),
+    (88, 1), (87, 1), (86, 1), (85, 1), (84, 1), (85, 1), (86, 1), (87, 1),
+    (88, 1), (87, 1), (86, 1), (85, 1), (84, 1), (89, 1), (88, 1), (87, 1),
+    (88, 1), (87, 1), (86, 1), (85, 1), (84, 1), (85, 1), (86, 1), (87, 1),
+];
+
+/// 0..=FULL_GAIN at `pos` within a segment `len` samples long, fading over
+/// `EDGE_RAMP` samples at both ends.
+#[inline(always)]
+fn edge_ramp(pos: u32, len: u32) -> i32 {
+    let distance = pos.min(len - 1 - pos);
+    if distance >= EDGE_RAMP {
+        FULL_GAIN
+    } else {
+        (distance * FULL_GAIN as u32 / EDGE_RAMP) as i32
+    }
+}
+
+#[inline(always)]
+fn ringer_wave(phase: u32, square: bool) -> i32 {
+    if square {
+        if phase < 0x8000_0000 {
+            32000
+        } else {
+            -32000
+        }
+    } else {
+        bhaskara_sine(phase)
+    }
+}
+
+/// Gong level `pos` samples into a clapper cycle `cycle` samples long: a sharp
+/// hit that rings down toward a sustained level, because the next hit lands
+/// before the gong dies out.
+#[inline(always)]
+fn gong_ring(pos: u32, cycle: u32) -> i32 {
+    let left = ((cycle - pos) * 256 / cycle) as i32; // 256 → 0 across the cycle
+    let fall = (left * left) >> 1; // quadratic, 32_768 → 0
+    let level = 13_107 + ((fall * 19_660) >> 15); // 40 % sustain + 60 % hit
+    level.min(FULL_GAIN)
+}
+
+/// Gain of a looping on/off cadence at sample `sc`.
+fn cadence_gain(sc: u32, cadence_ms: &[u16; 4]) -> i32 {
+    if cadence_ms[1] == 0 && cadence_ms[3] == 0 {
+        return FULL_GAIN;
+    }
+    let period: u32 = cadence_ms
+        .iter()
+        .map(|&ms| ms as u32 * SAMPLES_PER_MS)
+        .sum();
+    let mut pos = sc % period;
+    for (i, &ms) in cadence_ms.iter().enumerate() {
+        let len = ms as u32 * SAMPLES_PER_MS;
+        if pos < len {
+            return if i % 2 == 0 { edge_ramp(pos, len) } else { 0 };
+        }
+        pos -= len;
+    }
+    0
 }
 
 /// 13 synthesis engines — assigned during trigger(), dispatched in next_value().
@@ -101,6 +371,10 @@ enum SynthEngine {
     Cabasa,
     /// Bhaskara sine with upward pitch sweep (cuica).
     Cuica,
+    /// Two summed Bhaskara sines at phase_inc and phase2_inc (telephone DTMF).
+    Dtmf,
+    /// Table-driven ringer patterns and melodies; see `RINGERS`.
+    Ringer,
 }
 
 // phase_inc = freq_hz * 89_443  (2^32 / 48_014.312 Hz ≈ 89_443)
@@ -120,6 +394,8 @@ pub struct DrumSampler {
     noise: u16,    // 15-bit LFSR state
     noise_hp: i16, // previous noise sample — used for HP difference filter
     noise_mix: u8, // 0 = all tone, 16 = all noise
+    /// Held sounds (dial tones, ringers) sustain at full level until `release()`.
+    held: bool,
 }
 
 impl DrumSampler {
@@ -140,6 +416,7 @@ impl DrumSampler {
             noise: 0xACE1,
             noise_hp: 0,
             noise_mix: 0,
+            held: false,
         }
     }
 
@@ -154,6 +431,7 @@ impl DrumSampler {
         self.noise = 0xACE1;
         self.noise_hp = 0;
         self.env = 0xFFFF;
+        self.held = false;
 
         match self.drum_type {
             // ── KICKS ────────────────────────────────────────────────────────────
@@ -660,6 +938,120 @@ impl DrumSampler {
                 // linear step: 35_777_200 / 6000 ≈ 5_963
                 self.phase2_inc = 5_963;
             }
+
+            // ── RINGERS ──────────────────────────────────────────────────────────
+            // The ringer engine advances its own phases from `RINGERS`.
+            DrumType::Ringer(_) => {
+                self.engine = SynthEngine::Ringer;
+                self.max_samples = u32::MAX;
+                self.phase_inc = 0;
+                self.phase2_inc = 0;
+                self.target_phase_inc = 0;
+                self.pitch_decay = 0;
+                self.env_decay = RELEASE_DECAY;
+                self.noise_mix = 0;
+                self.held = true;
+            }
+
+            // ── DIAL TONES ───────────────────────────────────────────────────────
+            // Row tone + column tone, held until release.
+            DrumType::Dtmf(index) => {
+                let index = (index as usize).min(11);
+                self.engine = SynthEngine::Dtmf;
+                self.max_samples = u32::MAX;
+                self.phase_inc = hz_to_phase_inc(DTMF_ROW_HZ[index / 3]);
+                self.phase2_inc = hz_to_phase_inc(DTMF_COL_HZ[index % 3]);
+                self.target_phase_inc = 0;
+                self.pitch_decay = 0;
+                self.env_decay = RELEASE_DECAY;
+                self.noise_mix = 0;
+                self.held = true;
+            }
+        }
+    }
+
+    /// Next raw sample of ringer `index` at sample `sc` since the key was pressed.
+    fn ringer_sample(&mut self, sc: u32, index: u8, noise: i32) -> i32 {
+        match RINGERS[(index as usize).min(RINGERS.len() - 1)] {
+            Ringer::Bell {
+                gongs,
+                strike_hz,
+                cadence_ms,
+            } => {
+                // Each gong is hit once per clapper cycle, half a cycle apart.
+                let cycle = SAMPLE_RATE_HZ / strike_hz as u32;
+                let mut sum = 0i32;
+                for (g, [fundamental_hz, overtone_hz]) in gongs.iter().enumerate() {
+                    let since_strike = (sc + g as u32 * cycle / 2) % cycle;
+                    // Phase straight from the sample count, so the four partials
+                    // need no stored oscillator state.
+                    let fundamental =
+                        bhaskara_sine(sc.wrapping_mul(hz_to_phase_inc(*fundamental_hz as u32)));
+                    let overtone =
+                        bhaskara_sine(sc.wrapping_mul(hz_to_phase_inc(*overtone_hz as u32)));
+                    let gong = (fundamental * 2 + overtone) / 3;
+                    sum += (gong * gong_ring(since_strike, cycle)) >> 15;
+                }
+                // Clapper impact: a ~1 ms metallic tick on every hit.
+                let tick = if sc % (cycle / 2) < 48 { noise >> 2 } else { 0 };
+                (((sum >> 1) + tick) * cadence_gain(sc, &cadence_ms)) >> 15
+            }
+            Ringer::Pattern {
+                f1,
+                f2,
+                warble_hz,
+                square,
+                cadence_ms,
+            } => {
+                let tone = if warble_hz > 0 {
+                    // One phase with switching increments, so the warble never clicks.
+                    let half_period = SAMPLE_RATE_HZ / (2 * warble_hz as u32);
+                    let hz = if (sc / half_period) % 2 == 0 { f1 } else { f2 };
+                    self.phase = self.phase.wrapping_add(hz_to_phase_inc(hz as u32));
+                    ringer_wave(self.phase, square)
+                } else {
+                    self.phase = self.phase.wrapping_add(hz_to_phase_inc(f1 as u32));
+                    if f2 == 0 {
+                        ringer_wave(self.phase, square)
+                    } else {
+                        self.phase2 = self.phase2.wrapping_add(hz_to_phase_inc(f2 as u32));
+                        (ringer_wave(self.phase, square) + ringer_wave(self.phase2, square)) >> 1
+                    }
+                };
+                (tone * cadence_gain(sc, &cadence_ms)) >> 15
+            }
+            Ringer::Melody {
+                notes,
+                step_ms,
+                pause_ms,
+            } => {
+                let step = step_ms as u32 * SAMPLES_PER_MS;
+                // Past the last note, the loop's tail is the pause: silence.
+                let total: u32 = notes.iter().map(|&(_, len)| len as u32 * step).sum::<u32>()
+                    + pause_ms as u32 * SAMPLES_PER_MS;
+                let mut pos = sc % total;
+                for &(note, len) in notes {
+                    let len = len as u32 * step;
+                    if pos < len {
+                        if note == 0 {
+                            return 0;
+                        }
+                        self.phase = self.phase.wrapping_add(note_phase_inc(note));
+                        return (ringer_wave(self.phase, true) * edge_ramp(pos, len)) >> 15;
+                    }
+                    pos -= len;
+                }
+                0
+            }
+        }
+    }
+
+    /// Starts the fade-out of a held sound. One-shot drums ignore it and play
+    /// out their own envelope, as the GM spec expects.
+    pub fn release(&mut self) {
+        if self.held {
+            self.held = false;
+            self.env_decay = RELEASE_DECAY;
         }
     }
 
@@ -693,7 +1085,9 @@ impl DrumSampler {
         };
 
         // ── Envelope ─────────────────────────────────────────────────────────────
-        self.env = ((self.env as u32 * self.env_decay as u32) >> 16) as u16;
+        if !self.held {
+            self.env = ((self.env as u32 * self.env_decay as u32) >> 16) as u16;
+        }
 
         // ── Engine dispatch ───────────────────────────────────────────────────────
         let raw: i32 = match self.engine {
@@ -810,6 +1204,14 @@ impl DrumSampler {
                 }
                 bhaskara_sine(self.phase)
             }
+            SynthEngine::Dtmf => {
+                self.phase2 = self.phase2.wrapping_add(self.phase2_inc);
+                (bhaskara_sine(self.phase) + bhaskara_sine(self.phase2)) >> 1
+            }
+            SynthEngine::Ringer => match self.drum_type {
+                DrumType::Ringer(index) => self.ringer_sample(sc, index, noise_i as i32),
+                _ => 0,
+            },
         };
 
         // i64 multiply avoids overflow when raw + click exceeds i16 range
@@ -873,6 +1275,153 @@ pub fn midi_note_to_drum_type(note: u8) -> Option<DrumType> {
         79 => Some(DrumType::OpenCuica),
         80 => Some(DrumType::MuteTriangle),
         81 => Some(DrumType::OpenTriangle),
+        n if (RINGER_FIRST_NOTE..RINGER_FIRST_NOTE + KEYPAD_KEYS as u8).contains(&n) => {
+            Some(DrumType::Ringer(n - RINGER_FIRST_NOTE))
+        }
+        n if (DTMF_FIRST_NOTE..DTMF_FIRST_NOTE + KEYPAD_KEYS as u8).contains(&n) => {
+            Some(DrumType::Dtmf(n - DTMF_FIRST_NOTE))
+        }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn play(drum: &mut DrumSampler, samples: usize) {
+        for _ in 0..samples {
+            drum.next_value();
+        }
+    }
+
+    fn triggered(note: u8) -> DrumSampler {
+        let mut drum = DrumSampler::new();
+        drum.set_drum_type(midi_note_to_drum_type(note).unwrap());
+        drum.trigger();
+        drum
+    }
+
+    #[test]
+    fn dtmf_notes_follow_keypad_order() {
+        assert_eq!(midi_note_to_drum_type(94), Some(DrumType::Dtmf(0)));
+        assert_eq!(midi_note_to_drum_type(105), Some(DrumType::Dtmf(11)));
+        assert_eq!(midi_note_to_drum_type(106), None);
+    }
+
+    #[test]
+    fn dtmf_keys_use_row_and_column_tones() {
+        // Key "5" (index 4): 770 Hz + 1336 Hz
+        let drum = triggered(98);
+        assert_eq!(drum.phase_inc, hz_to_phase_inc(770));
+        assert_eq!(drum.phase2_inc, hz_to_phase_inc(1336));
+        // Key "#" (index 11): 941 Hz + 1477 Hz
+        let drum = triggered(105);
+        assert_eq!(drum.phase_inc, hz_to_phase_inc(941));
+        assert_eq!(drum.phase2_inc, hz_to_phase_inc(1477));
+    }
+
+    #[test]
+    fn held_dtmf_sustains_until_released() {
+        let mut drum = triggered(94);
+        play(&mut drum, 48_000 * 10); // 10 s
+        assert!(!drum.is_finished());
+        assert_eq!(drum.env, 0xFFFF);
+
+        drum.release();
+        play(&mut drum, 480); // 10 ms
+        assert!(drum.is_finished());
+    }
+
+    #[test]
+    fn release_does_not_shorten_one_shot_drums() {
+        let mut released = triggered(36);
+        let mut untouched = triggered(36);
+        released.release();
+        for _ in 0..2_000 {
+            assert_eq!(released.next_value(), untouched.next_value());
+        }
+    }
+
+    #[test]
+    fn ringer_notes_follow_keypad_order() {
+        assert_eq!(midi_note_to_drum_type(82), Some(DrumType::Ringer(0)));
+        assert_eq!(midi_note_to_drum_type(93), Some(DrumType::Ringer(11)));
+    }
+
+    #[test]
+    fn held_ringer_sustains_until_released() {
+        let mut drum = triggered(85);
+        play(&mut drum, 48_000 * 10);
+        assert!(!drum.is_finished());
+
+        drum.release();
+        play(&mut drum, 480);
+        assert!(drum.is_finished());
+    }
+
+    /// Over `samples` of a held sound: the longest run of exact silence, and
+    /// the index of the last sample that made sound.
+    fn silence_profile(drum: &mut DrumSampler, samples: usize) -> (usize, usize) {
+        let (mut run, mut longest, mut last_sound) = (0, 0, 0);
+        for i in 0..samples {
+            if drum.next_value() == 0.0 {
+                run += 1;
+                longest = longest.max(run);
+            } else {
+                run = 0;
+                last_sound = i;
+            }
+        }
+        (longest, last_sound)
+    }
+
+    #[test]
+    fn every_ringer_rings_again_after_its_pause() {
+        // The longest real pause is the US 4 s; every ringer must come back
+        // after it and keep looping while held.
+        for note in 82..=93 {
+            let mut drum = triggered(note);
+            let (silence, last_sound) = silence_profile(&mut drum, 48_000 * 14);
+            assert!(
+                silence < 48 * 4_100,
+                "ringer note {note} was silent for {} ms",
+                silence / 48
+            );
+            assert!(
+                last_sound > 48_000 * 7,
+                "ringer note {note} stopped looping at {} ms",
+                last_sound / 48
+            );
+        }
+    }
+
+    #[test]
+    fn bell_follows_the_us_cadence() {
+        // 2 s ringing, 4 s silent, then ringing again.
+        let mut drum = triggered(82);
+        play(&mut drum, 48 * 2_010);
+        for _ in 0..48 * 3_980 {
+            assert_eq!(drum.next_value(), 0.0);
+        }
+        play(&mut drum, 48 * 20);
+        let rings_again = (0..48 * 50).any(|_| drum.next_value() != 0.0);
+        assert!(rings_again);
+    }
+
+    #[test]
+    fn melody_notes_hit_their_pitch() {
+        // A5 (81) should be 880 Hz.
+        let hz = note_phase_inc(81) as f32 * 48_014.312 / 4_294_967_296.0;
+        assert!((hz - 880.0).abs() < 1.0, "got {hz} Hz");
+    }
+
+    #[test]
+    fn retriggering_a_drum_clears_held_state() {
+        let mut drum = triggered(94);
+        drum.set_drum_type(DrumType::BassDrum1);
+        drum.trigger();
+        play(&mut drum, 9_600);
+        assert!(drum.is_finished());
     }
 }

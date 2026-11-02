@@ -1,4 +1,5 @@
 use crate::midi::get_midi_queue_status;
+use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use app_lib::vocal_frame::{default_config, process_frame};
@@ -10,7 +11,9 @@ use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
 use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator, Waveform};
-use synthphone_e_vocal_dsp::dsp::{bitcrush, sample_rate_reduce};
+use synthphone_e_vocal_dsp::dsp::{
+    bitcrush, sample_rate_reduce, Fft1024, FftOps,
+};
 use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
@@ -29,9 +32,15 @@ pub fn audio_handler(
     let mut sr_factor = 1;
     let mut wave_type = Waveform::Sine;
     let mut bit_depth = 32;
-    let mut volume_gain = 1.0f32;
+    let mut crush_voices = false;
+    // In Vocode / Harmony the auto-switch channel (MIDI ch 3) drives the vocal
+    // effect only — its notes are silenced as raw synth so you hear the processed
+    // voice, not a synth playing over it. Every other mode plays the note normally.
+    let mut mute_melody_synth = false;
     let mut voice_gain = 1.0f32;
-    let mut synth_gain = 1.0f32;
+    let mut melody_gain = 1.0f32;
+    let mut drum_gain = 1.0f32;
+    let mut master_gain = 1.0f32;
     shared.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
         sr_factor = snapshot.sample_reduction;
@@ -42,9 +51,21 @@ pub fn audio_handler(
             _ => Waveform::Sine,
         };
         bit_depth = snapshot.bit_rate;
-        volume_gain = snapshot.volume as f32 / 10.0;
+        let profile = match snapshot.current_state {
+            AppState::Processing(p) | AppState::EffectsProfile(p) | AppState::Menu(_, p) => p,
+            AppState::Splash => ProcessingProfile::PitchControl,
+        };
+        // In Percussion the crush keys shape the drums, ringers and dial tones
+        // too, so the voices are mixed in before the crush instead of after.
+        crush_voices = profile == ProcessingProfile::Percussion;
+        mute_melody_synth = matches!(
+            profile,
+            ProcessingProfile::Vocode | ProcessingProfile::Harmony
+        );
         voice_gain = output_mix::level_gain(snapshot.voice_volume);
-        synth_gain = output_mix::level_gain(snapshot.melody_volume);
+        melody_gain = output_mix::synth_gain(snapshot.melody_volume);
+        drum_gain = snapshot.drum_volume as f32 * 0.1;
+        master_gain = snapshot.volume as f32 * 0.1;
     });
 
     if audio.get_stereo(buffer) {
@@ -54,17 +75,18 @@ pub fn audio_handler(
                 true => *left,
             };
 
-            // Attenuate a hot digitized microphone before the FFT, independently
-            // of the generated carriers and MIDI notes mixed farther downstream.
             shared.in_ring.lock(|in_ring| in_ring.push(sample * voice_gain));
 
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
-            // ************** SAMPLE-RATE REDUCE **************
-            out_sample = sample_rate_reduce(out_sample, sr_factor, sr_hold_counter, sr_held_value);
+            if !crush_voices {
+                // ************** SAMPLE-RATE REDUCE **************
+                out_sample =
+                    sample_rate_reduce(out_sample, sr_factor, sr_hold_counter, sr_held_value);
 
-            // ************** BIT DEPTH REDUCE **************
-            out_sample = bitcrush(out_sample, bit_depth as i8);
+                // ************** BIT DEPTH REDUCE **************
+                out_sample = bitcrush(out_sample, bit_depth as i8);
+            }
 
             // ************** PROCESS MIDI EVENTS **************
             // Process MIDI events when we have available CPU cycles
@@ -163,8 +185,20 @@ pub fn audio_handler(
             });
 
             // ************** ADD MIDI OUTPUT **************
-            let (melody, drums) = shared.voice_manager.lock(|vm| vm.get_mixed_sources());
-            out_sample = output_mix::mix_with_synth_gain(out_sample, melody, drums, wave_type, volume_gain, synth_gain);
+            let (melody, drums) = shared
+                .voice_manager
+                .lock(|vm| vm.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain));
+            out_sample = output_mix::sum_sources(out_sample, melody, drums, wave_type) * master_gain;
+
+            if crush_voices {
+                // Percussion: crush the voice and every MIDI voice together.
+                out_sample =
+                    sample_rate_reduce(out_sample, sr_factor, sr_hold_counter, sr_held_value);
+                out_sample = bitcrush(out_sample, bit_depth as i8);
+            }
+
+            // Normalize final output
+            out_sample = output_mix::finish(out_sample, 1.0);
             // **********************************************
 
             // Check and handle hop counter
@@ -206,7 +240,7 @@ pub fn audio_handler(
 }
 
 pub fn interface_handler(
-    local: crate::rtic_app::app::interface_handler::LocalResources,
+    local: &mut crate::rtic_app::app::interface_handler::LocalResources,
     shared: &mut crate::rtic_app::app::interface_handler::SharedResources,
 ) {
     local.timer2.clear_irq();
@@ -233,23 +267,26 @@ pub fn interface_handler(
                     oms[row][col] = is_pressed;
                 });
 
+                let actual_col = 2 - col;
+                let key_num = row * 3 + actual_col + 1;
+
                 if is_pressed {
                     update_state = true;
-                    let current_state = shared
-                        .app_state_machine
-                        .lock(|msm| msm.snapshot().current_state);
+                    let (current_state, percussion_set) = shared.app_state_machine.lock(|msm| {
+                        let snapshot = msm.snapshot();
+                        (snapshot.current_state, snapshot.percussion)
+                    });
 
                     if let AppState::Processing(ProcessingProfile::Percussion) = current_state {
-                        // In Percussion mode keypad presses are drum notes — inject directly
-                        // into the MIDI queue rather than routing through the state machine.
-                        let actual_col = 2 - col;
-                        let key_num = row * 3 + actual_col + 1;
-                        if let Some(note) = keypad_to_drum_note(key_num) {
+                        // In Percussion mode keypad presses play the selected sound set
+                        // (drums, ringers or dial tones) — inject directly into the MIDI
+                        // queue rather than routing through the state machine.
+                        if let Some(note) = local.held_keys.press(percussion_set, key_num) {
                             shared.midi_events.lock(|events| {
                                 let _ = crate::midi::try_enqueue_midi_event(
                                     events,
                                     crate::midi::MidiEvent::NoteOn {
-                                        channel: 9,
+                                        channel: DRUM_CHANNEL,
                                         key: note,
                                         velocity: 100,
                                     },
@@ -263,7 +300,21 @@ pub fn interface_handler(
                     }
                 } else {
                     update_state = true;
-                    // Button has just been released
+                    // Button has just been released. Stop whatever note its press
+                    // started, whatever screen we're on now, so held ringers and
+                    // dial tones never get stuck.
+                    if let Some(note) = local.held_keys.release(key_num) {
+                        shared.midi_events.lock(|events| {
+                            let _ = crate::midi::try_enqueue_midi_event(
+                                events,
+                                crate::midi::MidiEvent::NoteOff {
+                                    channel: DRUM_CHANNEL,
+                                    key: note,
+                                    velocity: 0,
+                                },
+                            );
+                        });
+                    }
                     shared.app_state_machine.lock(|msm| {
                         msm.handle_event(handle_button_release(
                             row,
@@ -342,11 +393,11 @@ pub fn handle_vocal_effects(
     let mut formant_male_ratio = 0.5f32;
     let mut formant_female_ratio = 2.0f32;
     let mut note = 0;
+    let mut synth_octave_ratio = 1.0f32;
+    let mut synth_gain = 1.0f32;
     let mut key = 0i8;
     let mut pitch_ratio = 1.0f32;
-    let mut percussion = 0;
     let mut wave_type = Waveform::Sine;
-    let mut synth_gain = 1.0f32;
     ctx.app_state_machine.lock(|asm| {
         let snapshot = asm.snapshot();
         match snapshot.current_state {
@@ -358,13 +409,14 @@ pub fn handle_vocal_effects(
             AppState::Splash => {}
         }
         formant = snapshot.formant;
-        synth_gain = output_mix::level_gain(snapshot.melody_volume);
+        synth_gain = output_mix::synth_gain(snapshot.melody_volume);
         key = snapshot.key;
-        percussion = snapshot.percussion;
         // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
         // so -12/0/+12 give 0.5×/1×/2× and everything in between is chromatic.
         pitch_ratio = libm::exp2f(snapshot.pitch_semitones as f32 / 12.0);
         note = snapshot.note;
+        // -1/0/+1 octave → 0.5×/1×/2× on the keypad synth note only
+        synth_octave_ratio = libm::exp2f(snapshot.synth_octave as f32);
         wave_type = match snapshot.waveform {
             0 => Waveform::Triangle,
             1 => Waveform::Square,
@@ -381,13 +433,23 @@ pub fn handle_vocal_effects(
         ProcessingProfile::PitchControl => ProcessingMode::PitchControl,
         ProcessingProfile::Vocode => ProcessingMode::Vocode,
         ProcessingProfile::Dry => ProcessingMode::Dry,
+        ProcessingProfile::Tuned => ProcessingMode::PitchControl,
         ProcessingProfile::Harmony => ProcessingMode::Harmony,
         ProcessingProfile::Percussion => ProcessingMode::Dry,
     };
 
+    // In Percussion the keypad plays drum-channel voices and never updates
+    // `note`, so whatever note was last played in another profile would keep
+    // driving the Dry carrier. Treat it as silent here.
+    if current_process == ProcessingProfile::Percussion {
+        note = 0;
+    }
+
     let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
 
-    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry {
+    let is_tuned = current_process == ProcessingProfile::Tuned;
+
+    if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry || is_tuned {
         if mode == ProcessingMode::Vocode {
             let active_count = midi_frequencies.iter().filter(|&&f| f > 0.0).count();
             if active_count > 0 {
@@ -423,14 +485,13 @@ pub fn handle_vocal_effects(
                 }
             }
         } else {
-            // Dry mode
+            // Dry / Tuned mode: keypad note drives the synth carrier
             if note > 0 {
-                let carrier_hz = get_frequency(key, note, pitch_ratio, true);
+                let carrier_hz = get_frequency(key, note, pitch_ratio, true) * synth_octave_ratio;
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
-                let gain = output_mix::keypad_gain(wave_type) * synth_gain;
                 for _ in 0..HOP_SIZE {
-                    carrier_buffer.push(osc.next_value() * gain);
+                    carrier_buffer.push(osc.next_value() * output_mix::keypad_gain(wave_type) * synth_gain);
                 }
             } else {
                 for _ in 0..HOP_SIZE {
@@ -440,36 +501,24 @@ pub fn handle_vocal_effects(
         }
     }
 
-    if current_process == ProcessingProfile::Percussion {
-        match percussion {
-            0 => {
-                //dial tones
-            }
-            1 => {
-                //ringer
-            }
-            2 => {
-                //drums
-                //rech out to the voice manager and trigger drums
-                //or get the drum sampler directly
-
-                //let mut drum = DrumSampler::new();
-                //drum.set_drum_type(DrumType::Cymbal);
-                //drum.trigger();
-                //carrier_buffer.push(drum.next_value());
-            }
-            _ => {
-                //dial tone
-            }
-        }
-    }
+    // In Tuned and Pitch Control the voice must always autotune to the musical
+    // scale: the DSP only snaps to the nearest scale note when no MIDI note is
+    // held, so hide held MIDI notes from it — otherwise singing while playing
+    // force-tunes your voice to the held note. Tuned also hides the keypad note.
+    // Keypad/MIDI notes still sound through the synth (mixed elsewhere). Other
+    // modes keep the live frequencies (Vocode/Harmony are driven by them).
+    let effect_midi_frequencies = if is_tuned || mode == ProcessingMode::PitchControl {
+        [0.0; 8]
+    } else {
+        midi_frequencies
+    };
 
     let musical_settings = MusicalSettings {
         formant,
         formant_male_ratio,
         formant_female_ratio,
-        note,
-        midi_frequencies,
+        note: if is_tuned { 0 } else { note },
+        midi_frequencies: effect_midi_frequencies,
         key,
         octave_ratio: pitch_ratio,
         mode,
@@ -484,7 +533,7 @@ pub fn handle_vocal_effects(
     let write_idx = carrier_buffer.write_index();
     carrier_buffer.block_from(write_idx, &mut carrier_unwrapped_buffer);
 
-    let synthesis_output = process_frame(
+    let mut synthesis_output = process_frame(
         &mut input_buffer,
         &mut carrier_unwrapped_buffer,
         last_input_phases,
@@ -495,6 +544,19 @@ pub fn handle_vocal_effects(
         &config,
         &musical_settings,
     );
+
+    // PitchControl doesn't mix a carrier, so layer the keypad synth on top
+    // here using the same balance and windowing as Dry mode.
+    if is_tuned && note > 0 {
+        let window = Fft1024::get_hann_window();
+        for ((out, synth), w) in synthesis_output
+            .iter_mut()
+            .zip(carrier_unwrapped_buffer.iter())
+            .zip(window.iter())
+        {
+            *out = *out * 0.96 + synth * 0.04 * w;
+        }
+    }
 
     ctx.out_ring.lock(|output_ring| {
         output_ring.write_overlapped_samples(&synthesis_output);

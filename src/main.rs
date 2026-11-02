@@ -22,6 +22,8 @@ mod display;
 mod handler;
 mod input;
 mod midi;
+mod percussion;
+mod settings_storage;
 mod state_machine;
 mod types;
 
@@ -37,6 +39,7 @@ mod rtic_app {
             midi::{
                 try_enqueue_midi_event, voice_generator::VoiceManager, MidiEvent, MidiReceiver,
             },
+            percussion::HeldKeys,
             state_machine::{AppState, AppStateMachine, MenuState},
         };
         use embedded_graphics::{image::ImageRawBE, pixelcolor::BinaryColor};
@@ -100,11 +103,14 @@ mod rtic_app {
             display_needs_update: bool,
             midi_events: heapless::spsc::Queue<MidiEvent, 128>,
             voice_manager: VoiceManager<8>,
+            settings_ready: bool,
+            settings_save_failed: bool,
         }
 
         #[local]
         struct Local {
             audio: audio::Audio,
+            flash: libdaisy::flash::Flash,
             buffer: audio::AudioBuffer,
             timer2: Timer<stm32::TIM2>,
             knob_1: Knob,
@@ -131,6 +137,8 @@ mod rtic_app {
             previous_pitch_shift_ratio: f32,
             midi_receiver: MidiReceiver,
             sprite_atlas: ImageRawBE<'static, BinaryColor>,
+            held_keys: HeldKeys,
+            save_debounce: crate::settings_storage::SaveDebounce,
         }
 
         #[init]
@@ -320,6 +328,7 @@ mod rtic_app {
 
             info!("Startup done!! yo!");
             startup_complete_task::spawn().ok();
+            settings_flash_task::spawn(None).ok();
 
             (
                 Shared {
@@ -332,9 +341,12 @@ mod rtic_app {
                     display_needs_update: true,
                     midi_events: heapless::spsc::Queue::new(),
                     voice_manager: VoiceManager::new(SAMPLE_RATE),
+                    settings_ready: false,
+                    settings_save_failed: false,
                 },
                 Local {
                     audio: system.audio,
+                    flash: system.flash,
                     buffer,
                     timer2,
                     knob_1,
@@ -363,6 +375,8 @@ mod rtic_app {
                     }),
                     midi_receiver,
                     sprite_atlas,
+                    held_keys: HeldKeys::new(),
+                    save_debounce: crate::settings_storage::SaveDebounce::new(ccdr.clocks.c_ck().raw().saturating_mul(2)),
                 },
                 init::Monotonics(),
             )
@@ -462,6 +476,7 @@ mod rtic_app {
                             snapshot.pitch_semitones,
                             snapshot.note,
                             snapshot.volume,
+                            snapshot.percussion,
                             ctx.local.display,
                             ctx.local.sprite_atlas,
                         );
@@ -515,17 +530,77 @@ mod rtic_app {
                 row_3_pin,
                 row_4_pin,
                 encoder_button,
+                held_keys,
+                save_debounce,
+                last_settings: Option<crate::settings_storage::SavedSettings> = None,
             ],
             shared = [
                 app_state_machine,
                 old_matrix_state,
                 display_needs_update,
                 midi_events,
+                settings_ready,
+                settings_save_failed,
             ],
             priority = 3
         )]
         fn interface_handler(mut ctx: interface_handler::Context) {
-            crate::handler::interface_handler(ctx.local, &mut ctx.shared);
+            // Flash belongs to a background task: an erase must not block
+            // keypad scanning or MIDI receive. Restore before accepting UI edits.
+            if !ctx.shared.settings_ready.lock(|ready| *ready) {
+                ctx.local.timer2.clear_irq();
+                return;
+            }
+
+            let before = ctx
+                .shared
+                .app_state_machine
+                .lock(|state| state.saved_settings());
+            let now=cortex_m::peripheral::DWT::cycle_count();
+            if ctx.local.last_settings.is_none() {
+                *ctx.local.last_settings = Some(before);
+            }
+            crate::handler::interface_handler(&mut ctx.local, &mut ctx.shared);
+            let after = ctx
+                .shared
+                .app_state_machine
+                .lock(|state| state.saved_settings());
+            if Some(after) != *ctx.local.last_settings {
+                // Compare across ticks as well as this UI scan, so MIDI CC
+                // changes made by the audio task are persisted too.
+                *ctx.local.last_settings = Some(after);
+                ctx.local.save_debounce.changed(now);
+            } else if ctx.shared.settings_save_failed.lock(|failed| core::mem::take(failed)) {
+                ctx.local.save_debounce.changed(now);
+            } else if ctx.local.save_debounce.ready(now) {
+                if settings_flash_task::spawn(Some(after)).is_ok() {
+                    ctx.local.save_debounce.submitted();
+                } else {
+                    ctx.local.save_debounce.changed(now);
+                }
+            }
+        }
+
+        #[task(priority = 1, local = [flash], shared = [app_state_machine, settings_ready, settings_save_failed, display_needs_update])]
+        fn settings_flash_task(mut ctx: settings_flash_task::Context, settings: Option<crate::settings_storage::SavedSettings>) {
+            if let Some(settings) = settings {
+                if crate::settings_storage::save(ctx.local.flash, settings) {
+                    info!("settings saved");
+                } else {
+                    log::warn!("settings save failed");
+                    ctx.shared.settings_save_failed.lock(|failed| *failed = true);
+                }
+            } else {
+                // Defer restoration until after init has constructed the large
+                // audio buffers in place, avoiding its former boot stack overflow.
+                if let Some(saved) = crate::settings_storage::load(ctx.local.flash) {
+                    ctx.shared.app_state_machine.lock(|state| state.apply_saved_settings(saved));
+                    ctx.shared.display_needs_update.lock(|flag| *flag = true);
+                    display_update_task::spawn().ok();
+                    info!("restored saved settings");
+                }
+                ctx.shared.settings_ready.lock(|ready| *ready = true);
+            }
         }
 
         /// FFT TASK
@@ -564,7 +639,7 @@ mod rtic_app {
             );
         }
 
-        #[task(binds = USART1, local = [midi_receiver], shared = [midi_events], priority = 1)]
+        #[task(binds = USART1, local = [midi_receiver], shared = [midi_events], priority = 4)]
         fn usart1_interrupt(ctx: usart1_interrupt::Context) {
             let usart1_interrupt::LocalResources { midi_receiver, .. } = ctx.local;
             let mut midi_events = ctx.shared.midi_events;
