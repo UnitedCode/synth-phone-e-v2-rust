@@ -127,3 +127,39 @@ a different firmware hash also fails. Both negative checks remove an old PASS.
 Listening pairs trim the same first 0.6 seconds, retain captured gain/rate, put
 before first and after second with a 0.4-second silent gap, and use PCM16 WAV.
 The original float captures and metadata remain available with the evidence.
+
+## Audibility follow-up
+
+The user could not distinguish the original listening examples. The PCM-distance
+gate establishes a changed signal, not an audible retuning benefit. A 220 Hz
+sine/cosine phase control gives relative PCM difference 1.4142 with only 0.0018
+cents of measured pitch difference. In the original recording, the 38 comparable
+120 ms windows had a median slow/fast difference of 10.57 cents; another 18
+paired windows were too ambiguous to interpret. These overlapping windows are
+diagnostics, not independent samples or a musical quality score.
+
+`examples/inspect_retune.rs` reproduces the pitch audit and phase control,
+scans float vocal WAVs for sustained sections, and checks the new two-second
+native capture set. Use `--example inspect_retune -- phase-control`,
+`--example inspect_retune -- CAPTURE_DIRECTORY 0.6`, or
+`--example inspect_retune -- native VOWEL_CAPTURE_DIRECTORY` with the normal
+audio-lab Cargo command. Its `host` mode is explicitly shared-DSP preflight,
+not firmware emulation.
+
+A second test uses a held vowel from the same original recording at seconds
+69.0657..69.9855. Before entering the emulator it is raised about 80 cents,
+scaled by 0.35, preceded by 400 ms of silence and padded to 2.1 seconds. The
+exact same stimulus is used for old, new-fast and new-slow production images.
+All three two-second firmware captures pass CPU/boot, stereo, frame/clock,
+ceiling and DMA checks. This run is too short to test settings persistence.
+The images are unchanged from the earlier test.
+
+The controlled vowel yields 65.95 cents median slow/fast difference across 27
+comparable windows, with two ambiguous windows. The before/slow comparison is
+68.49 cents across 26 comparable windows. The new listening file repeats
+before/slow twice, with identical 4x playback gain on every section. There is
+no output pitch shifting, dynamic compression or per-section normalization;
+raw captures remain available. This is a controlled input test, not an
+unaltered performance or proof that ordinary singing sounds better. Listening
+acceptance remains open; a clean, natural retune trajectory is not established
+by PCM differences or these pitch-window summaries alone.
