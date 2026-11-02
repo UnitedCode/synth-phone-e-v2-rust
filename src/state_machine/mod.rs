@@ -6,6 +6,10 @@ pub enum ProcessingProfile {
     PitchControl,
     Vocode,
     Dry,
+    /// Autotuned vocals + keypad synth. Unlike `Dry`, keypad notes only play
+    /// the synth and never dictate the vocal pitch. Effects row 3 sets the
+    /// vocal formant, like Pitch Ctrl.
+    Tuned,
     Harmony,
     Percussion,
 }
@@ -97,6 +101,17 @@ menu_items! {
     AutotuneSpeed => { field: autotune_speed,         name: "Autotune Speed", min: 1, max: 10 },
     Magnitude    => { field: magnitude,               name: "Magnitude",     min: 1, max: 10 },
     PadMatrix    => { field: pad_matrix,              name: "Pad Matrix",    min: 0, max: 1  },
+    SynthOctave  => { field: synth_octave,            name: "Synth Octave",  min: -1, max: 1 },
+    VoiceVolume  => { field: voice_volume,            name: "Voice Volume",  min: 0, max: 20 },
+    MelodyVolume => { field: melody_volume,           name: "Melody Volume", min: 0, max: 20 },
+    DrumVolume   => { field: drum_volume,             name: "Drum Volume",   min: 0, max: 20 },
+    // Per-mode on/off (1 = enabled). Disabled modes are skipped when cycling.
+    ModePitch      => { field: mode_pitch,       name: "Pitch On",    min: 0, max: 1 },
+    ModeVocode     => { field: mode_vocode,      name: "Vocode On",   min: 0, max: 1 },
+    ModeDry        => { field: mode_dry,         name: "Dry On",      min: 0, max: 1 },
+    ModeTuned      => { field: mode_tuned,       name: "Tuned On",    min: 0, max: 1 },
+    ModeHarmony    => { field: mode_harmony,     name: "Harmony On",  min: 0, max: 1 },
+    ModePercussion => { field: mode_percussion,  name: "Percuss On",  min: 0, max: 1 },
 }
 
 /// Storage for all adjustable menu values
@@ -115,6 +130,18 @@ pub struct MenuValues {
     pub autotune_speed: i8,
     pub magnitude: i8,
     pub pad_matrix: i8,
+    /// Octave offset of the keypad synth note only (-1, 0, +1); vocals unaffected
+    pub synth_octave: i8,
+    pub voice_volume: i8,
+    pub melody_volume: i8,
+    pub drum_volume: i8,
+    /// Per-mode enable flags (1 = enabled, 0 = disabled).
+    pub mode_pitch: i8,
+    pub mode_vocode: i8,
+    pub mode_dry: i8,
+    pub mode_tuned: i8,
+    pub mode_harmony: i8,
+    pub mode_percussion: i8,
 }
 
 impl Default for MenuValues {
@@ -131,6 +158,18 @@ impl Default for MenuValues {
             autotune_speed: 5,
             magnitude: 5,
             pad_matrix: 0,
+            synth_octave: 0,
+            // 10 is unity gain, preserving the pre-settings mix exactly.
+            voice_volume: 10,
+            melody_volume: 10,
+            drum_volume: 10,
+            // All vocal modes enabled by default.
+            mode_pitch: 1,
+            mode_vocode: 1,
+            mode_dry: 1,
+            mode_tuned: 1,
+            mode_harmony: 1,
+            mode_percussion: 1,
         }
     }
 }
@@ -232,6 +271,9 @@ impl AppState {
                 AppState::EffectsProfile(ProcessingProfile::Dry)
             }
             AppState::EffectsProfile(ProcessingProfile::Dry) => {
+                AppState::EffectsProfile(ProcessingProfile::Tuned)
+            }
+            AppState::EffectsProfile(ProcessingProfile::Tuned) => {
                 AppState::EffectsProfile(ProcessingProfile::Harmony)
             }
             AppState::EffectsProfile(ProcessingProfile::Harmony) => {
@@ -247,6 +289,9 @@ impl AppState {
                 AppState::Processing(ProcessingProfile::Dry)
             }
             AppState::Processing(ProcessingProfile::Dry) => {
+                AppState::Processing(ProcessingProfile::Tuned)
+            }
+            AppState::Processing(ProcessingProfile::Tuned) => {
                 AppState::Processing(ProcessingProfile::Harmony)
             }
             AppState::Processing(ProcessingProfile::Harmony) => {
@@ -329,6 +374,9 @@ pub struct AppStateMachineSnapshot {
     pub octave_preset: i8,
     pub note: i8,
     pub volume: i8,
+    pub voice_volume: i8,
+    pub melody_volume: i8,
+    pub drum_volume: i8,
     pub crush: i8,
     pub sample_reduction: i8,
     pub bit_rate: i8,
@@ -336,6 +384,7 @@ pub struct AppStateMachineSnapshot {
     pub autotune_speed: i8,
     pub magnitude: i8,
     pub pad_matrix: i8,
+    pub synth_octave: i8,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
@@ -367,12 +416,59 @@ impl AppStateMachine {
             current_bitcrush: 0,
             current_formant: 0,
             current_waveform: 0,
-            current_percussion: 1,
+            current_percussion: 2, // drums
             volume: 10,
             note: 0,
             key_down_pressed: false,
             process_cycle_pressed: false,
             key_up_pressed: false,
+        }
+    }
+
+    /// The persisted settings: master volume plus every menu value.
+    pub fn saved_settings(&self) -> crate::settings_storage::SavedSettings {
+        crate::settings_storage::SavedSettings {
+            master: self.volume,
+            menu: MENU_ITEMS.map(|item| self.values.get(item)),
+        }
+    }
+
+    /// Restores persisted settings, clamping each value to its menu range.
+    pub fn apply_saved_settings(&mut self, saved: crate::settings_storage::SavedSettings) {
+        self.volume = saved.master.clamp(0, 20);
+        for (&item, &value) in MENU_ITEMS.iter().zip(saved.menu.iter()) {
+            self.values.set(item, value);
+        }
+    }
+
+    /// Whether a given vocal mode is enabled in settings.
+    fn is_mode_enabled(&self, profile: ProcessingProfile) -> bool {
+        match profile {
+            ProcessingProfile::PitchControl => self.values.mode_pitch != 0,
+            ProcessingProfile::Vocode => self.values.mode_vocode != 0,
+            ProcessingProfile::Dry => self.values.mode_dry != 0,
+            ProcessingProfile::Tuned => self.values.mode_tuned != 0,
+            ProcessingProfile::Harmony => self.values.mode_harmony != 0,
+            ProcessingProfile::Percussion => self.values.mode_percussion != 0,
+        }
+    }
+
+    /// Advance to the next enabled profile, skipping any the user disabled. If no
+    /// other mode is enabled it leaves the current state unchanged.
+    fn cycle_to_next_enabled_profile(&mut self) {
+        let mut candidate = self.state.cycle_profile();
+        // At most one full lap around the six profiles.
+        for _ in 0..6 {
+            match candidate {
+                AppState::EffectsProfile(p) | AppState::Processing(p) => {
+                    if self.is_mode_enabled(p) {
+                        self.state = candidate;
+                        return;
+                    }
+                    candidate = candidate.cycle_profile();
+                }
+                _ => return,
+            }
         }
     }
 
@@ -403,6 +499,9 @@ impl AppStateMachine {
             octave_preset: self.current_octave_preset,
             note: self.note,
             volume: self.volume,
+            voice_volume: self.values.voice_volume,
+            melody_volume: self.values.melody_volume,
+            drum_volume: self.values.drum_volume,
             crush: self.current_bitcrush,
             sample_reduction,
             bit_rate,
@@ -410,6 +509,7 @@ impl AppStateMachine {
             autotune_speed: self.values.autotune_speed,
             magnitude: self.values.magnitude,
             pad_matrix: self.values.pad_matrix,
+            synth_octave: self.values.synth_octave,
             key_down_pressed: self.key_down_pressed,
             process_cycle_pressed: self.process_cycle_pressed,
             key_up_pressed: self.key_up_pressed,
@@ -425,7 +525,7 @@ impl AppStateMachine {
             //adjust volume
             (AppState::Processing(_), AppEvent::EncoderRotate(delta))
             | (AppState::EffectsProfile(_), AppEvent::EncoderRotate(delta)) => {
-                self.volume = clamp_value(self.volume, delta, 0, 10);
+                self.volume = clamp_value(self.volume, delta, 0, 20);
             }
 
             // Handle keypad presses in Processing profile (for notes)
@@ -450,7 +550,9 @@ impl AppStateMachine {
                     // Row 3: Formant controls or waveform
                     7..=9 => {
                         match profile {
-                            ProcessingProfile::PitchControl | ProcessingProfile::Harmony => {
+                            ProcessingProfile::PitchControl
+                            | ProcessingProfile::Harmony
+                            | ProcessingProfile::Tuned => {
                                 // map 7/8/9 -> male/none/female (or whatever mapping you want)
                                 self.current_formant = match key {
                                     7 => 1, // male
@@ -489,7 +591,7 @@ impl AppStateMachine {
                     }
                     11 => {
                         self.process_cycle_pressed = true;
-                        self.state = self.state.cycle_profile(); // Cycle profile
+                        self.cycle_to_next_enabled_profile(); // Cycle, skipping disabled modes
                     }
                     12 => {
                         self.key_up_pressed = true;
@@ -555,26 +657,18 @@ impl AppStateMachine {
     // Add a current method to get menu context
     pub fn current(&self) -> MenuContext {
         let idx = self.active_menu_index().unwrap_or(0);
-        let menu_items = [
-            ("Pitch Low", self.values.pitch_low),
-            ("Pitch High", self.values.pitch_high),
-            ("Bit Rate 1", self.values.bit_rate_soft),
-            ("Bit Rate 2", self.values.bit_rate_harsh),
-            ("Sample Rate 1", self.values.sample_reduction_soft),
-            ("Sample Rate 2", self.values.sample_reduction_harsh),
-            ("Formant Male", self.values.formant_male),
-            ("Formant Female", self.values.formant_female),
-            ("Speed", self.values.autotune_speed),
-            ("Magnitude", self.values.magnitude),
-            ("Pad Matrix", self.values.pad_matrix),
-        ];
-
-        let total = menu_items.len();
+        let total = MENU_ITEMS.len();
+        // Driven straight off MENU_ITEMS so new menu entries appear automatically
+        // and can never drift out of sync with their indices.
+        let item_at = |i: usize| {
+            let item = MENU_ITEMS[i];
+            (MenuValues::get_item_name(item), self.values.get(item))
+        };
 
         MenuContext {
-            previous_item: menu_items[(idx + total - 1) % total],
-            current_item: menu_items[idx],
-            next_item: menu_items[(idx + 1) % total],
+            previous_item: item_at((idx + total - 1) % total),
+            current_item: item_at(idx),
+            next_item: item_at((idx + 1) % total),
         }
     }
 
@@ -783,6 +877,49 @@ mod tests {
 
         app.handle_event(AppEvent::EncoderDoublePress);
         assert!(matches!(app.state(), AppState::Processing(_)));
+    }
+
+    #[test]
+    fn test_cycle_dry_to_tuned_to_harmony() {
+        let dry = AppState::Processing(ProcessingProfile::Dry);
+        let tuned = dry.cycle_profile();
+        assert_eq!(tuned, AppState::Processing(ProcessingProfile::Tuned));
+        assert_eq!(
+            tuned.cycle_profile(),
+            AppState::Processing(ProcessingProfile::Harmony)
+        );
+    }
+
+    #[test]
+    fn test_tuned_effects_row3_selects_formant() {
+        let mut app = AppStateMachine::new();
+        app.state = AppState::EffectsProfile(ProcessingProfile::Tuned);
+        app.handle_event(AppEvent::KeypadPress(9));
+        assert_eq!(app.snapshot().formant, 2); // female
+        assert_eq!(app.snapshot().waveform, 0); // waveform untouched
+        app.handle_event(AppEvent::KeypadPress(7));
+        assert_eq!(app.snapshot().formant, 1); // male
+    }
+
+    #[test]
+    fn test_synth_octave_menu_clamped() {
+        let mut app = effects_app();
+        assert_eq!(app.snapshot().synth_octave, 0);
+
+        let idx = MENU_ITEMS
+            .iter()
+            .position(|&item| item == MenuItem::SynthOctave)
+            .unwrap();
+        app.handle_event(AppEvent::EncoderDoublePress);
+        for _ in 0..idx {
+            app.handle_event(AppEvent::EncoderRotate(1));
+        }
+        assert_eq!(app.current().current_item.0, "Synth Octave");
+        app.handle_event(AppEvent::EncoderPress);
+        app.handle_event(AppEvent::EncoderRotate(1)); // 0 → 1
+        app.handle_event(AppEvent::EncoderRotate(1)); // clamped at 1
+        app.handle_event(AppEvent::EncoderDoublePress);
+        assert_eq!(app.snapshot().synth_octave, 1);
     }
 
     #[test]
@@ -1019,5 +1156,58 @@ mod tests {
         app.handle_event(AppEvent::EncoderDoublePress);
 
         assert_eq!(app.get_values().formant_female, 6);
+    }
+
+    #[test]
+    fn test_saved_settings_roundtrip() {
+        let mut source = AppStateMachine::new();
+        source.volume = 14;
+        source.values.formant_male = 3;
+        source.values.formant_female = 8;
+        source.values.mode_vocode = 0;
+        source.values.synth_octave = -1;
+
+        let mut restored = AppStateMachine::new();
+        restored.apply_saved_settings(source.saved_settings());
+        assert_eq!(restored.saved_settings(), source.saved_settings());
+        assert_eq!(restored.get_values().formant_male, 3);
+        assert_eq!(restored.get_values().formant_female, 8);
+        assert_eq!(restored.get_values().mode_vocode, 0);
+        assert_eq!(restored.get_values().synth_octave, -1);
+    }
+
+    #[test]
+    fn test_apply_saved_settings_clamps_to_menu_range() {
+        let mut app = AppStateMachine::new();
+        let mut saved = app.saved_settings();
+        saved.master = 99;
+        saved.menu = [127; crate::settings_storage::MENU_VALUE_COUNT];
+        app.apply_saved_settings(saved);
+        assert_eq!(app.volume, 20);
+        assert_eq!(app.get_values().formant_male, 10);
+        assert_eq!(app.get_values().synth_octave, 1);
+    }
+
+    #[test]
+    fn test_default_saved_settings_match_new_app() {
+        assert_eq!(
+            crate::settings_storage::SavedSettings::default(),
+            AppStateMachine::new().saved_settings()
+        );
+    }
+
+    #[test]
+    fn test_cycle_skips_disabled_mode() {
+        let mut app = effects_app(); // EffectsProfile(PitchControl)
+
+        // Disable Vocode; leave the rest enabled.
+        app.values.mode_vocode = 0;
+
+        // Cycling from PitchControl should skip Vocode and land on Dry.
+        app.handle_event(AppEvent::KeypadPress(11));
+        assert!(matches!(
+            app.state(),
+            AppState::EffectsProfile(ProcessingProfile::Dry)
+        ));
     }
 }

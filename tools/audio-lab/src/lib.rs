@@ -3,6 +3,19 @@ use std::time::Instant;
 use synthphone_e_vocal_dsp::{dsp::normalize_sample, MusicalSettings, VocalEffectsConfig};
 pub mod emulator;
 pub mod replay;
+#[path = "../../../src/audio/mod.rs"]
+pub mod audio;
+#[path = "../../../src/percussion.rs"]
+pub mod percussion;
+#[path = "../../../src/settings_storage.rs"]
+pub mod settings_storage;
+#[path = "../../../src/state_machine/mod.rs"]
+pub mod state_machine;
+#[path = "../../../src/midi/notes.rs"]
+pub mod midi_notes;
+pub mod midi { pub use crate::midi_notes as notes; }
+#[path = "../../../src/midi/voice_generator.rs"]
+pub mod voice_generator;
 
 // Compile the same entry point and constants as the device, without its HAL.
 #[path = "../../../src/constants.rs"]

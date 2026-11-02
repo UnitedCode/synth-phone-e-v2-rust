@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "hound",
  "libm",
+ "log",
  "synthphone-e-vocal-dsp",
 ]
 
@@ -34,6 +35,12 @@ name = "libm"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
+
+[[package]]
+name = "log"
+version = "0.4.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 
 [[package]]
 name = "microfft"
@@ -79,7 +86,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "synthphone-e-vocal-dsp"
 version = "0.1.1"
-source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=ac8cc3582d3f0c0ee53ab0ad9af840e9d80ce6bc#ac8cc3582d3f0c0ee53ab0ad9af840e9d80ce6bc"
+source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=59a1c1a08776a747bd71014fd508e3c936c83093#59a1c1a08776a747bd71014fd508e3c936c83093"
 dependencies = [
  "libm",
  "microfft",

@@ -393,6 +393,11 @@ pub fn prepare(renode: &Path, directory: &Path, managed: &Path) -> Result<()> {
             };
             pinned_replace(&mut code,needle,&replacement)?;
         }
+        // A stalled second word restarts the instruction. Commit neither
+        // destination until both loads complete, since Rn may alias Rt.
+        pinned_replace(&mut code,
+            "                        /* ldrd */\n                        tmp = gen_ld32(addr, context_to_mmu_index(s));\n                        store_reg(s, rs, tmp);\n                        tcg_gen_addi_i32(addr, addr, 4);\n                        tmp = gen_ld32(addr, context_to_mmu_index(s));\n                        store_reg(s, rd, tmp);",
+            "                        /* ldrd: preserve aliased base across precise retries */\n                        tmp = gen_ld32(addr, context_to_mmu_index(s));\n                        tcg_gen_addi_i32(addr, addr, 4);\n                        tmp2 = gen_ld32(addr, context_to_mmu_index(s));\n                        store_reg(s, rs, tmp);\n                        store_reg(s, rd, tmp2);")?;
         for (needle,replacement) in [
             ("case 4: /* dsb */\n                case 5: /* dmb */", "case 4: /* dsb */\n                    gen_helper_daisy_barrier(cpu_env, tcg_const_i32(4));\n                    ARCH(7); gen_dxb(s); return;\n                case 5: /* dmb */\n                    gen_helper_daisy_barrier(cpu_env, tcg_const_i32(5));"),
             ("case 4: /* dsb */\n                                    case 5: /* dmb */", "case 4: /* dsb */\n                                        gen_helper_daisy_barrier(cpu_env, tcg_const_i32(4));\n                                        gen_dxb(s); break;\n                                    case 5: /* dmb */\n                                        gen_helper_daisy_barrier(cpu_env, tcg_const_i32(5));")

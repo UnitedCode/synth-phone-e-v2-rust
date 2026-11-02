@@ -65,11 +65,24 @@ probe_try_xn:
     .thumb_func
 probe_xn_resume:
     pop {{r4, pc}}
+    .global probe_ldrd_alias
+    .thumb_func
+probe_ldrd_alias:
+    ldr r0, =ldrd_alias_data
+    ldrd r0, r1, [r0]
+    eors r0, r1
+    bx lr
+    .section .flashprobe,"a",%progbits
+    .balign 32
+    .space 28
+ldrd_alias_data:
+    .word 0x12345678, 0x9abcdef0
 "#
 );
 extern "C" {
     fn probe_try_xn();
     fn probe_xn_resume();
+    fn probe_ldrd_alias() -> u32;
 }
 
 #[no_mangle]
@@ -236,6 +249,11 @@ unsafe extern "C" fn probe_main() -> ! {
     record(92, read(0x20017000));
     // Doubleword FP transfers require word alignment, not 8-byte alignment.
     asm!("vldr d2,[r1]","vstr d2,[{value}]",in("r1") 0x20017004_u32,value=in(reg) RESULTS.add(93),out("d2") _);
+    // The two words cross a flash-buffer boundary. A stall on word 2 must
+    // not overwrite the base register with word 1 before retrying LDRD.
+    write(0x52002000, 2);
+    barriers();
+    record(95, probe_ldrd_alias());
     phase(0xab);
     loop {
         asm!("wfi", options(nostack));

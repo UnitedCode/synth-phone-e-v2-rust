@@ -13,6 +13,7 @@ mod transition_probe;
 mod vector_probe;
 mod sdram_probe;
 mod sai_probe;
+mod settings_probe;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -35,6 +36,7 @@ enum RunMode {
     Startup,
     Storage,
     Cpu,
+    Settings,
 }
 
 fn checked(command: &mut Command) -> Result<()> {
@@ -46,6 +48,9 @@ fn checked(command: &mut Command) -> Result<()> {
 
 // A hung/crashed emulator cannot count as a successful negative control.
 fn bounded(command: &mut Command, log: &Path) -> Result<()> {
+    bounded_with_limit(command, log, Duration::from_secs(180))
+}
+fn bounded_with_limit(command: &mut Command, log: &Path, limit: Duration) -> Result<()> {
     let output = File::create(log)?;
     let mut child = command
         .stdin(Stdio::null())
@@ -60,7 +65,7 @@ fn bounded(command: &mut Command, log: &Path) -> Result<()> {
             }
             return Ok(());
         }
-        if start.elapsed() > Duration::from_secs(180) {
+        if start.elapsed() > limit {
             child.kill()?;
             child.wait()?;
             return Err(format!("Emulator timed out; see {}", log.display()).into());
@@ -207,9 +212,14 @@ impl Host<'_> {
                 "VIRTUAL_DAISY_INFRASTRUCTURE",
                 self.managed.join("Infrastructure.dll"),
             );
-        bounded(
+        if fault == "settings" {
+            command.arg(self.directory.join("settings.stimulus"))
+                .env("VIRTUAL_DAISY_AUDIO_STEPS", "300");
+        }
+        bounded_with_limit(
             &mut command,
             &self.directory.join(format!("{label}.host.log")),
+            Duration::from_secs(if fault == "settings" {600} else {180}),
         )?;
         grade::execution_evidence(&capture)?;
         if ![
@@ -471,6 +481,7 @@ fn run(
         "summary.txt",
         "probe-summary.txt",
         "startup-summary.txt",
+        "settings-summary.txt",
         "storage-summary.txt",
         "cpu-summary.txt",
     ] {
@@ -594,6 +605,7 @@ fn run(
             RunMode::Startup => "startup",
             RunMode::Storage => "storage",
             RunMode::Cpu => "cpu",
+            RunMode::Settings => "settings",
         },
     )?;
     let tone = directory.join("tone.f32le");
@@ -608,6 +620,9 @@ fn run(
         board,
         ideal_line,
     };
+    if mode == RunMode::Settings {
+        return settings_probe::run(&host, &silence);
+    }
     if mode == RunMode::Startup {
         let capture = host.boot("startup", &tone, "startup")?;
         grade::boot_evidence(&capture)?;
@@ -935,7 +950,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if args.len() >= 3
-        && ["run", "probe", "timing", "startup", "storage", "cpu"]
+        && ["run", "probe", "timing", "startup", "storage", "cpu", "settings"]
             .contains(&args[0].to_string_lossy().as_ref())
     {
         let mut board = None;
@@ -1003,7 +1018,9 @@ fn main() -> Result<()> {
             input,
             board,
             ideal_line,
-            if args[0] == "cpu" {
+            if args[0] == "settings" {
+                RunMode::Settings
+            } else if args[0] == "cpu" {
                 RunMode::Cpu
             } else if args[0] == "storage" {
                 RunMode::Storage
@@ -1018,5 +1035,5 @@ fn main() -> Result<()> {
             },
         );
     }
-    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu|settings RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

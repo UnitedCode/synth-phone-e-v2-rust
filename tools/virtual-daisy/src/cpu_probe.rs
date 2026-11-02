@@ -69,6 +69,7 @@ pub fn check(prefix: &Path, shared_stack: bool, eager: bool) -> Result<()> {
     )?;
     equal(words[93], 0x88776655, "word-aligned f64 load low")?;
     equal(words[94], 0xccbbaa99, "word-aligned f64 load high")?;
+    equal(words[95], 0x88888888, "stalled LDRD with base/destination overlap")?;
     for phase in 11..=17 {
         let base = 64 + (phase - 11) * 4;
         equal(
