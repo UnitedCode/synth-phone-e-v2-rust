@@ -155,7 +155,7 @@ impl Default for MenuValues {
             sample_reduction_harsh: 16,
             formant_male: 5,
             formant_female: 5,
-            autotune_speed: 5,
+            autotune_speed: 10,
             magnitude: 5,
             pad_matrix: 0,
             synth_octave: 0,
@@ -752,7 +752,7 @@ impl AppStateMachine {
 
     /// Sets one of the fine-tune menu values (pitch presets, bit rate,
     /// sample rate, formant ratios, magnitude) from an incoming MIDI CC on
-    /// 34-42, scaling the 0-127 CC value proportionally into that item's
+    /// 34-42 and 44-46, scaling the 0-127 CC value proportionally into that item's
     /// range.
     pub fn set_menu_value_from_cc(&mut self, controller: u8, value: u8) {
         let item = match controller {
@@ -767,6 +767,7 @@ impl AppStateMachine {
             42 => MenuItem::Magnitude,
             44 => MenuItem::VoiceVolume,
             45 => MenuItem::MelodyVolume,
+            46 => MenuItem::AutotuneSpeed,
             _ => return,
         };
         let (min, max) = MenuValues::range(item);

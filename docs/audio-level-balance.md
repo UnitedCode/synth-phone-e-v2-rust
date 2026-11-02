@@ -1,6 +1,9 @@
 # Voice/note balance on updated `clankers`
 
-`clankers` includes main `a2119fd` and its pinned vocal DSP `59a1c1a`. The new
+The volume captures below record `clankers` at `cd4bb42`, including main
+`a2119fd` and vocal DSP `59a1c1a`. The later [autotune speed update](autotune-speed.md)
+pins DSP `cddeddc`; these retained volume captures remain tied to their original
+images. The new
 Tuned mode, separate synth octave, mode switches, drum/ringer/DTMF sounds, saved
 settings, background flash task and emulator LDRD retry fix are retained.
 These volume changes stay on `clankers` for hardware validation. Keep CI off;

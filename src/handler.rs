@@ -2,7 +2,7 @@ use crate::midi::get_midi_queue_status;
 use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
-use app_lib::vocal_frame::{default_config, process_frame};
+use app_lib::vocal_frame::{config_for_speed, process_frame};
 use app_lib::output_mix;
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
@@ -128,7 +128,7 @@ pub fn audio_handler(
                                                 msm.set_volume_from_midi(value);
                                             });
                                         }
-                                        34..=42 | 44..=45 => {
+                                        34..=42 | 44..=46 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_menu_value_from_cc(controller, value);
                                             });
@@ -397,6 +397,7 @@ pub fn handle_vocal_effects(
     let mut synth_gain = 1.0f32;
     let mut key = 0i8;
     let mut pitch_ratio = 1.0f32;
+    let mut autotune_speed = 5;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
         let snapshot = asm.snapshot();
@@ -409,6 +410,7 @@ pub fn handle_vocal_effects(
             AppState::Splash => {}
         }
         formant = snapshot.formant;
+        autotune_speed = snapshot.autotune_speed;
         synth_gain = output_mix::synth_gain(snapshot.melody_volume);
         key = snapshot.key;
         // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
@@ -523,7 +525,7 @@ pub fn handle_vocal_effects(
         octave_ratio: pitch_ratio,
         mode,
     };
-    let config = default_config();
+    let config = config_for_speed(autotune_speed);
     let mut input_buffer = [0.0; FFT_SIZE];
     let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);
     ctx.in_ring
@@ -540,7 +542,7 @@ pub fn handle_vocal_effects(
         last_output_phases,
         cached_harmony_envelope,
         cached_harmony_inv_envelope,
-        *previous_pitch_shift_ratio,
+        previous_pitch_shift_ratio,
         &config,
         &musical_settings,
     );

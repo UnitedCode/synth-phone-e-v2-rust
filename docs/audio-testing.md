@@ -110,6 +110,12 @@ does not consume either field. The firmware passes a previous pitch ratio of 1.0
 without updating it. Fixing this requires persistent correction state and tests for
 note changes/settling time, not more manual adjustment of those configuration fields.
 
+That describes the original baseline. The `clankers` stateful correction update
+now connects speed and retains the ratio; both control probes respond. The fresh
+default preserves the old fast sound, while lower settings glide. See
+[autotune speed verification](autotune-speed.md) for its regression scope and
+the remaining formant/estimator limitations.
+
 Another mismatch is preserved for a faithful baseline: the DSP's default sample
 rate is 48,000 Hz while the device constant is 48,014.312 Hz. This is only about half
 a cent and cannot explain the large failures. The lab deliberately does not change

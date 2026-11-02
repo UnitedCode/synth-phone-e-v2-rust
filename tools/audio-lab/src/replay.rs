@@ -12,6 +12,7 @@ pub struct Replay {
     inv_envelope: [f32; FFT_SIZE / 2],
     counter: usize,
     pending: Option<u32>,
+    correction_ratio: f32,
     pub hops: usize,
 }
 
@@ -33,6 +34,7 @@ impl Replay {
             inv_envelope: [1.0; FFT_SIZE / 2],
             counter: 0,
             pending: None,
+            correction_ratio: 1.0,
             hops: 0,
         }
     }
@@ -50,6 +52,7 @@ impl Replay {
         self.inv_envelope.fill(1.0);
         self.counter = 0;
         self.pending = None;
+        self.correction_ratio = 1.0;
         self.hops = 0;
     }
 
@@ -95,7 +98,7 @@ impl Replay {
             &mut self.output_phases,
             &mut self.envelope,
             &mut self.inv_envelope,
-            1.0,
+            &mut self.correction_ratio,
             config,
             settings,
         );

@@ -15,6 +15,7 @@ mod sdram_probe;
 mod sai_probe;
 mod settings_probe;
 mod level_check;
+mod autotune_check;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -944,6 +945,12 @@ fn run(
 
 fn main() -> Result<()> {
     let args: Vec<_> = env::args_os().skip(1).collect();
+    if args.len() == 2 && args[0] == "autotune-analyze" {
+        return autotune_check::analyze(Path::new(&args[1]));
+    }
+    if args.len() == 7 && args[0] == "autotune" {
+        return autotune_check::run(Path::new(&args[1]), Path::new(&args[2]), Path::new(&args[3]), Path::new(&args[4]), Path::new(&args[5]), Path::new(&args[6]));
+    }
     if args.len() == 2 && args[0] == "levels-analyze" {
         return level_check::analyze(Path::new(&args[1]));
     }
@@ -1046,5 +1053,5 @@ fn main() -> Result<()> {
             },
         );
     }
-    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu|settings RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy levels RENODE_RUNTIME PREPARED_DIRECTORY MAIN.elf CLANKERS.elf VOCAL_48014.wav OUTPUT_DIRECTORY\n       virtual-daisy levels-analyze OUTPUT_DIRECTORY\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
+    Err("Usage: virtual-daisy run|probe|timing|startup|storage|cpu|settings RENODE_RUNTIME OUTPUT_DIRECTORY --board rev4|rev5|rev7 [--codec NAME] [--audio-boundary serial|ideal-line] [INPUT.wav]\n       virtual-daisy levels RENODE_RUNTIME PREPARED_DIRECTORY MAIN.elf CLANKERS.elf VOCAL_48014.wav OUTPUT_DIRECTORY\n       virtual-daisy levels-analyze OUTPUT_DIRECTORY\n       virtual-daisy autotune RENODE_RUNTIME PREPARED_DIRECTORY BEFORE.elf AFTER.elf VOCAL_48014.wav OUTPUT_DIRECTORY\n       virtual-daisy autotune-analyze OUTPUT_DIRECTORY\n       virtual-daisy profiles\n       virtual-daisy grade CAPTURE_PREFIX".into())
 }

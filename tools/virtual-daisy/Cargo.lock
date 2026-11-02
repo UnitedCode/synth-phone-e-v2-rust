@@ -151,7 +151,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "synthphone-e-vocal-dsp"
 version = "0.1.1"
-source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=59a1c1a08776a747bd71014fd508e3c936c83093#59a1c1a08776a747bd71014fd508e3c936c83093"
+source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=cddeddc84ad5b1d11a8c7e15f414f381186e633f#cddeddc84ad5b1d11a8c7e15f414f381186e633f"
 dependencies = [
  "libm",
  "microfft",

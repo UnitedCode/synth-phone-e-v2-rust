@@ -97,7 +97,6 @@ mod rtic_app {
             in_ring: RingBuffer<BUFFER_SIZE>,
             out_ring: RingBuffer<BUFFER_SIZE>,
             in_pointer_cached: u32,
-            previous_pitch_shift_ratio: f32,
             app_state_machine: AppStateMachine,
             old_matrix_state: [[bool; 3]; 4],
             display_needs_update: bool,
@@ -334,7 +333,6 @@ mod rtic_app {
                 Shared {
                     in_ring: RingBuffer::new(),
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
-                    previous_pitch_shift_ratio: 1.0,
                     in_pointer_cached: 0,
                     app_state_machine: AppStateMachine::new(),
                     old_matrix_state: [[false; 3]; 4],
@@ -422,7 +420,6 @@ mod rtic_app {
                 in_ring,
                 out_ring,
                 in_pointer_cached,
-                previous_pitch_shift_ratio,
                 app_state_machine,
                 midi_events,
                 voice_manager,
@@ -608,7 +605,6 @@ mod rtic_app {
             shared = [
                 in_ring,
                 out_ring,
-                previous_pitch_shift_ratio,
                 app_state_machine,
                 in_pointer_cached,
                 voice_manager,

@@ -1,9 +1,27 @@
 //! Hardware-independent entry point shared by the firmware and audio lab.
-use synthphone_e_vocal_dsp::{process_vocal_effects_1024, MusicalSettings, VocalEffectsConfig};
+use synthphone_e_vocal_dsp::{
+    process_vocal_effects_1024_with_state, MusicalSettings, VocalEffectsConfig,
+};
 
 /// Keep the existing firmware configuration in one place for offline replay.
 pub fn default_config() -> VocalEffectsConfig {
-    VocalEffectsConfig::default()
+    let mut config = VocalEffectsConfig::default();
+    // The old stateless path applied 99% correction from unity every hop.
+    // Preserve that steady-state amount while making transition speed stateful.
+    config.pitch_correction_strength = 0.99;
+    // Existing devices always snapped quickly because the speed was ignored.
+    // Keep that sound as the fresh default (menu 10); lower settings now glide.
+    config.transition_speed = 1.0;
+    config
+}
+
+/// Higher menu values correct faster. Coefficients are fractions per FFT hop.
+/// At the device hop rate, level 1 has about 530 ms time constant; 10 snaps.
+pub fn config_for_speed(speed: i8) -> VocalEffectsConfig {
+    const SPEEDS: [f32; 10] = [0.01, 0.018, 0.032, 0.056, 0.1, 0.18, 0.32, 0.56, 0.8, 1.0];
+    let mut config = default_config();
+    config.transition_speed = SPEEDS[(speed.clamp(1, 10) - 1) as usize];
+    config
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -14,11 +32,11 @@ pub fn process_frame(
     output_phases: &mut [f32; 1024],
     harmony_envelope: &mut [f32; 512],
     harmony_inv_envelope: &mut [f32; 512],
-    previous_ratio: f32,
+    previous_ratio: &mut f32,
     config: &VocalEffectsConfig,
     settings: &MusicalSettings,
 ) -> [f32; 1024] {
-    process_vocal_effects_1024(
+    process_vocal_effects_1024_with_state(
         input,
         Some(carrier),
         input_phases,
