@@ -174,7 +174,16 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             clock=machine.ObtainManagedThread(Tick,1000000);clock.Start();
         }
         public uint ReadDoubleWord(long offset) { lock(sync) return native.ReadDoubleWord(offset); }
-        public void WriteDoubleWord(long offset, uint value) { lock(sync) { if(inFlight && offset==0x10+activeStream*0x18 && (value&1)==0) {disableAfterFlight=true;value|=1;} native.WriteDoubleWord(offset, value); UpdateIrqs(); } }
+        public void WriteDoubleWord(long offset, uint value) { lock(sync) {
+            long active=0x10+activeStream*0x18;
+            if(inFlight && (offset==active+12 || offset==active+16)) {
+                uint cr=native.ReadDoubleWord(active);
+                if((cr&(1U<<18))!=0 && ((offset==active+16)==((cr&(1U<<19))!=0)))
+                    throw new InvalidOperationException("Active DMA double-buffer rewrite during an in-flight beat is unsupported");
+            }
+            if(inFlight && offset==active && (value&1)==0) {disableAfterFlight=true;value|=1;}
+            native.WriteDoubleWord(offset, value); UpdateIrqs();
+        } }
         public void OnGPIO(int number, bool value)
         {
             if(!value) return;
@@ -276,7 +285,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             this.rcc = rcc;
             this.rxChannel = rxChannel;
             this.dma=dma;
-            dma.Ready=()=> {lock(sync) PumpRequests();};
+            dma.Ready=()=> {lock(sync) {PumpRequests();UpdateIrq();}};
             native = new DaisyNative(libraryPath, 7, 0x400);
             var library = NativeLibrary.Load(libraryPath);
             var configure = Marshal.GetDelegateForFunctionPointer<ConfigureNative>(NativeLibrary.GetExport(library, "daisy_sai_configure"));
@@ -286,13 +295,15 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             setRate = Marshal.GetDelegateForFunctionPointer<RateNative>(NativeLibrary.GetExport(library, "daisy_sai_rate"));
             fault = Marshal.GetDelegateForFunctionPointer<FaultNative>(NativeLibrary.GetExport(library, "daisy_sai_fault"));
             requests = Marshal.GetDelegateForFunctionPointer<Requests>(NativeLibrary.GetExport(library, "daisy_sai_requests"));
+            irq = Marshal.GetDelegateForFunctionPointer<Requests>(NativeLibrary.GetExport(library, "daisy_sai_irq"));
             input = Marshal.GetDelegateForFunctionPointer<Input>(NativeLibrary.GetExport(library, "daisy_sai_input"));
             save = Marshal.GetDelegateForFunctionPointer<SaveNative>(NativeLibrary.GetExport(library, "daisy_sai_save"));
             clock = machine.ObtainManagedThread(Tick, 1000000);
             clock.Start();
         }
-        public uint ReadDoubleWord(long offset) { lock(sync) return native.ReadDoubleWord(offset); }
-        public void WriteDoubleWord(long offset, uint value) { lock(sync) { native.WriteDoubleWord(offset, value); if(offset==4) cr1=native.ReadDoubleWord(4); if(offset==0xc) frcr=native.ReadDoubleWord(0xc); if(offset == 4 || offset == 0x24) PumpRequests(); } }
+        public uint ReadDoubleWord(long offset) { lock(sync) {uint value=native.ReadDoubleWord(offset);UpdateIrq();return value;} }
+        public void WriteDoubleWord(long offset, uint value) { lock(sync) { native.WriteDoubleWord(offset, value); if(offset==4) cr1=native.ReadDoubleWord(4); if(offset==0xc) frcr=native.ReadDoubleWord(0xc); if(offset == 4 || offset == 0x24) PumpRequests();UpdateIrq(); } }
+        private void UpdateIrq() {IRQ.Set(irq(native.State)!=0);}
         private void Tick()
         {
             // RCC reset can call Reset(). Do not hold the SAI lock while
@@ -305,6 +316,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             {
                 if(frames!=0 && setRate(native.State,rate)!=0) throw new InvalidOperationException("Invalid SAI frame rate");
                 for(uint frame=0;frame<frames;frame++) { if(codec.WithState(state=>codecTick(native.State,state,IdealLineInput ? 1U:0U))!=0) throw new InvalidOperationException("Unsupported codec audio path"); PumpRequests(); }
+                UpdateIrq();
             }
         }
         private void PumpRequests() {
@@ -319,11 +331,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         }
         public void LoadInput(float[] samples) { lock(sync) input(native.State, samples, (UIntPtr)(samples.Length / 2)); }
         public void Save(string path) { uint rate=rcc.Rate(cr1,frcr); lock(sync) { if(save(native.State,path,rate)!=0) throw new IOException("Could not save virtual SAI output"); } rcc.Save(cr1,frcr,path+".clock.txt"); codec.Save(path+".codec.txt",IdealLineInput,rcc.ExactRate(cr1,frcr)); }
-        public void Reset() { lock(sync) { native.Reset(); cr1=0; frcr=0; } }
+        public void Reset() { lock(sync) { native.Reset(); cr1=0; frcr=0;IRQ.Unset(); } }
         public void Dispose() { clock.Dispose(); }
         public long Size { get { return 0x400; } }
         public GPIO DmaA { get; } = new GPIO();
         public GPIO DmaB { get; } = new GPIO();
+        public GPIO IRQ {get;} = new GPIO();
         public bool SuppressReceive { set { lock(sync) fault(native.State, value ? 1U : 0U); } }
         public bool IdealLineInput { get; set; }
         private readonly object sync = new object();
@@ -339,6 +352,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private uint cr1, frcr;
         private readonly FaultNative fault;
         private readonly Requests requests;
+        private readonly Requests irq;
         private readonly Input input;
         private readonly SaveNative save;
     }

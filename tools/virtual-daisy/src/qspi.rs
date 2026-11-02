@@ -42,6 +42,7 @@ pub struct Qspi {
     timed_out: bool,
     schedule_changed: bool,
     chip: NorFlash,
+    instruction_sent: bool,
 }
 impl Qspi {
     pub fn watches_memory(&self) -> bool {
@@ -161,6 +162,9 @@ impl Qspi {
             return Err("invalid QSPI access width");
         }
         if offset == 0x20 {
+            if self.registers[5] >> 26 & 3 == 3 {
+                return Ok(0);
+            }
             if self.registers[5] >> 26 & 3 == 2 {
                 self.poll_ready = false;
                 return Ok(if width == 4 {
@@ -275,7 +279,12 @@ impl Qspi {
         }
         self.registers[offset as usize / 4] = value;
         if offset == 0x14 {
-            self.command = value as u8;
+            self.instruction_sent = false;
+            self.command = if value >> 8 & 3 == 0 {
+                self.chip.continuous_opcode().unwrap_or(value as u8)
+            } else {
+                value as u8
+            };
             self.expected = if value >> 24 & 3 != 0 {
                 u64::from(self.registers[4]) + 1
             } else {
@@ -295,7 +304,19 @@ impl Qspi {
             } else if !self.waiting_address {
                 self.start(0)?;
             }
-        } else if offset == 0x18 && self.waiting_address {
+        } else if offset == 0x18
+            && (self.waiting_address
+                || (self.registers[5] >> 10 & 3 != 0 && self.registers[5] >> 26 & 3 != 3))
+        {
+            if !self.waiting_address {
+                self.fifo.clear();
+                self.pending.clear();
+                self.written = 0;
+                self.received = 0;
+                self.receiving = false;
+                self.transmitting = false;
+                self.poll_ready = false;
+            }
             self.waiting_address = false;
             self.start(value)?;
         }
@@ -309,11 +330,11 @@ impl Qspi {
             return Err("Daisy has one flash on QSPI bank1");
         }
         let ccr = self.registers[5];
+        if ccr & (1 << 29) != 0 {
+            return Err("QSPI free-running pin clock is not implemented");
+        }
         if ccr & (1 << 31) != 0 {
             return Err("QSPI DDR protocol is not implemented");
-        }
-        if ccr & (1 << 28) != 0 {
-            return Err("QSPI instruction-once continuous-read mode is not implemented");
         }
         if ccr >> 26 & 3 == 2 && self.expected > 4 {
             return Err("QSPI polling reads at most four status bytes");
@@ -323,8 +344,13 @@ impl Qspi {
         let data = (ccr >> 24) & 3;
         let read = ccr >> 26 & 3 != 0;
         let mode = if self.chip.is_qpi() { 3 } else { 1 };
-        if instruction != mode {
+        if instruction != mode
+            && !(instruction == 0 && self.chip.continuous_opcode() == Some(self.command))
+        {
             return Err("IS25LP instruction lane mode mismatch");
+        }
+        if ccr & (1 << 28) != 0 && !(read && matches!(self.command, 0xbb | 0xeb)) {
+            return Err("QSPI SIOO requires a supported IS25LP I/O read command");
         }
         if address != 0 && (ccr >> 12 & 3 != 2) {
             return Err("IS25LP requires a 24-bit address phase");
@@ -335,10 +361,23 @@ impl Qspi {
                 if address == 0 && data == 0 && !read => {}
             1 | 0x42 | 0xc0 if address == 0 && data == mode && !read && self.expected == 1 => {}
             2 if address == mode && data == mode && !read => {}
+            0x32 | 0x38
+                if !self.chip.is_qpi()
+                    && self.chip.quad_enabled()
+                    && address == 1
+                    && data == 3
+                    && !read => {}
             0x20 | 0xd7 | 0x52 | 0xd8 if address == mode && data == 0 && !read => {}
             5 | 0x48 | 0x9f | 0xaf | 0xab if address == 0 && data == mode && read => {}
             0x90 if address == mode && data == mode && read => {}
             3 | 0x0b if address == mode && data == mode && read => {}
+            0x3b if !self.chip.is_qpi() && address == 1 && data == 2 && read => {}
+            0xbb if !self.chip.is_qpi() && address == 2 && data == 2 && read => {}
+            0x6b if !self.chip.is_qpi()
+                && self.chip.quad_enabled()
+                && address == 1
+                && data == 3
+                && read => {}
             0xeb if address == 3
                 && data == 3
                 && read
@@ -357,6 +396,11 @@ impl Qspi {
                 }
             }
             let alternate_mode = (ccr >> 14) & 3;
+            if alternate_mode != 0
+                && (!matches!(self.command, 0xbb | 0xeb) || alternate_mode != address)
+            {
+                return Err("IS25LP alternate mode byte lane mismatch");
+            }
             let mode_clocks = if alternate_mode == 0 {
                 0
             } else {
@@ -396,13 +440,7 @@ impl Qspi {
                     .ok_or("QSPI poll time overflow")?;
             }
         } else if self.registers[5] >> 26 & 3 == 1 {
-            let bytes = self.chip.transact(
-                self.command,
-                address & 0xffffff,
-                &[],
-                self.expected.min(32) as usize,
-                self.chip.is_qpi(),
-            )?;
+            let bytes = self.read_packet(address, self.expected.min(32) as usize)?;
             self.received = bytes.len() as u64;
             self.fifo.extend(bytes);
             self.receiving = true;
@@ -455,13 +493,7 @@ impl Qspi {
         Ok(())
     }
     fn poll_once(&mut self) -> Result<(), &'static str> {
-        let bytes = self.chip.transact(
-            self.command,
-            self.address & 0xffffff,
-            &[],
-            self.expected as usize,
-            self.chip.is_qpi(),
-        )?;
+        let bytes = self.read_packet(self.address, self.expected as usize)?;
         self.last_status = bytes
             .iter()
             .enumerate()
@@ -504,8 +536,14 @@ impl Qspi {
                 bits / (1 << (mode - 1))
             }
         };
-        phase(8, (ccr >> 8) & 3)
-            + phase(8 * u64::from(((ccr >> 12) & 3) + 1), (ccr >> 10) & 3)
+        phase(
+            8,
+            if ccr & (1 << 28) != 0 && self.instruction_sent {
+                0
+            } else {
+                (ccr >> 8) & 3
+            },
+        ) + phase(8 * u64::from(((ccr >> 12) & 3) + 1), (ccr >> 10) & 3)
             + phase(8 * u64::from(((ccr >> 16) & 3) + 1), (ccr >> 14) & 3)
             + u64::from((ccr >> 18) & 31)
             + phase(bytes * 8, (ccr >> 24) & 3)
@@ -545,26 +583,32 @@ impl Qspi {
     }
     pub fn read_mapped(&mut self, address: u32, bytes: usize) -> Result<Vec<u8>, &'static str> {
         self.check_mapped(address, bytes)?;
-        let data = self.chip.transact(
-            self.command,
-            address & 0xffffff,
-            &[],
-            bytes,
-            self.chip.is_qpi(),
-        )?;
+        let clocks = self.frame_clocks_for(bytes.max(32) as u64);
+        let data = self.read_packet(address, bytes)?;
         self.busy = true;
         if self.registers[0] & 8 != 0 {
             // Timeout begins after the 32-byte prefetch buffer has filled.
             self.timeout_at = Some(
                 self.now
-                    .checked_add(self.cycles_ns(
-                        self.frame_clocks_for(bytes.max(32) as u64)
-                            + u64::from(self.registers[12] & 0xffff),
-                    )?)
+                    .checked_add(self.cycles_ns(clocks + u64::from(self.registers[12] & 0xffff))?)
                     .ok_or("QSPI timeout overflow")?,
             );
             self.schedule_changed = true;
         }
+        Ok(data)
+    }
+    fn read_packet(&mut self, address: u32, bytes: usize) -> Result<Vec<u8>, &'static str> {
+        let ccr = self.registers[5];
+        let instruction = (ccr >> 8) & 3 != 0 && !(ccr & (1 << 28) != 0 && self.instruction_sent);
+        let mode = if (ccr >> 14) & 3 == 0 {
+            None
+        } else {
+            Some((self.registers[7] >> (8 * ((ccr >> 16) & 3))) as u8)
+        };
+        let data =
+            self.chip
+                .framed_read(self.command, address & 0xffffff, bytes, instruction, mode)?;
+        self.instruction_sent = true;
         Ok(data)
     }
     fn cycles_ns(&self, cycles: u64) -> Result<u64, &'static str> {
@@ -577,7 +621,7 @@ impl Qspi {
         .map_err(|_| "QSPI time overflow")
     }
     fn finish_write(&mut self) -> Result<(), &'static str> {
-        let address = if self.command == 2 {
+        let address = if matches!(self.command, 2 | 0x32 | 0x38) {
             (self.address & !255)
                 | ((u64::from(self.address) + self.written - self.pending.len() as u64) as u32
                     & 255)

@@ -208,7 +208,7 @@ pub fn prepare(
         "none"
     };
     platform.push_str(&format!("\n\ncodec: Miscellaneous.DaisyI2c @ {registration}\n    libraryPath: \"{}\"\n    kind: {}\n\noled: Miscellaneous.DaisyI2c @ i2c1 0x3c\n    libraryPath: \"{}\"\n    kind: 5\n", library.display(), board.codec_kind(), library.display()));
-    platform.push_str(&format!("\nsai1: Miscellaneous.DaisySai @ {{ sysbus 0x40015800; rcc RegistrationPeripheralAlias.SAI1 }}\n    libraryPath: \"{}\"\n    codec: codec\n    rcc: rcc\n    dma: dma1\n    rxChannel: {}\n    DmaA -> dmamux1@87\n    DmaB -> dmamux1@88\n", library.display(), board.rx_channel()));
+    platform.push_str(&format!("\nsai1: Miscellaneous.DaisySai @ {{ sysbus 0x40015800; rcc RegistrationPeripheralAlias.SAI1 }}\n    libraryPath: \"{}\"\n    codec: codec\n    rcc: rcc\n    dma: dma1\n    rxChannel: {}\n    DmaA -> dmamux1@87\n    DmaB -> dmamux1@88\n    IRQ -> nvic@87\n", library.display(), board.rx_channel()));
     if board == Board::Rev4 {
         platform = platform.replace("    11 -> timer2@03", "    11 -> timer2@03 | codec@0");
     }

@@ -219,11 +219,22 @@ the additional behavior needed by this firmware:
   separate half/full/error interrupt flags and write-one-to-clear behavior.
   DMA1 cannot access ITCM/DTCM or RAM holes; illegal transfers set TEIF and clear EN.
   Configuration writes are protected while enabled; double-buffer inactive
-  pointers remain writable. Other DMA widths, bursts, FIFO packing, memory-to-memory
-  and non-audio request paths are not implemented.
+  pointers remain writable. Updating the active double buffer between beats sets
+  TEIF and disables the stream; rewriting it during an in-flight beat fails
+  explicitly because partial-transfer timing is not modeled. CT selects M1 only
+  in double-buffer mode. Other DMA widths, bursts, FIFO packing, peripheral flow
+  control, memory-to-memory and non-audio request paths are not implemented;
+  unsupported format enables fail rather than running as direct single beats.
 - Revision-specific SAI receive/transmit FIFOs with signed 24-bit stereo samples, DMA request
   connections through DMAMUX and explicit under/overrun counters. TX prefill works
-  before channel enable, matching the firmware's startup wait.
+  before channel enable, matching the firmware's startup wait. Disabled subblocks
+  preserve their queued words without receiving/consuming new data. RX overrun
+  retains old words; RX and TX recover at the slot where their error occurred.
+  OVRUDR, MUTEDET and WCKCFG are sticky per block, with write-only clearing and
+  masked shared IRQ87. TX/RX FIFO levels use their distinct register encodings.
+  Frame-level mute can send zero or the previous slot values while consuming
+  FIFO entries; two-slot mono duplicates TX slot0 and discards RX slot1. This is
+  a word-level boundary, not a model of bit edges or mid-frame register writes.
 - GPIO input/output, pulls, BSRR (set wins), analog-mode input disconnection,
   open-drain release/sink and the LCKR write/read locking sequence, including
   protected alternate-function fields. Output latches remain writable after locking.
@@ -300,7 +311,11 @@ formats remain explicitly unsupported.
 AK4556 and PCM3060 also require a connected MCLK and documented slave-clock
 ratios. PCM3060's ADC rejects the 128/192fs ratios that are valid only for its
 DAC. AK4556 checks necessary ratios across its documented slave modes; this
-does not infer unverified CKS strap settings or certify speed/frequency limits.
+does not infer unverified CKS strap settings or certify a selected speed mode.
+Necessary frequency checks now also follow AK4556 Table2's ratio-dependent
+speed-mode union and PCM3060's 16–96kHz ADC range and 2.048–36.864MHz system
+clock range. Passing those checks still does not establish physical AK straps,
+variable-pitch support or electrical clock waveforms.
 
 The memory map constrains internal flash to 128 KiB and SDRAM to 64 MiB; it
 retains the actual SRAM/DTCM regions. Generic H743 extra flash and huge unused FMC
@@ -319,8 +334,18 @@ Rust-model registers/commands throw instead of returning invented success.
 QSPI indirect shifting is immediate functional FIFO service, not serial-edge
 timing. Polling and mapped reads use explicit clocked service scenarios. The
 mapped timeout assumes a 32-byte prefetch fill; it does not reconstruct speculative
-prefetch, nCS continuity or AXI/serial overlap. DDR, SIOO/continuous-read mode,
-security/UID/SFDP and the unused dual/quad-output SPI commands remain unsupported.
+prefetch, nCS continuity or AXI/serial overlap. SDR reads include dual output3Bh,
+quad output6Bh, dual I/O BBh and quad I/O EBh, with lane and dummy-clock checks.
+Quad-input32h/38h packets use the same WEL/QE, deferred programming and page
+wrap rules. SDR BBh/EBh continuous reads track explicit AX mode bytes, SIOO
+instruction history, CCR re-arming and instruction-less mode exit. Controller
+abort/reset does not reset the external chip's continuous-read mode. An omitted
+alternate-byte phase retains an explicit non-AX functional scenario, not an
+inference about floating dummy-cycle pins. Indirect AR writes can retrigger a
+command without rewriting CCR; mapped DR reads return zero. Fabric service
+estimates sample command cost at request time, not pin-level acceptance or
+speculative overlap. DDR needs a verified DTR-capable part variant; security,
+UID/SFDP and free-running pin clocks remain unsupported.
 Reads of a suspended programming target and reset during NVM operations fail
 explicitly because intermediate charge/corruption is not specified. See
 [the conformance record](daisy-conformance.md#external-nor-and-quadspi) for sources
@@ -354,6 +379,8 @@ RPIPE. Refresh has priority over new accesses, waits for an active transfer and
 precharges open rows. Delayed refresh sets RE; CRE clears it without resetting
 the timer, and REIE drives NVIC48. Timer deadlines use absolute rational-clock
 epochs so fractional nanoseconds do not accumulate as per-period rounding drift.
+Invalid write-recovery programming fails the timing model: RM0433 requires
+TWR ≥ TRAS − TRCD and TWR ≥ TRC − TRCD − TRP in addition to the chip's tWR.
 
 PALL, NRFS auto-refresh, mode-register quiet time, self-refresh/TXSR exit and
 power-down refresh are connected to the same service port. WP ignores writes;

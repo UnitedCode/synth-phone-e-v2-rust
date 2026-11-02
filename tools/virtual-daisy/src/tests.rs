@@ -89,6 +89,7 @@ fn gpio_alternate_signal_requires_matching_af_and_mode() {
 #[test]
 fn sai_stereo_sign_extension_fifo_prefill_and_codec_gate() {
     let mut sai = sai::Sai::default();
+    sai.write(0xc,63).unwrap();
     sai.input = vec![[-0.5, 0.25]; 2];
     assert!(sai.write(0x24, 1 << 17).is_err());
     sai.write(0x24, (1 << 17) | (6 << 5) | 2).unwrap();
@@ -97,6 +98,7 @@ fn sai_stereo_sign_extension_fifo_prefill_and_codec_gate() {
     sai.write(0x40, 0x0020_0000).unwrap();
     sai.tick(true);
     assert_eq!(sai.frames, 0); // RX disabled.
+    sai.write(0x24, (3 << 16) | (6 << 5) | 2).unwrap();
     sai.write(4, (1 << 16) | (1 << 17) | (6 << 5) | 1).unwrap();
     sai.tick(true);
     assert_eq!(sai.output[0], [-0.5, 0.25]);
@@ -113,7 +115,9 @@ fn sai_stereo_sign_extension_fifo_prefill_and_codec_gate() {
 #[test]
 fn sai_lost_rx_requests_overrun_and_empty_tx_underruns() {
     let mut sai = sai::Sai::default();
+    sai.write(0xc,63).unwrap();
     sai.write(4, (1 << 16) | (1 << 17) | (6 << 5) | 1).unwrap();
+    sai.write(0x24, (1 << 16) | (6 << 5) | 2).unwrap();
     sai.drop_rx = true;
     for _ in 0..5 {
         sai.tick(true);
@@ -121,6 +125,7 @@ fn sai_lost_rx_requests_overrun_and_empty_tx_underruns() {
     }
     assert_eq!(sai.overruns, 1);
     assert_eq!(sai.underruns, 5);
+    sai.write(4,(6<<5)|1).unwrap();
     sai.write(8, 8).unwrap();
     assert!(sai.read(0x20).is_err());
     for _ in 0..8 {

@@ -9,6 +9,7 @@ fn wm8731_lrswap_changes_captured_dac_channels_without_swapping_adc_channels() {
         register(&mut codec, 5, 1); // Disable HPF to isolate channel order.
         register(&mut codec, 7, 9 | (1 << 5)); // Table 15: DAC-only LRSWAP.
         let mut sai = Peripheral::new(7);
+        sai.write(0xc, 63).unwrap();
         sai.write(4, (6 << 5) | 1 | (3 << 16)).unwrap();
         sai.write(0x24, (6 << 5) | 2 | (3 << 16)).unwrap();
         let input = [0.5_f32, -0.75].repeat(22);
@@ -289,6 +290,84 @@ fn hardware_mode_codecs_require_mclk_and_pcm3060_adc_cannot_use_dac_only_ratios(
                 )
                 .is_err()); //128fs valid for DAC only
         }
+    }
+}
+
+#[test]
+fn ak4556_clock_ratio_ranges_follow_table_two_without_guessing_cks_straps() {
+    use virtual_daisy::clock::Rate;
+    let mut codec = Peripheral::new(9);
+    codec.codec_control(true).unwrap();
+    for (ratio, hz, valid) in [
+        (256, 7999, false),
+        (256, 8000, true),
+        (256, 108000, true),
+        (256, 108001, false),
+        (384, 96000, true),
+        (384, 96001, false),
+        (512, 54000, true),
+        (512, 54001, false),
+        (768, 48000, true),
+        (768, 48001, false),
+        (128, 108000, false),
+        (128, 108001, true),
+        (128, 216000, true),
+        (128, 216001, false),
+        (192, 96000, false),
+        (192, 96001, true),
+        (192, 192000, true),
+        (192, 192001, false),
+    ] {
+        assert_eq!(
+            codec
+                .validate_codec_clocks(
+                    Rate {
+                        numerator: ratio * hz,
+                        denominator: 1
+                    },
+                    Rate {
+                        numerator: hz,
+                        denominator: 1
+                    }
+                )
+                .is_ok(),
+            valid,
+            "ratio={ratio}, fs={hz}"
+        );
+    }
+}
+
+#[test]
+fn pcm3060_shared_adc_dac_clocks_obey_sampling_and_system_clock_operating_limits() {
+    use virtual_daisy::clock::Rate;
+    let mut codec = Peripheral::new(10);
+    for (ratio, hz, valid) in [
+        (256, 15999, false),
+        (256, 16000, true),
+        (256, 96000, true),
+        (256, 96001, false),
+        (384, 96000, true),
+        (512, 72000, true),
+        (512, 72001, false),
+        (768, 48000, true),
+        (768, 48001, false),
+    ] {
+        assert_eq!(
+            codec
+                .validate_codec_clocks(
+                    Rate {
+                        numerator: ratio * hz,
+                        denominator: 1
+                    },
+                    Rate {
+                        numerator: hz,
+                        denominator: 1
+                    }
+                )
+                .is_ok(),
+            valid,
+            "ratio={ratio}, fs={hz}"
+        );
     }
 }
 

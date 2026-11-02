@@ -507,7 +507,9 @@ Indirect transfers use immediate functional FIFO shifting. RM0433 states a
 32-byte FIFO and refill after four vacant bytes, but its FLEVEL<=11 example
 corresponds to a 16-byte FIFO. The model uses the stated 32-byte/four-vacant-byte
 rule and does not claim to resolve that contradictory example from silicon.
-DDR, SIOO, security/UID/SFDP and unused dual/quad-output SPI opcodes remain gaps.
+The subsequent v11 pass below adds SDR dual/quad reads, quad-input programming
+and explicit continuous-read packets. DDR part variants, security/UID/SFDP and
+free-running pin clocks remain outside the supported protocol model.
 
 A separate ITCM Thumb guest programs and erases through MMIO, sleeps in WFI
 until actual polling IRQ92 delivery, checks controller-reset persistence, executes
@@ -578,6 +580,77 @@ and [TI PCM3060 system-clock requirements](https://www.ti.com/lit/ds/symlink/pcm
 PCM3060's shared ADC/DAC wiring requires an ADC-compatible ratio;128/192fs is
 DAC-only. The AK4556 ratio union does not establish its physical CKS straps,
 speed selection, full operating-frequency limits or transition behavior.
+
+### Source audit v11: SAI, clock limits and serial packets
+
+RM0433 sections51.4.9,51.4.13–14 and51.6 now drive public FIFO and PCM tests.
+An RX overrun retains queued words and discards new data until the failed slot
+can resume. TX underrun sends zero and resumes at the failed slot, preventing
+left/right swaps after an odd number of FIFO words. Each block honors SAIEN;
+OVRUDR, MUTEDET and WCKCFG are sticky, CLRFR is write-only and IRQ87 combines
+the masked A/B sources. RX and TX FLVL quarter boundaries follow their distinct
+status-register definitions. Mute consumes TX entries while substituting zero
+or previous slot values; the receive mute counter rearms on nonzero data or
+disable. Two-slot mono consumes/stores one FIFO word per frame.
+
+Invalid MCLK frame lengths set WCKCFG and clear SAIEN, following the stated
+8–256, power-of-two clock-generator constraint. The error paragraph's conjunction
+is ambiguous; the model checks both required constraints rather than accepting
+a non-power-of-two frame in that range. The FIFO-request prose also contains
+FLVL comparisons inconsistent with the status table at exact TX quarter levels;
+the model retains the prose's explicit word-count request thresholds and uses
+the status table for FLVL. These discrepancies remain candidates for independent
+register captures. The CR2 table instructs disabling before FFLUSH, while51.4.9
+explicitly describes enabled flushing. The word-level model flushes in either
+state and preserves sticky flags; it does not infer mid-frame transition timing.
+
+An independent Rust guest checks the reset values, TX FLVL and MUTEDET via MMIO,
+then receives actual NVIC IRQ87 (exception103). Masked-NVIC and wrong-block-mask
+controls must fail the processor-written completion marker after successful
+guarded execution. Artifacts are `*.sai.bin`, `*.sai-probe.txt` and
+`*.sai-negative.txt`. Unsupported PDM, companding, external synchronization and
+alternate serial protocols cannot silently run as ordinary PCM.
+
+AK4556 MS0559-E-02 Table2 also constrains the necessary ratio-dependent sample
+rate ranges. The model checks the union of possible speed modes, without
+inventing CKS strap selection or variable-pitch behavior. PCM3060 SLAS533B's
+recommended operating limits constrain the shared path to16–96kHz and its system
+clock to2.048–36.864MHz. These checks do not establish analog performance.
+
+RM0433 section15.3.11 specifies TEIF and automatic disable when software rewrites
+the active double-buffer address. Between-beat public tests cover both CT values
+and permit inactive-buffer updates; the bridge rejects an in-flight active-buffer
+rewrite because partial-transfer consequences are not modeled. CT does not
+select M1 outside DBM. FIFO, burst and peripheral-flow formats fail explicitly
+instead of being treated as direct single-beat transfers. SDTR's two mandatory
+TWR inequalities are also checked before admitting a timing configuration.
+
+The [ISSI RevA2015 datasheet](https://lv.mouser.com/datasheet/3/3722/1/25LP032_64A_B.pdf),
+Table6.10 and sections8.4–8.9, specifies the additional SDR lane/dummy-clock rules.
+Tests program known bytes, read across the32-byte controller FIFO and check
+declared serial-service costs for3Bh/6Bh/BBh. Both32h/38h use deferred NOR
+programming, WEL/QE and page wrapping. The quad-program prose says four-pin
+instruction/address input, but its command table and Figure8.13 show those phases
+on IO0. The model follows that diagram's1-1-4 framing; this inconsistency is
+explicit rather than claimed resolved from hardware.
+
+RM0433 section23.3.13 rearms SIOO on every CCR write. ISSI's AX mode persists
+across controller abort/reset and exits through a read with non-AX mode bits.
+Public packet tests exercise first/later instruction costs, stale chip mode after
+CCR rearm, instruction-less exit and AR retrigger without rewriting CCR.
+Mode-less dummy phases preserve the existing non-AX functional scenario.
+Fabric costs are sampled at request time; command overlap, queued SIOO cost
+sampling, nCS/pin waveforms and instruction/data prefetch remain uncalibrated.
+DDR is not enabled without identifying the ordered part's DTR option. UID/SFDP
+contents and security rows are not synthesized as universal factory contents.
+
+This audit covers the implemented production-firmware audio/memory path. It is
+not a claim that every optional MCU peripheral, alternate bus protocol or board
+revision has been implemented. Such expansions are distinct from the remaining
+measurement needs: complete converter coefficients/rounding, analog behavior,
+physical clock/strap transitions, FIFO handshakes, cache victims/speculation and
+calibrated CPU/bus timing. Passing source-derived tests does not close those
+measurement gaps.
 
 Reference data must identify physical revision, codec marking, firmware ELF hash,
 settings, clock configuration, input/calibration and measurement method. Digital

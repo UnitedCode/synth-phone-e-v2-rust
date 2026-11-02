@@ -16,7 +16,7 @@ pub fn write(
 ) -> Result<()> {
     let mut report = String::new();
     for (key,value) in [
-        ("schema","virtual-daisy-conformance-v10"),
+        ("schema","virtual-daisy-conformance-v11"),
         ("requested_scope",scope),
         ("host_os",std::env::consts::OS),
         ("host_arch",std::env::consts::ARCH),
@@ -38,6 +38,13 @@ pub fn write(
         ("cache_victim_sequence_and_speculation","UNVERIFIED"),
         ("arm_generated_code_probe","REQUIRED"),
         ("dma_single_beat_request_order","FUNCTIONAL_PRIORITY_ARBITRATION"),
+        ("dma_active_double_buffer_write","TEIF_AND_DISABLE_BETWEEN_BEATS_INFLIGHT_REWRITE_UNSUPPORTED"),
+        ("sai_fifo_errors","RETAIN_QUEUED_RX_WORDS_ZERO_TX_AND_RESUME_AT_FAILED_SLOT"),
+        ("sai_status_and_irq87","STICKY_OVRUDR_MUTEDET_WCKCFG_PER_BLOCK_CLEAR_AND_SHARED_MASKED_IRQ"),
+        ("sai_reset_and_fifo_levels","CR1_0X40_MODE_DEPENDENT_TX_RX_QUARTER_BOUNDARIES"),
+        ("sai_mute_and_mono","FRAME_BOUNDARY_ZERO_OR_LAST_VALUES_FIFO_CONSUMPTION_TWO_SLOT_MONO"),
+        ("sai_bit_edges_and_mid_frame_writes","UNMODELED_WORD_LEVEL_PCM_BOUNDARY"),
+        ("arm_sai_irq_probe","MMIO_RESET_FIFO_LEVEL_MUTE_IRQ87_MASKED_NVIC_WRONG_BLOCK_CONTROLS_REQUIRED"),
         ("axi_admission_and_grants","SHARED_CPU_DMA_FABRIC"),
         ("flash_read_pipeline","LIVE_AND_STANDALONE_FUNCTIONAL_SERVICE_SCENARIO"),
         ("flash_program_erase","DEFERRED_FUNCTIONAL_MODEL"),
@@ -70,6 +77,7 @@ pub fn write(
         ("automatic_and_lazy_fp_frame_tcm_sram_and_return","FUNCTIONAL_RETRY_AND_PORT_SERVICE_SCENARIO"),
         ("fp_numerical_corner_cases_and_inflight_snapshot_reset","UNVERIFIED"),
         ("sdram_programmed_timing","ROW_BANK_TRCD_TRP_TRAS_TWR_AND_CAS_SERVICE_SCENARIO"),
+        ("sdram_recovery_constraints","TWR_GE_TRAS_MINUS_TRCD_AND_TRC_MINUS_TRCD_MINUS_TRP"),
         ("sdram_read_write_port","SHARED_SERVICE_RESERVATION"),
         ("sdram_direction_arbitration","OLDEST_DIRECTION_THEN_AXI_QOS_SCENARIO_NOT_SILICON_POLICY"),
         ("sdram_fifo_acceptance_and_command_overlap","AXI_ACCEPTANCE_DEPTH_AND_COMMAND_PIPELINE_UNVERIFIED"),
@@ -91,7 +99,8 @@ pub fn write(
         ("wm8731_sample_clock_ratios","NORMAL_USB_BOSR_SR_CLKIDIV2_CLKODIV2_RATIONAL_TABLES"),
         ("wm8731_live_clock_validation","POWERED_ADC_DAC_VS_SHARED_SAI_LRC_AND_MCLK"),
         ("ak4556_pcm3060_clock_validation","MCLK_REQUIRED_AND_DOCUMENTED_NECESSARY_SLAVE_RATIOS"),
-        ("hardware_codec_straps_rate_ranges_and_transients","UNVERIFIED_NOT_INFERRED_FROM_ALLOWED_RATIO_UNIONS"),
+        ("hardware_codec_rate_ranges","AK4556_TABLE2_NECESSARY_MODE_UNION_PCM3060_ADC_AND_SYSTEM_CLOCK_LIMITS"),
+        ("hardware_codec_straps_variable_pitch_and_transients","UNVERIFIED_NOT_INFERRED_FROM_ALLOWED_RATIO_UNIONS"),
         ("wm8731_filter_reconfiguration_transient","SURROGATE_RESTART_NOT_HARDWARE_WAVEFORM"),
         ("wm8731_lrswap","DAC_ONLY_SERIAL_AND_IDEAL_LINE_PCM_CHECKED"),
         ("complete_codec_filter_response","UNMODELED"),
@@ -105,7 +114,11 @@ pub fn write(
         ("qspi_indirect_shifting","IMMEDIATE_FUNCTIONAL_FIFO_NOT_SERIAL_EDGE_TIMING"),
         ("qspi_suspend","100US_SERVICE_SCENARIO_PROGRESS_CONTINUES_DURING_LATENCY"),
         ("qspi_function_register_write_duration","USES_STATUS_WRITE_SCENARIO_NOT_INDEPENDENTLY_SPECIFIED"),
-        ("qspi_unimplemented","DDR,SIOO,SECURITY_UID_SFDP,DUAL_AND_QUAD_OUTPUT_SPI_COMMANDS"),
+        ("qspi_sdr_read_program_protocols","SPI_DUAL_QUAD_OUTPUT_DUAL_QUAD_IO_AND_QUAD_INPUT_PROGRAM"),
+        ("qspi_sioo_ax_mode","SDR_BB_EB_INSTRUCTION_HISTORY_CCR_REARM_AND_EXPLICIT_MODE_BYTES"),
+        ("qspi_fabric_cost_sampling","SERVICE_ESTIMATED_AT_REQUEST_NOT_PIN_HANDSHAKES_OR_SPECULATIVE_OVERLAP"),
+        ("qspi_mode_less_dummy_bits","FUNCTIONAL_NON_AX_SCENARIO_NOT_PIN_STATE_RECONSTRUCTION"),
+        ("qspi_unimplemented","DDR_VARIANT_UNSPECIFIED,SECURITY_UID_SFDP,FREE_RUNNING_CLOCK"),
         ("reference_capture_provenance","ABSENT"),
     ] {writeln!(report,"{key}={value}")?;}
     for (key, path) in [
