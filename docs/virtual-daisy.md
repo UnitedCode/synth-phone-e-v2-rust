@@ -346,6 +346,12 @@ command without rewriting CCR; mapped DR reads return zero. Fabric service
 estimates sample command cost at request time, not pin-level acceptance or
 speculative overlap. DDR needs a verified DTR-capable part variant; security,
 UID/SFDP and free-running pin clocks remain unsupported.
+Single-byte NOR packets use the published 8/40µs typical/maximum scenario;
+longer packets use the 0.2/0.8ms page scenario. The documented 400µs
+resume-to-suspend interval is enforced. Reprogramming a byte without erase,
+including a previously programmed FF byte, fails explicitly rather than
+producing an invented result for that unsupported sequence. The ARM cache
+guest now observes a completed erase before programming its replacement code.
 Reads of a suspended programming target and reset during NVM operations fail
 explicitly because intermediate charge/corruption is not specified. See
 [the conformance record](daisy-conformance.md#external-nor-and-quadspi) for sources

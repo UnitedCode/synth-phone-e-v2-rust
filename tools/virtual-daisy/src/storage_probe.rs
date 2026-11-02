@@ -104,10 +104,15 @@ pub fn image(enable_irq: bool, corrupt_program: bool) -> Vec<u8> {
     t.emit(&[0x6820, 0x6268, 0x47b8, 0x62a8]); // Data, then execute MOVS r0,#9; BX LR.
     t.write(0, 3 | (3 << 24)); // Abort mapped before programming.
     t.write(0x14, 0x106);
+    t.write(0x14, 0x2520);
+    t.write(0x18, 0x100); // ISSI requires sector erase before reprogramming bytes.
+    wait_ready_irq(&mut t);
+    read_array(&mut t, 7); // Independently observe blank data before reprogramming.
+    t.write(0x14, 0x106);
     t.write(0x10, 3);
     t.write(0x14, 0x01002502);
     t.write(0x18, 0x100);
-    t.write(0x20, 0x47702001); // Only 1->0 transitions, no intervening erase.
+    t.write(0x20, 0x47702001); // Reprogram the erased target; M7 caches stay stale.
     wait_ready_irq(&mut t);
     t.write(0x14, 0x0d002503);
     t.emit(&[0x6820, 0x62e8, 0x47b8, 0x6328]); // Both caches must remain stale.
@@ -172,11 +177,20 @@ pub fn check(prefix: &std::path::Path) -> super::Result<()> {
         (".storage-early.bin", vec![0]),
         (
             ".storage-program.bin",
-            vec![0x42, 0x17609d, 3, 0x47702009, 0x47702009, 0, 3],
+            vec![0x42, 0x17609d, 3, 0x47702009, 0x47702009, 0, 4, u32::MAX],
         ),
         (
             ".storage.bin",
-            vec![0xab, 0x17609d, 3, 0x47702009, 0x47702009, u32::MAX, 4],
+            vec![
+                0xab,
+                0x17609d,
+                3,
+                0x47702009,
+                0x47702009,
+                u32::MAX,
+                5,
+                u32::MAX,
+            ],
         ),
         (
             ".storage-cache.bin",
@@ -197,6 +211,6 @@ pub fn check(prefix: &std::path::Path) -> super::Result<()> {
             }
         }
     }
-    std::fs::write(report, "arm_qspi_program_and_sector_erase=passed\ncontroller_reset_preserves_external_nor=passed\nautomatic_polling_irq92_wfi=passed\nprogram_pending_at_50us=passed\nirq_count=4\nmapped_data_and_execution=passed\nexternal_program_requires_explicit_dcache_and_icache_invalidation=passed\nmapped_timeout_irq_and_clock_rescheduling=passed\nserial_edges_and_physical_timing=UNVERIFIED\n")?;
+    std::fs::write(report, "arm_qspi_program_and_sector_erase=passed\ncontroller_reset_preserves_external_nor=passed\nautomatic_polling_irq92_wfi=passed\nprogram_pending_at_50us=passed\nirq_count=5\nerase_observed_before_reprogramming=passed\nmapped_data_and_execution=passed\nexternal_erase_program_requires_explicit_dcache_and_icache_invalidation=passed\nmapped_timeout_irq_and_clock_rescheduling=passed\nserial_edges_and_physical_timing=UNVERIFIED\n")?;
     Ok(())
 }

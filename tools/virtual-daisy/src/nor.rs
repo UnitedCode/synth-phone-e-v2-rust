@@ -10,10 +10,15 @@ enum Action {
 }
 struct Operation {
     finish: u64,
+    suspend_after: u64,
     action: Action,
 }
+struct Page {
+    data: [u8; 256],
+    programmed: [u64; 4],
+}
 pub struct NorFlash {
-    pages: BTreeMap<u32, Box<[u8; 256]>>,
+    pages: BTreeMap<u32, Box<Page>>,
     now: u64,
     pending: Option<Operation>,
     suspended: Option<Operation>,
@@ -217,6 +222,12 @@ impl NorFlash {
                 )
             }) && self.suspend_at.is_none()
             {
+                // Section8.21 requires at least 400us of resumed operation
+                // before another suspend. Behavior outside that limit is not
+                // specified; reject it rather than inventing a chip response.
+                if self.now < self.pending.as_ref().unwrap().suspend_after {
+                    return Err("IS25LP suspend requires 400us since resume");
+                }
                 self.suspend_at = Some(
                     self.now
                         .checked_add(100_000)
@@ -271,6 +282,10 @@ impl NorFlash {
             }
             0x7a | 0x30 => {
                 if let Some(mut operation) = self.suspended.take() {
+                    operation.suspend_after = self
+                        .now
+                        .checked_add(400_000)
+                        .ok_or("NOR resume-to-suspend time overflow")?;
                     operation.finish = self
                         .now
                         .checked_add(operation.finish)
@@ -336,16 +351,32 @@ impl NorFlash {
             2 | 0x32 | 0x38 if opcode == 2 || (!qpi && self.quad_enabled()) => {
                 if self.write_enable && !data.is_empty() && !self.protected(address, 1) {
                     let base = address & !(255) & (CAPACITY - 1);
-                    let bytes = data
+                    let bytes: Vec<_> = data
                         .iter()
                         .enumerate()
                         .skip(data.len().saturating_sub(256))
                         .map(|(i, &value)| (base | ((address.wrapping_add(i as u32)) & 255), value))
                         .collect();
+                    // Sections8.8–8.10 require erase before programming the
+                    // same byte again, even if its previous data was FF. Fail
+                    // this unsupported sequence before changing any cell.
+                    if bytes.iter().any(|&(address, _)| {
+                        self.pages.get(&(address >> 8)).is_some_and(|page| {
+                            let byte = (address & 255) as usize;
+                            page.programmed[byte / 64] & (1 << (byte % 64)) != 0
+                        })
+                    }) {
+                        return Err("IS25LP reprogramming a byte requires erase");
+                    }
                     self.pending = Some(Operation {
+                        suspend_after: 0,
                         finish: self
                             .now
-                            .checked_add(self.duration(200_000, 800_000))
+                            .checked_add(if data.len() == 1 {
+                                self.duration(8_000, 40_000)
+                            } else {
+                                self.duration(200_000, 800_000)
+                            })
                             .ok_or("NOR operation time overflow")?,
                         action: Action::Program(bytes),
                     });
@@ -359,6 +390,7 @@ impl NorFlash {
                     opcode == 1 && self.write_protect_low && !qpi && self.status & 0xc0 == 0x80;
                 if self.write_enable && !hardware_lock {
                     self.pending = Some(Operation {
+                        suspend_after: 0,
                         finish: self
                             .now
                             .checked_add(self.duration(2_000_000, 15_000_000))
@@ -383,6 +415,7 @@ impl NorFlash {
                     let base = address & (CAPACITY - 1) & !(size - 1);
                     if !self.protected(base, size) {
                         self.pending = Some(Operation {
+                            suspend_after: 0,
                             finish: self
                                 .now
                                 .checked_add(duration)
@@ -400,7 +433,7 @@ impl NorFlash {
         let address = address & (CAPACITY - 1);
         self.pages
             .get(&(address >> 8))
-            .map_or(0xff, |page| page[(address & 255) as usize])
+            .map_or(0xff, |page| page.data[(address & 255) as usize])
     }
     fn array_byte(&self, address: u32) -> Result<u8, &'static str> {
         let physical = address & (CAPACITY - 1);
@@ -469,10 +502,15 @@ impl NorFlash {
             match op.action {
                 Action::Program(bytes) => {
                     for (address, value) in bytes {
-                        self.pages
-                            .entry(address >> 8)
-                            .or_insert_with(|| Box::new([0xff; 256]))
-                            [(address & 255) as usize] &= value;
+                        let page = self.pages.entry(address >> 8).or_insert_with(|| {
+                            Box::new(Page {
+                                data: [0xff; 256],
+                                programmed: [0; 4],
+                            })
+                        });
+                        let byte = (address & 255) as usize;
+                        page.data[byte] &= value;
+                        page.programmed[byte / 64] |= 1 << (byte % 64);
                     }
                 }
                 Action::Erase(base, size) => self
