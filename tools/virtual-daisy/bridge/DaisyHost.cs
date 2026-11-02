@@ -281,11 +281,12 @@ public static class DaisyHost
         cpu.SP=0x2001f000;cpu.PC=0x9001;
         emulation.RunFor(TimeInterval.FromMicroseconds(50));
         File.WriteAllBytes(prefix+".storage-early.bin",bus.ReadBytes(0x2001a000UL,4));
-        emulation.RunFor(TimeInterval.FromMicroseconds(2950));
-        File.WriteAllBytes(prefix+".storage-program.bin",bus.ReadBytes(0x2001a000UL,28));
+        // The guest now erases before reprogramming, respecting ISSI8.8–8.10.
+        emulation.RunFor(TimeInterval.FromMicroseconds(Environment.GetEnvironmentVariable("VIRTUAL_DAISY_FLASH_MAXIMUM")=="1" ? 302950UL:72950UL));
+        File.WriteAllBytes(prefix+".storage-program.bin",bus.ReadBytes(0x2001a000UL,32));
         bus.WriteDoubleWord(0x2001a020,1);
         emulation.RunFor(TimeInterval.FromMilliseconds(Environment.GetEnvironmentVariable("VIRTUAL_DAISY_FLASH_MAXIMUM")=="1" ? 301UL:71UL));
-        File.WriteAllBytes(prefix+".storage.bin",bus.ReadBytes(0x2001a000UL,28));
+        File.WriteAllBytes(prefix+".storage.bin",bus.ReadBytes(0x2001a000UL,32));
         File.WriteAllBytes(prefix+".storage-cache.bin",bus.ReadBytes(0x2001a024UL,28));
         ((DaisyNvic)machine["sysbus.nvic"]).Architecture.Save(prefix+".memory.txt");
         Console.WriteLine("ARM QSPI storage/polling interrupt probe executed; results require Rust grading");

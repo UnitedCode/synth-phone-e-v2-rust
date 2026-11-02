@@ -63,8 +63,13 @@ fn mapped_nor_shares_physical_bytes_but_not_m7_cache_coherence() {
     assert_eq!(m.read_instruction(0x90000000, 4).unwrap(), 0x47702009);
     {
         let mut chip = q.lock().unwrap();
+        chip.write(0, 3, 4).unwrap();
+        chip.write(0x14, 0x106, 4).unwrap();
+        chip.write(0x14, 0x2520, 4).unwrap();
+        chip.write(0x18, 0, 4).unwrap();
+        chip.advance_time(70_200_000).unwrap();
         program(&mut chip, 0x47702001);
-        chip.advance_time(400_000).unwrap();
+        chip.advance_time(70_400_000).unwrap();
         mapped(&mut chip);
     }
     assert_eq!(m.read_dma(0x90000000, 4).unwrap(), 0x47702001);

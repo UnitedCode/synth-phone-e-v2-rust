@@ -335,9 +335,9 @@ fn automatic_status_polling_reports_unmasked_data_and_stops_on_match_with_irq() 
     assert_eq!(status & 0x3f3f, 0x24); // No FIFO data, poll available, busy.
     assert_eq!(qspi.read(0x20, 1).unwrap(), 3); // Unmasked WIP and WEL.
     assert!(!qspi.irq());
-    qspi.advance_time(199_999).unwrap();
+    qspi.advance_time(7_999).unwrap();
     assert_ne!(qspi.read(8, 4).unwrap() & 32, 0);
-    qspi.advance_time(200_000).unwrap();
+    qspi.advance_time(8_000).unwrap();
     assert_eq!(qspi.read(8, 4).unwrap() & 0x3f3f, 0xc);
     assert!(qspi.irq());
     qspi.write(0xc, 8, 4).unwrap();

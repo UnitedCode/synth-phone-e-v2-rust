@@ -16,7 +16,7 @@ pub fn write(
 ) -> Result<()> {
     let mut report = String::new();
     for (key,value) in [
-        ("schema","virtual-daisy-conformance-v11"),
+        ("schema","virtual-daisy-conformance-v12"),
         ("requested_scope",scope),
         ("host_os",std::env::consts::OS),
         ("host_arch",std::env::consts::ARCH),
@@ -113,6 +113,10 @@ pub fn write(
         ("qspi_mapped_prefetch","ONE_TRANSACTION_PER_REQUEST_32BYTE_TIMEOUT_FILL_SCENARIO"),
         ("qspi_indirect_shifting","IMMEDIATE_FUNCTIONAL_FIFO_NOT_SERIAL_EDGE_TIMING"),
         ("qspi_suspend","100US_SERVICE_SCENARIO_PROGRESS_CONTINUES_DURING_LATENCY"),
+        ("qspi_resume_to_suspend","400US_MINIMUM_VIOLATION_REJECTED_NOT_A_PREDICTED_SILICON_RESPONSE"),
+        ("qspi_program_scenarios","SINGLE_BYTE_8_40US_MULTI_BYTE_PAGE_200_800US_TYPICAL_MAXIMUM"),
+        ("qspi_reprogramming_without_erase","UNSUPPORTED_REJECTED_PER_BYTE_INCLUDING_PREVIOUSLY_PROGRAMMED_FF"),
+        ("arm_qspi_cache_probe_reprogramming","ERASE_OBSERVED_BEFORE_REPROGRAM_GUEST_IRQ_COUNT_FIVE"),
         ("qspi_function_register_write_duration","USES_STATUS_WRITE_SCENARIO_NOT_INDEPENDENTLY_SPECIFIED"),
         ("qspi_sdr_read_program_protocols","SPI_DUAL_QUAD_OUTPUT_DUAL_QUAD_IO_AND_QUAD_INPUT_PROGRAM"),
         ("qspi_sioo_ax_mode","SDR_BB_EB_INSTRUCTION_HISTORY_CCR_REARM_AND_EXPLICIT_MODE_BYTES"),
