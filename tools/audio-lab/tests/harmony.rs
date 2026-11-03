@@ -65,6 +65,7 @@ fn midi_only_harmony_is_silent_without_notes() {
     let input = tone(200.0, 0.5, &[(1, 0.2)]);
     let mut config = vocal_frame::default_config();
     config.harmony_lead_gain = 0.0;
+    config.sample_rate = SAMPLE_RATE;
     let settings = MusicalSettings {
         mode: ProcessingMode::Harmony,
         ..Default::default()
@@ -95,4 +96,83 @@ fn chord_note_order_does_not_change_the_audio() {
             "missing {note}"
         );
     }
+}
+
+#[test]
+fn shifting_one_clean_tone_does_not_add_audible_sidebands() {
+    let input = tone(200.0, 1.3, &[(1, 0.2)]);
+    let mut config = vocal_frame::default_config();
+    config.harmony_lead_gain = 0.0;
+    config.sample_rate = SAMPLE_RATE;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    for target in [220.0, 246.94165, 293.66476] {
+        settings.midi_frequencies[0] = target;
+        let output = render(&input, &[], &config, &settings);
+        let x = &output.audio[(SAMPLE_RATE * 0.3) as usize..(SAMPLE_RATE * 1.1) as usize];
+        // Independent least-squares projection onto the requested sinusoid.
+        // Energy outside this sinusoid is distortion, even if a pitch counter
+        // still reports the correct fundamental.
+        let (mut ss, mut cc, mut sc, mut xs, mut xc, mut xx) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        for (i, &sample) in x.iter().enumerate() {
+            let phase = std::f64::consts::TAU * target as f64 * i as f64 / SAMPLE_RATE as f64;
+            let (s, c) = phase.sin_cos();
+            let value = sample as f64;
+            ss += s * s;
+            cc += c * c;
+            sc += s * c;
+            xs += value * s;
+            xc += value * c;
+            xx += value * value;
+        }
+        let det = ss * cc - sc * sc;
+        let (a, b) = ((xs * cc - xc * sc) / det, (xc * ss - xs * sc) / det);
+        let residual = ((xx - a * xs - b * xc) / xx).max(0.0);
+        eprintln!("target {target}: unwanted energy {:.2}%", residual * 100.0);
+        assert!(
+            residual < 0.01,
+            "{target} Hz: {:.2}% unwanted energy",
+            residual * 100.0
+        );
+    }
+}
+
+#[test]
+fn a_held_midi_note_removes_vibrato_without_garbled_sidebands() {
+    let mut phase = 0.0_f64;
+    let input: Vec<_> = (0..(SAMPLE_RATE * 2.0) as usize)
+        .map(|i| {
+            let time = i as f64 / SAMPLE_RATE as f64;
+            let hz = 200.0 * 2_f64.powf(50.0 * (std::f64::consts::TAU * 5.0 * time).sin() / 1200.0);
+            phase += std::f64::consts::TAU * hz / SAMPLE_RATE as f64;
+            (0.2 * phase.sin()) as f32
+        })
+        .collect();
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = SAMPLE_RATE;
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 220.0;
+    let output = render(&input, &[], &config, &settings);
+    let samples = &output.audio[(SAMPLE_RATE * 0.4) as usize..(SAMPLE_RATE * 1.8) as usize];
+    let mut energy = 0.0_f64;
+    let (mut re, mut im) = (0.0, 0.0);
+    for (i, &x) in samples.iter().enumerate() {
+        let phase = std::f64::consts::TAU * 220.0 * i as f64 / SAMPLE_RATE as f64;
+        re += x as f64 * phase.cos();
+        im += x as f64 * phase.sin();
+        energy += (x as f64).powi(2);
+    }
+    let unwanted = 1.0 - 2.0 * (re * re + im * im) / (samples.len() as f64 * energy);
+    eprintln!("vibrato retune: unwanted energy {:.2}%", unwanted * 100.0);
+    assert!(
+        unwanted < 0.05,
+        "vibrato becomes distortion: {:.2}% unwanted energy",
+        unwanted * 100.0
+    );
 }

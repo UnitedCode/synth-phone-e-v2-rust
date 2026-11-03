@@ -127,6 +127,10 @@ fn counter(path: &Path, key: &str) -> Result<u64> {
 }
 
 fn listen(input: &Path, output: &Path) -> Result<()> {
+    listen_at(input, output, 0.1)
+}
+
+fn listen_at(input: &Path, output: &Path, target_rms: f64) -> Result<()> {
     let (rate, samples) = read(input)?;
     let m = metrics(&samples);
     if m.rms < 1e-7 || output.exists() {
@@ -134,7 +138,7 @@ fn listen(input: &Path, output: &Path) -> Result<()> {
     }
     // Playback only: a constant gain, without compression, filtering or a
     // firmware change. Preserve the raw capture for level comparisons.
-    let gain = (0.1 / m.rms).min(0.9 / f64::from(m.peak));
+    let gain = (target_rms / m.rms).min(0.9 / f64::from(m.peak));
     let mut writer = hound::WavWriter::create(
         output,
         hound::WavSpec {
@@ -281,6 +285,17 @@ fn main() -> Result<()> {
         [mode, source, out] if mode == "prepare" => prepare(Path::new(source), Path::new(out)),
         [mode, out] if mode == "inspect" => inspect(Path::new(out)),
         [mode, input, output] if mode == "listen" => listen(Path::new(input),Path::new(output)),
-        _ => Err("usage: harmony_capture prepare VOCAL.wav OUTPUT | inspect OUTPUT | listen INPUT.wav OUTPUT.wav".into()),
+        [mode, a,b,out_a,out_b] if mode == "match" => {
+            let (rate_a,pcm_a)=read(Path::new(a))?;
+            let (rate_b,pcm_b)=read(Path::new(b))?;
+            if rate_a!=rate_b || pcm_a.len()!=pcm_b.len() {return Err("matching requires the same rate and duration".into());}
+            let (ma,mb)=(metrics(&pcm_a),metrics(&pcm_b));
+            if ma.rms<1e-7 || mb.rms<1e-7 {return Err("need audible inputs".into());}
+            let target=0.1_f64.min(0.9*ma.rms/ma.peak as f64).min(0.9*mb.rms/mb.peak as f64);
+            println!("common playback RMS={target}");
+            listen_at(Path::new(a),Path::new(out_a),target)?;
+            listen_at(Path::new(b),Path::new(out_b),target)
+        }
+        _ => Err("usage: harmony_capture prepare VOCAL.wav OUTPUT | inspect OUTPUT | listen INPUT.wav OUTPUT.wav | match A.wav B.wav OUT_A.wav OUT_B.wav".into()),
     }
 }

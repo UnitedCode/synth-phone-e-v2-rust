@@ -235,7 +235,8 @@ pub fn run(directory: &Path) -> Result<()> {
     if fault_error <= MAX_SAMPLE_ERROR {
         return Err("ARM lost-frame negative control was not detected".into());
     }
-    let summary = format!("9/9 Cortex-M7 audio cases match host output within {MAX_SAMPLE_ERROR} peak sample error.\n\
+    let count = cases::COUNT;
+    let summary = format!("{count}/{count} Cortex-M7 audio cases match host output within {MAX_SAMPLE_ERROR} peak sample error.\n\
         SysTick interrupts occurred during the ARM workload ({} observed).\n\
         Injected lost frame was detected (peak sample error {fault_error:.6}).\n\
         ARM target: thumbv7em-none-eabihf; QEMU board: mps2-an500; CPU: cortex-m7.\n\

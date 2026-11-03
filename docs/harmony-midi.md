@@ -34,12 +34,23 @@ and phase per FFT bin. Close notes could overwrite one another. An independent
 sinusoidal projection test found the requested 220 Hz note almost absent in a
 four-note chord (amplitude 0.00078 for a 0.2-peak source).
 
-The new 1024-point streaming API keeps eight independent phase banks, retains
-held-note banks across chord changes, and sums the complex voice spectra before
-one shared inverse FFT. A fresh envelope is calculated every hop, eliminating
-the old silence-cached envelope delay. YIN selects the source harmonic and
-inter-frame phase refines its tuning; the old forced octave folding is absent.
-Near-unison wet and dry processing retain coherent input phase.
+The 1024-point streaming API retains one phase offset per MIDI voice and moves
+the bins of each vocal harmonic together, preserving their complex phase
+relationships. It sums the voice spectra before one shared inverse FFT. The
+fractional-bin interpolation accounts for the centre of the symmetric Hann
+window. This adapts the frequency-domain harmonizing method of
+[Laroche and Dolson](https://www.ee.columbia.edu/~dpwe/papers/LaroD99-pvoc.pdf)
+to monophonic vocal harmonics. A fresh envelope is calculated every hop. YIN
+selects the source harmonic and inter-frame phase refines its tuning; the old
+forced octave folding is absent. Near-unison wet and dry remain coherent.
+
+The first independent-bin implementation was a quality regression despite
+passing steady-tone chord tests. Reconstructing phase from the nearest input
+bin made that reference change as the sung pitch moved. A 200 Hz source with
+five-Hz, 50-cent vibrato, corrected to a held 220 Hz MIDI note, put 55.88% of
+output energy outside that note. The harmonic-region repair reduces this to
+about 0.01% in the same controlled test. This is a regression diagnostic, not
+a claim of universal perceptual quality or a percentage measured on a song.
 
 Independent voices initially caused 26 dropped FFT jobs in the four-note
 production-firmware fixture. A quarter-wave phase table with linear interpolation
@@ -48,14 +59,14 @@ below 0.000005. The optimized eight-note firmware fixture has zero dropped FFT
 jobs, clear Cortex-M fault registers, and zero DMA underruns/overruns. These are
 model results, not physical deadline measurements.
 
-The added state is initialized once in a dedicated, CPU-only AXI SRAM section.
+The state is initialized once in a dedicated, CPU-only AXI SRAM section.
 DMA buffers remain together in their original D2 SRAM region. Initialization
 explicitly writes NOLOAD storage and returns one exclusive reference to RTIC.
-The initializer and DSP dispatch boundaries are kept out of line: inlining the
-constructor inflated RTIC's initialization frame to about 104 KB and caused a
-real emulated Cortex-M fault. The corrected initialization frame is about 21 KB;
-the audio task's caller frame is about 12 KB. Builds and production captures,
-including Cortex-M fault-status checks, cover the memory layout.
+The initializer and DSP dispatch boundaries remain out of line. The earlier
+per-bin state could inflate RTIC's initialization frame and cause an emulated
+Cortex-M fault. The harmonic-coherent state occupies a 96-byte aligned SRAM
+section instead of 16,448 bytes. Builds and production captures, including
+Cortex-M fault-status checks, cover the memory layout.
 
 Legacy DSP entry points remain available. Firmware, host replay and ARM audio
 guest use the same pinned DSP revision; streaming pitch-correction state and
@@ -71,18 +82,18 @@ cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target
 ```
 
 The harmony tests independently probe requested frequencies, cover eight-note
-order independence, unison after silence and MIDI-only silence without keys.
+order independence, unison after silence, changing-pitch sidebands, and MIDI-only silence without keys.
 MIDI tests cover retrigger/release, channel isolation, pitch bend, sustain and
 panic. The established pitch sweep still has 192 known quality failures; this
 change introduces no new failures at the default fast setting.
 
-Local verification of DSP revision `55338e4d962f2ad85639b19226c4beba87d598d4`:
+Local verification of DSP revision `d7148ad9dc6f285876bf11d31ddc4e4f268d646f`:
 
-- 94 audio/MIDI/tool tests and 210 emulator-model tests pass on macOS and Linux.
+- 97 audio/MIDI/tool tests and 210 emulator-model tests pass on macOS and Linux.
 - Windows GNU cross-target checks pass for all audio/emulator Rust targets;
   this does not substitute for running on Windows.
 - DSP unit/integration tests pass, including the independent phase-table check.
-- Nine Cortex-M7 DSP guest cases match host PCM within 0.0001 peak error;
+- Ten Cortex-M7 DSP guest cases, including changing-pitch harmony, match host PCM within 0.0001 peak error;
   SysTick interrupts run and deliberate loss of an FFT frame is detected.
 - Four real production-ELF scenarios pass on virtual Rev5: matched old/new
   four-note audio, MIDI-only sustain/release, and eight-note harmony. They have
@@ -126,7 +137,8 @@ cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target
 ```
 
 Optional arguments `VOCAL.wav OUTPUT.wav START_SECONDS DURATION_SECONDS` render
-up to 30 seconds through the shared host DSP. This repeats the supplied vowel
+up to 600 seconds through the shared host DSP. `full` instead of a numeric
+duration renders to the end of the MIDI arrangement. This repeats the supplied vowel
 with short edge fades and preserves MIDI timing and pre-existing held notes.
 It is a host preview, not a production ARM capture or a singer performing lyrics.
 Use mono float 48014 Hz vocals. SMPTE-timed MIDI is explicitly rejected.
@@ -137,6 +149,8 @@ key metadata and note timing, and keeps shared pitches held until all source
 voices release them. It deliberately strips programs, controllers and bends;
 General MIDI CC7 setup messages would otherwise change the phone's master
 volume, and per-channel pedal/bend meanings cannot be retained on one channel.
+Repeated NoteOn within the same part is a retrigger, matching the phone's note
+policy; independent parts holding the same pitch still release independently.
 Use this only for vocal note arrangements; it does not identify or remove
 instrumental parts. Input with missing NoteOff messages is rejected.
 
@@ -146,6 +160,15 @@ gain and preserves the raw capture. Level-matched listening copies help separate
 pitch-content changes from loudness differences. Independent complex voices can
 be quieter at the same firmware gain than the old shared-bin sum; compare raw
 levels separately and use Voice Level on the device.
+
+`harmony_capture match A.wav B.wav OUT_A.wav OUT_B.wav` chooses a common RMS
+target that both recordings can reach with a constant gain and peak at most 0.9.
+It requires matching rates and durations. Use this for A/B comparisons: separate
+`listen` calls can reach different RMS levels when one file hits the peak limit.
+Full-arrangement demonstrations use the same neutral vowel and external MIDI
+through both DSP revisions; they are host-DSP renders. Short native captures
+verify the production firmware and scheduling separately. These files do not
+contain another song's lyrics or imply a performance by the original singer.
 
 A public file's title does not establish that it is the vocal arrangement.
 Inspect its register, track labels and chords before using it for rehearsal;

@@ -10,10 +10,10 @@ fn vocal_midi(
     timing: Timing,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     use midly::{Format, Header, TrackEvent};
-    let mut counts = [[0_usize; 128]; 16];
+    let mut held = BTreeMap::<(usize, u8, u8), ()>::new();
     let mut track = Vec::new();
     let mut last = 0_u64;
-    for &(tick, _, kind) in events {
+    for &(tick, part, kind) in events {
         let kind = match kind {
             TrackEventKind::Meta(
                 MetaMessage::Tempo(_)
@@ -21,7 +21,7 @@ fn vocal_midi(
                 | MetaMessage::KeySignature(..),
             ) => Some(kind),
             TrackEventKind::Midi { channel, message } => {
-                let ch = channel.as_int() as usize;
+                let ch = channel.as_int();
                 let (key, velocity, on) = match message {
                     MidiMessage::NoteOn { key, vel } if vel.as_int() > 0 => {
                         (key, vel.as_int(), true)
@@ -31,16 +31,14 @@ fn vocal_midi(
                     }
                     _ => continue,
                 };
-                let k = key.as_int() as usize;
-                let was_held = counts.iter().any(|c| c[k] > 0);
+                let k = key.as_int();
+                let was_held = held.keys().any(|&(_, _, note)| note == k);
                 if on {
-                    counts[ch][k] = counts[ch][k]
-                        .checked_add(1)
-                        .ok_or("too many overlapping notes")?;
-                } else if counts[ch][k] > 0 {
-                    counts[ch][k] -= 1;
+                    held.insert((part, ch, k), ());
+                } else {
+                    held.remove(&(part, ch, k));
                 }
-                let is_held = counts.iter().any(|c| c[k] > 0);
+                let is_held = held.keys().any(|&(_, _, note)| note == k);
                 if was_held == is_held {
                     None
                 } else {
@@ -71,7 +69,7 @@ fn vocal_midi(
             last = tick;
         }
     }
-    if counts.iter().flatten().any(|&c| c != 0) {
+    if !held.is_empty() {
         return Err("input has notes without NoteOff; refusing a stuck-note export".into());
     }
     let end = events.last().map_or(last, |e| e.0);
@@ -96,6 +94,7 @@ fn vocal_midi(
 
 fn render_reference(
     events: &[(f64, u8, MidiMessage)],
+    song_seconds: f64,
     args: &[String],
 ) -> Result<(), Box<dyn Error>> {
     use audio_lab::{
@@ -111,13 +110,17 @@ fn render_reference(
         );
     };
     let start: f64 = start.parse()?;
-    let duration: f64 = duration.parse()?;
+    let duration: f64 = if duration == "full" {
+        song_seconds - start
+    } else {
+        duration.parse()?
+    };
     if !start.is_finite()
         || start < 0.0
         || !duration.is_finite()
-        || !(0.1..=30.0).contains(&duration)
+        || !(0.1..=600.0).contains(&duration)
     {
-        return Err("invalid clip interval (duration 0.1..30 seconds)".into());
+        return Err("invalid clip interval (duration 0.1..600 seconds, or full)".into());
     }
     let reader = hound::WavReader::open(source)?;
     let spec = reader.spec();
@@ -267,7 +270,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     eprintln!("tracks={} note_counts={tracks:?} channels={channels:?} maximum_held={maximum} duration_seconds={:.3} unreleased={}", smf.tracks.len(), micros/1e6, held.len());
     if args.len() > 1 && !export {
-        render_reference(&timed_midi, &args[1..])?;
+        render_reference(&timed_midi, micros / 1e6, &args[1..])?;
     }
     Ok(())
 }
@@ -333,5 +336,37 @@ mod tests {
         assert!(smf.tracks[0].iter().any(
             |e| matches!(e.kind,TrackEventKind::Meta(MetaMessage::Tempo(t)) if t.as_int()==500_000)
         ));
+    }
+
+    #[test]
+    fn repeated_note_on_in_one_part_retriggers_instead_of_creating_a_stuck_note() {
+        let message = |on| TrackEventKind::Midi {
+            channel: 0.into(),
+            message: if on {
+                MidiMessage::NoteOn {
+                    key: 60.into(),
+                    vel: 80.into(),
+                }
+            } else {
+                MidiMessage::NoteOff {
+                    key: 60.into(),
+                    vel: 0.into(),
+                }
+            },
+        };
+        let events = [
+            (0, 0, message(true)),
+            (240, 0, message(true)),
+            (480, 0, message(false)),
+        ];
+        let bytes = vocal_midi(&events, Timing::Metrical(480.into()))
+            .expect("retrigger has a matching release");
+        let smf = Smf::parse(&bytes).unwrap();
+        let notes: Vec<_> = smf.tracks[0]
+            .iter()
+            .filter(|e| matches!(e.kind, TrackEventKind::Midi { .. }))
+            .collect();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[1].delta.as_int(), 480);
     }
 }

@@ -2,7 +2,7 @@
 use crate::constants::SAMPLE_RATE;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
-pub const COUNT: usize = 9;
+pub const COUNT: usize = 10;
 pub const INPUT_SAMPLES: usize = 24_000;
 pub const MAGIC: &[u8; 8] = b"SAEARM01";
 pub const NAMES: [&str; COUNT] = [
@@ -15,12 +15,13 @@ pub const NAMES: [&str; COUNT] = [
     "vocode",
     "female-bright-220",
     "male-sine-440",
+    "harmony-vibrato",
 ];
 
 pub fn settings(case: usize) -> MusicalSettings {
     let mode = match case {
         4 => ProcessingMode::Dry,
-        5 => ProcessingMode::Harmony,
+        5 | 9 => ProcessingMode::Harmony,
         6 => ProcessingMode::Vocode,
         _ => ProcessingMode::PitchControl,
     };
@@ -33,6 +34,8 @@ pub fn settings(case: usize) -> MusicalSettings {
         },
         midi_frequencies: if case == 5 {
             [220.0, 330.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        } else if case == 9 {
+            [220.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         } else {
             [0.0; 8]
         },
@@ -43,6 +46,12 @@ pub fn settings(case: usize) -> MusicalSettings {
 pub fn input(case: usize, index: usize) -> f32 {
     if case == 0 || index >= INPUT_SAMPLES {
         return 0.0;
+    }
+    if case == 9 {
+        let time = index as f32 / SAMPLE_RATE;
+        let phase = core::f32::consts::TAU * 200.0 * time
+            - 1.2 * libm::cosf(core::f32::consts::TAU * 5.0 * time);
+        return 0.2 * libm::sinf(phase);
     }
     let hz = match case {
         1 => 110.0,
