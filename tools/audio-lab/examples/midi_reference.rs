@@ -197,6 +197,108 @@ fn select_vocal_midi(
     Ok(result)
 }
 
+/// Combine prepared, single-track parts with an explicit MIDI role. The caller
+/// supplies the actual lead; no highest-note or melody inference is performed.
+fn route_roles(lead: &[u8], backing: &[u8], backing_level: u8) -> Result<Vec<u8>, Box<dyn Error>> {
+    use midly::{Format, Header, TrackEvent};
+    if backing_level > 127 {
+        return Err("CC48 must be 0..127".into());
+    }
+    let parts = [
+        Smf::parse(lead).map_err(|e| format!("invalid lead MIDI: {e:?}"))?,
+        Smf::parse(backing).map_err(|e| format!("invalid backing MIDI: {e:?}"))?,
+    ];
+    if parts.iter().any(|m| m.tracks.len() != 1) || parts[0].header.timing != parts[1].header.timing
+    {
+        return Err("use prepared single-track parts with matching MIDI timebases".into());
+    }
+    let mut events = Vec::new();
+    let mut tempos = [Vec::new(), Vec::new()];
+    let mut end = 0;
+    for (part, midi) in parts.iter().enumerate() {
+        let mut tick = 0_u64;
+        for event in &midi.tracks[0] {
+            tick += u64::from(event.delta.as_int());
+            end = end.max(tick);
+            match event.kind {
+                TrackEventKind::Midi {
+                    message: message @ (MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }),
+                    ..
+                } => events.push((
+                    tick,
+                    TrackEventKind::Midi {
+                        channel: if part == 0 { 3.into() } else { 0.into() },
+                        message,
+                    },
+                )),
+                TrackEventKind::Midi { .. } => {
+                    return Err("prepare notes-only parts before assigning roles".into())
+                }
+                TrackEventKind::Meta(MetaMessage::Tempo(tempo)) => {
+                    tempos[part].push((tick, tempo.as_int()));
+                    if part == 0 {
+                        events.push((tick, event.kind));
+                    }
+                }
+                TrackEventKind::Meta(
+                    MetaMessage::TimeSignature(..) | MetaMessage::KeySignature(..),
+                ) if part == 0 => events.push((tick, event.kind)),
+                _ => (),
+            }
+        }
+    }
+    if tempos[0] != tempos[1] {
+        return Err("lead and backing tempo maps differ".into());
+    }
+    events.sort_by_key(|e| e.0);
+    let mut track = vec![TrackEvent {
+        delta: 0.into(),
+        kind: TrackEventKind::Meta(MetaMessage::TrackName(
+            b"Explicit MIDI lead ch4 / backing ch1",
+        )),
+    }];
+    for (cc, value) in [(47, 0), (48, backing_level)] {
+        track.push(TrackEvent {
+            delta: 0.into(),
+            kind: TrackEventKind::Midi {
+                channel: 3.into(),
+                message: MidiMessage::Controller {
+                    controller: cc.into(),
+                    value: value.into(),
+                },
+            },
+        });
+    }
+    let mut last = 0;
+    for (tick, kind) in events {
+        let delta = u32::try_from(tick - last)?;
+        if delta > 0x0fff_ffff {
+            return Err("MIDI delta too large".into());
+        }
+        track.push(TrackEvent {
+            delta: delta.into(),
+            kind,
+        });
+        last = tick;
+    }
+    let delta = u32::try_from(end - last)?;
+    if delta > 0x0fff_ffff {
+        return Err("MIDI final delta too large".into());
+    }
+    track.push(TrackEvent {
+        delta: delta.into(),
+        kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+    });
+    let midi = Smf {
+        header: Header::new(Format::SingleTrack, parts[0].header.timing),
+        tracks: vec![track],
+    };
+    let mut bytes = Vec::new();
+    midi.write(&mut bytes)
+        .map_err(|e| format!("MIDI write failed: {e:?}"))?;
+    Ok(bytes)
+}
+
 fn render_reference(
     events: &[(f64, u8, MidiMessage)],
     song_seconds: f64,
@@ -251,6 +353,7 @@ fn render_reference(
         ..Default::default()
     };
     let mut next = 0;
+    let mut backing_level = 64;
     let n = (duration * SAMPLE_RATE as f64) as usize;
     for block in (0..n).step_by(BLOCK_SIZE) {
         for i in block..(block + BLOCK_SIZE).min(n) {
@@ -263,6 +366,11 @@ fn render_reference(
                     }
                     MidiMessage::NoteOff { key, .. } => manager.note_off(key.as_int(), channel),
                     MidiMessage::Controller { controller, value } => match controller.as_int() {
+                        47 => config.harmony_lead_gain = value.as_int() as f32 / 127.0,
+                        48 => {
+                            backing_level = value.as_int();
+                            manager.enable_midi_lead_routing();
+                        }
                         64 => manager.set_sustain(channel, value.as_int() >= 64),
                         120 => manager.all_notes_off(Some(channel)),
                         123 => manager.release_channel_notes(channel),
@@ -282,7 +390,8 @@ fn render_reference(
             let sample = source[j] * fade * 0.35;
             writer.write_sample(normalize_sample(replay.sample(sample), 0.8))?;
         }
-        settings.midi_frequencies = manager.get_cached_frequencies();
+        (settings.midi_frequencies, settings.midi_gains) =
+            manager.get_harmony_voices(backing_level);
         replay.finish_block(&[0.0; HOP_SIZE], &config, &settings, None);
     }
     writer.finalize()?;
@@ -320,6 +429,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         tracks.push(count);
     }
     events.sort_by_key(|e| e.0);
+    if args.get(1).is_some_and(|arg| arg == "--route-backing") {
+        if !(4..=5).contains(&args.len()) {
+            return Err(
+                "usage: midi_reference LEAD.mid --route-backing BACKING.mid OUTPUT.mid [BACKING_CC48]".into(),
+            );
+        }
+        if std::path::Path::new(&args[3]).exists() {
+            return Err("choose a new output file".into());
+        }
+        let backing_level = args
+            .get(4)
+            .map(|s| s.parse::<u8>())
+            .transpose()?
+            .unwrap_or(64);
+        let output = route_roles(&data, &std::fs::read(&args[2])?, backing_level)?;
+        std::fs::write(&args[3], output)?;
+        eprintln!("routed designated lead to channel 4, backing to channel 1; CC47=0 CC48={backing_level}");
+        return Ok(());
+    }
     if args.get(1).is_some_and(|arg| arg == "--split-upper-voice") {
         if args.len() != 4 {
             return Err(
@@ -423,6 +551,55 @@ fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     #[test]
+    fn explicit_role_export_keeps_a_low_lead_and_rejects_mismatched_clocks() {
+        let note = |key: u8, on| TrackEventKind::Midi {
+            channel: 0.into(),
+            message: if on {
+                MidiMessage::NoteOn {
+                    key: key.into(),
+                    vel: 100.into(),
+                }
+            } else {
+                MidiMessage::NoteOff {
+                    key: key.into(),
+                    vel: 0.into(),
+                }
+            },
+        };
+        let part = |key, tempo| {
+            vocal_midi(
+                &[
+                    (0, 0, TrackEventKind::Meta(MetaMessage::Tempo(tempo))),
+                    (0, 0, note(key, true)),
+                    (480, 0, note(key, false)),
+                    (960, 0, TrackEventKind::Meta(MetaMessage::EndOfTrack)),
+                ],
+                Timing::Metrical(480.into()),
+            )
+            .unwrap()
+        };
+        let lead = part(57, 500_000.into());
+        let backing = part(64, 500_000.into());
+        let bytes = route_roles(&lead, &backing, 64).unwrap();
+        let midi = Smf::parse(&bytes).unwrap();
+        let notes: Vec<_> = midi.tracks[0]
+            .iter()
+            .filter_map(|e| match e.kind {
+                TrackEventKind::Midi {
+                    channel,
+                    message: MidiMessage::NoteOn { key, .. },
+                } => Some((channel.as_int(), key.as_int())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notes, [(3, 57), (0, 64)]);
+        assert_eq!(
+            midi.tracks[0].iter().map(|e| e.delta.as_int()).sum::<u32>(),
+            960
+        );
+        assert!(route_roles(&lead, &part(64, 400_000.into()), 64).is_err());
+    }
+    #[test]
     fn upper_and_backing_are_disjoint_and_preserve_all_held_notes() {
         use std::collections::BTreeSet;
         let note = |key: u8, on| TrackEventKind::Midi {
@@ -495,11 +672,18 @@ mod tests {
                 1200
             );
         }
-        let mut crowded=Vec::new();
-        for key in 48..57 {crowded.push((0,0,note(key,true)));}
-        for key in 48..57 {crowded.push((480,0,note(key,false)));}
-        let merged=vocal_midi(&crowded,Timing::Metrical(480.into())).unwrap();
-        assert!(select_vocal_midi(&merged,0,127,8,1).is_err(),"never silently drop a backing note in a split preview");
+        let mut crowded = Vec::new();
+        for key in 48..57 {
+            crowded.push((0, 0, note(key, true)));
+        }
+        for key in 48..57 {
+            crowded.push((480, 0, note(key, false)));
+        }
+        let merged = vocal_midi(&crowded, Timing::Metrical(480.into())).unwrap();
+        assert!(
+            select_vocal_midi(&merged, 0, 127, 8, 1).is_err(),
+            "never silently drop a backing note in a split preview"
+        );
     }
     #[test]
     fn diagnostic_selection_preserves_timing_and_restores_held_lower_notes() {

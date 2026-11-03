@@ -2,7 +2,7 @@
 use crate::constants::SAMPLE_RATE;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
-pub const COUNT: usize = 12;
+pub const COUNT: usize = 13;
 pub const INPUT_SAMPLES: usize = 24_000;
 pub const MAGIC: &[u8; 8] = b"SAEARM01";
 pub const NAMES: [&str; COUNT] = [
@@ -18,6 +18,7 @@ pub const NAMES: [&str; COUNT] = [
     "harmony-vibrato",
     "harmony-rich-eight",
     "harmony-noise-eight",
+    "harmony-weighted-lead",
 ];
 
 pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
@@ -31,7 +32,7 @@ pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
 pub fn settings(case: usize) -> MusicalSettings {
     let mode = match case {
         4 => ProcessingMode::Dry,
-        5 | 9 | 10 | 11 => ProcessingMode::Harmony,
+        5 | 9 | 10 | 11 | 12 => ProcessingMode::Harmony,
         6 => ProcessingMode::Vocode,
         _ => ProcessingMode::PitchControl,
     };
@@ -44,6 +45,8 @@ pub fn settings(case: usize) -> MusicalSettings {
         },
         midi_frequencies: if case == 5 {
             [220.0, 330.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        } else if case == 12 {
+            [220.0, 329.62756, 391.99542, 440.0, 0.0, 0.0, 0.0, 0.0]
         } else if case >= 10 {
             [
                 130.81278, 164.81378, 195.99771, 220.0, 261.62555, 329.62756, 391.99542, 440.0,
@@ -52,6 +55,11 @@ pub fn settings(case: usize) -> MusicalSettings {
             [220.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         } else {
             [0.0; 8]
+        },
+        midi_gains: if case == 12 {
+            [2.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 1.0, 1.0, 1.0, 1.0]
+        } else {
+            [1.0; 8]
         },
         ..MusicalSettings::default()
     }
@@ -70,11 +78,11 @@ pub fn input(case: usize, index: usize) -> f32 {
         random ^= random << 5;
         return random as f32 / u32::MAX as f32 * 0.2 - 0.1;
     }
-    if case == 9 || case == 10 {
+    if case == 9 || case == 10 || case == 12 {
         let time = index as f32 / SAMPLE_RATE;
         let phase = core::f32::consts::TAU * 200.0 * time
             - 1.2 * libm::cosf(core::f32::consts::TAU * 5.0 * time);
-        return if case == 10 {
+        return if case == 10 || case == 12 {
             (1..=10)
                 .map(|h| 0.15 / h as f32 * libm::sinf(phase * h as f32))
                 .sum()

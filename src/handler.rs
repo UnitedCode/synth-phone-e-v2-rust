@@ -132,6 +132,12 @@ pub fn audio_handler(
                                         47 => shared.app_state_machine.lock(|msm| {
                                             msm.set_harmony_lead_from_midi(value);
                                         }),
+                                        48 => {
+                                            voice_manager.enable_midi_lead_routing();
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_harmony_backing_from_midi(value);
+                                            });
+                                        }
                                         7 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_volume_from_midi(value);
@@ -408,6 +414,7 @@ pub fn handle_vocal_effects(
     let mut pitch_ratio = 1.0f32;
     let mut autotune_speed = 5;
     let mut harmony_lead = 1.0;
+    let mut harmony_backing = 64;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
         let snapshot = asm.snapshot();
@@ -422,6 +429,7 @@ pub fn handle_vocal_effects(
         formant = snapshot.formant;
         autotune_speed = snapshot.autotune_speed;
         harmony_lead = snapshot.harmony_lead as f32 / 127.0;
+        harmony_backing = snapshot.harmony_backing;
         synth_gain = output_mix::synth_gain(snapshot.melody_volume);
         key = snapshot.key;
         // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
@@ -458,7 +466,9 @@ pub fn handle_vocal_effects(
         note = 0;
     }
 
-    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
+    let (midi_frequencies, midi_gains) = ctx
+        .voice_manager
+        .lock(|vm| vm.get_harmony_voices(harmony_backing));
 
     let is_tuned = current_process == ProcessingProfile::Tuned;
 
@@ -532,6 +542,7 @@ pub fn handle_vocal_effects(
         formant_female_ratio,
         note: if is_tuned { 0 } else { note },
         midi_frequencies: effect_midi_frequencies,
+        midi_gains,
         key,
         octave_ratio: pitch_ratio,
         mode,

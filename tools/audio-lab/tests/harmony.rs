@@ -329,3 +329,111 @@ fn unvoiced_noise_does_not_jump_above_the_polyphonic_voice_power_scale() {
         );
     }
 }
+
+#[test]
+fn designated_midi_lead_below_backing_obeys_the_group_fader() {
+    use audio_lab::voice_generator::VoiceManager;
+    let input = tone(200.0, 1.0, &[(1, 0.15)]);
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = SAMPLE_RATE;
+    config.harmony_lead_gain = 0.0;
+    let mut manager = VoiceManager::<8>::new(SAMPLE_RATE);
+    manager.note_on(57, 100, 3);
+    manager.note_on(64, 100, 0);
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    let (freq, gains) = manager.get_harmony_voices(64);
+    settings.midi_frequencies = freq;
+    let equal = render(&input, &[], &config, &settings);
+    settings.midi_gains = gains;
+    let foreground = render(&input, &[], &config, &settings);
+    let ratio =
+        |audio: &[f32]| component(steady(audio), 220.0) / component(steady(audio), 329.62756);
+    let change = 20.0 * (ratio(&foreground.audio) / ratio(&equal.audio)).log10();
+    assert!(
+        (change - 20.0 * (127.0_f64 / 64.0).log10()).abs() < 0.15,
+        "lead fader response {change} dB"
+    );
+    settings.midi_gains = manager.get_harmony_voices(0).1;
+    let muted = render(&input, &[], &config, &settings);
+    assert!(component(steady(&muted.audio), 220.0) > 0.05);
+    assert!(component(steady(&muted.audio), 329.62756) < 0.001);
+}
+
+#[test]
+fn muting_a_midi_voice_retains_its_phase_for_restoring_the_gain() {
+    use audio_lab::{constants::*, replay::Replay};
+    let input = tone(200.0, 1.0, &[(1, 0.1), (2, 0.03)]);
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = SAMPLE_RATE;
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 220.0;
+    let reference = render(&input, &[], &config, &settings);
+    let mut replay = Replay::new();
+    let mut actual = Vec::new();
+    for block in (0..input.len()).step_by(BLOCK_SIZE) {
+        for &sample in &input[block..(block + BLOCK_SIZE).min(input.len())] {
+            actual.push(replay.sample(sample));
+        }
+        settings.midi_gains[0] = if block < (SAMPLE_RATE * 0.4) as usize {
+            0.0
+        } else {
+            1.0
+        };
+        replay.finish_block(&[0.0; HOP_SIZE], &config, &settings, None);
+    }
+    let start = (SAMPLE_RATE * 0.65) as usize;
+    let peak = actual[start..]
+        .iter()
+        .zip(&reference.raw[start..])
+        .map(|(&a, &b)| (a - b).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        peak < 1e-6,
+        "gain restore changed pitch-shift phase: {peak}"
+    );
+}
+
+#[test]
+fn backing_pcm_level_stays_constant_when_the_midi_lead_rests() {
+    use audio_lab::{constants::*, replay::Replay, voice_generator::VoiceManager};
+    let input = tone(200.0, 1.2, &[(1, 0.1)]);
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = SAMPLE_RATE;
+    config.harmony_lead_gain = 0.0;
+    let mut manager = VoiceManager::<8>::new(SAMPLE_RATE);
+    manager.note_on(57, 100, 3);
+    manager.note_on(64, 100, 0);
+    manager.note_on(67, 100, 0);
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    let mut replay = Replay::new();
+    let mut audio = Vec::new();
+    for block in (0..input.len()).step_by(BLOCK_SIZE) {
+        if block >= (SAMPLE_RATE * 0.6) as usize {
+            manager.note_off(57, 3);
+        }
+        for &s in &input[block..(block + BLOCK_SIZE).min(input.len())] {
+            audio.push(replay.sample(s));
+        }
+        (settings.midi_frequencies, settings.midi_gains) = manager.get_harmony_voices(64);
+        replay.finish_block(&[0.0; HOP_SIZE], &config, &settings, None);
+    }
+    let a = &audio[(SAMPLE_RATE * 0.3) as usize..(SAMPLE_RATE * 0.5) as usize];
+    let b = &audio[(SAMPLE_RATE * 0.9) as usize..(SAMPLE_RATE * 1.1) as usize];
+    for target in [329.62756, 391.99542] {
+        let ratio = component(b, target) / component(a, target);
+        assert!(
+            (ratio - 1.0).abs() < 0.04,
+            "backing {target} jumps at lead release: {ratio}"
+        );
+    }
+}

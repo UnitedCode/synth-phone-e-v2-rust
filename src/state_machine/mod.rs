@@ -358,6 +358,8 @@ pub struct AppStateMachine {
     current_percussion: i8,
     /// Transient MIDI CC47 performance control; does not change flash format.
     harmony_lead: u8,
+    /// Transient CC48: backing group relative to explicit MIDI-channel-4 lead.
+    harmony_backing: u8,
     pub volume: i8,
     pub note: i8,
     pub key_down_pressed: bool,
@@ -393,6 +395,7 @@ pub struct AppStateMachineSnapshot {
     pub waveform: i8,
     pub percussion: i8,
     pub harmony_lead: u8,
+    pub harmony_backing: u8,
 }
 
 // Add a MenuContext struct for menu display
@@ -421,6 +424,7 @@ impl AppStateMachine {
             current_waveform: 0,
             current_percussion: 2, // drums
             harmony_lead: 127,
+            harmony_backing: 64,
             volume: 10,
             note: 0,
             key_down_pressed: false,
@@ -520,6 +524,7 @@ impl AppStateMachine {
             waveform: self.current_waveform,
             percussion: self.current_percussion,
             harmony_lead: self.harmony_lead,
+            harmony_backing: self.harmony_backing,
         }
     }
 
@@ -743,12 +748,16 @@ impl AppStateMachine {
         };
     }
 
-    /// Sets formant from an incoming MIDI CC81 value: 0=Male, 64=Off,
-    /// 127=Female — mirrors the EffectsProfile keypad's formant row.
+    /// CC47 blends the original unshifted input, independently of MIDI lead.
     pub fn set_harmony_lead_from_midi(&mut self, value: u8) {
         self.harmony_lead = value.min(127);
     }
+    /// CC48: backing-group gain relative to MIDI lead, 0=mute, 127=unity.
+    pub fn set_harmony_backing_from_midi(&mut self, value: u8) {
+        self.harmony_backing = value.min(127);
+    }
 
+    /// MIDI CC81: 0=Male, 64=Off, 127=Female.
     pub fn set_formant_from_midi(&mut self, value: u8) {
         self.current_formant = if value < 43 {
             1

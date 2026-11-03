@@ -11,6 +11,9 @@ the original commercial processor or guarantee the record's timbre.
 1. Select **Harmony** on the phone.
 2. Send chords on **MIDI channel 1** for vocal control without raw synth audio.
    Channel 3 also controls Harmony; channel 2 remains independent synth audio.
+   For an explicit MIDI-controlled melody, send that part on **channel 4** and
+   backing on channel 1. Channel 4 is a new vocal-control-only channel; it never
+   plays a raw synth. The lead can be below the backing and is not inferred from pitch.
 3. Send **CC47 = 0** for MIDI-only harmonies. **CC47 = 127** restores the original
    voice alongside the harmonies; intermediate values blend it in. Default is
    127. This is a transient performance control, reset on reboot, and does not
@@ -20,6 +23,22 @@ the original commercial processor or guarantee the record's timbre.
    sustain. **CC120** stops sound immediately. **CC121** releases sustain and
    centers pitch bend. These controller numbers follow the
    [MIDI controller table](https://midi.org/midi-1-0-control-change-messages).
+5. With explicit MIDI lead, send **CC47 = 0** for fully MIDI-selected voices and
+   use the custom **CC48** backing-group control: **64** is the default (about
+   -6 dB gain relative to the lead group), **32** is about -12 dB, **127** gives
+   equal nominal group gain, and **0** mutes backing. These are group gains,
+   not guarantees of identical perceived loudness for different shifted timbres.
+   Send CC48 at the start even if the lead initially rests. Lead mode persists
+   across rests; global panic/reboot clears it. CC48 is transient, resets to 64
+   on reboot, and does not change the saved-settings format. CC47 still controls
+   the original input, not the designated MIDI lead.
+
+The control channels share eight held-note slots; there are at most eight
+distinct DSP pitches across all vocal channels. Lead pitches receive output
+capacity first. Under control-slot pressure, a backing slot is stolen before
+a held lead when possible. Shared lead/backing unisons sound once and retain
+their independent release state while their control slots remain allocated.
+Sustain and pitch bend stay scoped to each MIDI channel.
 
 Pitch bend affects only its message channel, including notes played while bent.
 The implemented wheel range is fixed at two semitones either side of center;
@@ -71,6 +90,15 @@ the 2048-sample source-pitch history now brings the section to 8,288 bytes.
 Builds and production captures, including
 Cortex-M fault-status checks, cover the memory layout.
 
+Per-note gains are applied before the existing normalization in the single
+streaming 1024-point Harmony processor. The lead/backing groups share the same
+pitch phases, FFT and inverse FFT. Muted voices keep their phase for gain restore;
+backing retains reserved headroom during lead rests. When neither channel 4 nor
+CC48 is used, gains remain unity and legacy behavior is preserved. A complete
+legacy song render is byte-identical to the predecessor, SHA256
+`c412cb27e491783b46da2264812fcfee039407c258d079f965c5f634a14b1671`.
+The older stateless DSP entry points retain their prior gain behavior.
+
 Legacy DSP entry points remain available. Firmware, host replay and ARM audio
 guest use the same pinned DSP revision; streaming pitch-correction state and
 the previous source-volume controls are retained.
@@ -90,20 +118,22 @@ MIDI tests cover retrigger/release, channel isolation, pitch bend, sustain and
 panic. The established pitch sweep records 192 known quality failures in the
 unchanged Pitch Control path; this Harmony repair does not claim to fix them.
 
-Local verification of DSP revision `f7a8cc55f0470563d5815f9acd4c1c4535b5cda5`:
+Local verification of DSP revision `b2163e5a2bd6c03bd32772c9a571f2454c58fd7b`:
 
-- 104 audio/MIDI/tool tests pass on macOS and Linux. The unchanged emulator
+- 113 audio/MIDI/tool tests pass on macOS and Linux. The unchanged emulator
   models previously passed their 210-test suite on both platforms.
 - Windows GNU cross-target checks pass for all audio-lab Rust targets;
   this does not substitute for running on Windows.
 - DSP unit/integration tests pass, including the independent phase-table check.
-- Twelve Cortex-M7 DSP guest cases, including rich eight-voice vibrato and
-  eight-voice noise, match host PCM within 0.0001 peak error;
+- Thirteen Cortex-M7 DSP guest cases, including weighted MIDI lead, rich
+  eight-voice vibrato and eight-voice noise, match host PCM within 0.0001 peak error;
   SysTick interrupts run and deliberate loss of an FFT frame is detected.
-- Four real production-ELF scenarios pass on virtual Rev5: matched old/new
-  four-note audio, MIDI-only sustain/release, and eight-note harmony. They have
+- Four production-ELF MIDI-role scenarios pass on virtual Rev5: equal/focused
+  group levels, backing mute with sustained lead/rest/return, and eight notes
+  with a live CC48 change. They have
   clear CFSR/HFSR, matching stereo, expected SAI rate, zero FIFO errors, zero
-  dropped FFT/MIDI jobs and no unexpected emulator warnings.
+  reported dropped FFT/MIDI jobs and no unexpected emulator warnings. Prior
+  legacy capture evidence is retained separately.
 
 These firmware examples use an unshifted natural vowel from an authorized local
 separated vocal recording, not a singer performing “Hide and Seek.” The optional
@@ -319,8 +349,8 @@ The previously accepted two-note output is retained alongside a new two-note
 render so listening can catch a regression. Musical acceptance remains open.
 
 The ELF uses 8,288 bytes of AXI SRAM for vocal state, 32,768 bytes of D2 SRAM
-for audio DMA, and 127,408 bytes of loadable internal-flash sections, leaving
-3,664 bytes in the 128-KiB flash region. Extending beyond eight voices requires
+for audio DMA, and 128,744 bytes of loadable internal-flash sections, leaving
+2,328 bytes in the 128-KiB flash region. Extending beyond eight voices requires
 a separate allocation, memory and physical-deadline assessment.
 
 ## Auditioning a foreground line
@@ -356,8 +386,39 @@ resynthesized separately, not extracted bit-for-bit from the original composite;
 voice-role changes can therefore alter phase histories. This offline two-bus
 audition is not a firmware gain change or a processor-load test. An isolated
 upper-line listening copy accompanies the local full-length preview so the user
-can recognize or reject that proposed lead. Real-device controls must distinguish
-the sung lead from a MIDI-designated lead before assuming a melody priority.
+can recognize or reject that proposed lead. This historical two-pass audition
+has now been superseded by the explicit MIDI role path described above.
+
+## Replaying explicit MIDI roles
+
+The `--route-backing` utility accepts a designated lead, rather than selecting
+one. Prepare notes-only, single-track files with matching timebases and tempo
+maps; it refuses mismatches or unsupported MIDI messages instead of silently
+retiming or stripping controls. Existing `--merge-vocal-midi` can prepare each
+part first. Lead and backing parts are then routed to channels 4 and 1, with
+initial CC47=0 and the requested CC48 value:
+
+```text
+midi_reference LEAD.mid --route-backing BACKING.mid ROLES.mid 32
+midi_reference ROLES.mid VOWEL.wav OUTPUT.wav 0 full
+```
+
+The renderer uses the same VoiceManager gain calculation and single DSP stream
+as firmware. The current listening fixture reuses the earlier provisional upper
+line solely as an explicitly tagged audition part; neither firmware nor this
+role-routing command infers a melody or assumes it is the highest note.
+
+`midi_lead_capture prepare NEW_DIRECTORY` generates physical UART/GPIO stimuli
+for the four complete-firmware scenarios. Reuse the established real-vowel
+stereo-f32 input and run the actual ELF for 200 bridge steps per case. Record
+the actual image SHA256 in `firmware.txt` as `firmware_sha256=...`, and successful
+image-specific `NAME.completed.txt` markers only after process completion.
+`midi_lead_capture inspect DIRECTORY` requires guarded execution, startup,
+clear fault registers, expected clock/length, finite equal stereo, zero FIFO
+errors, no unexpected warnings or reported job loss, independent lead sustain,
+silence on a lead rest when backing is muted, audible backing on the other
+rests, and an independently projected lead/backing ratio response to CC48.
+It remains functional model evidence, not a physical deadline measurement.
 
 ## Remaining acceptance gates
 

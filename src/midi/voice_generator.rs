@@ -158,8 +158,14 @@ impl HybridVoice {
 ///   1 (MIDI ch 2)  — audio only, no voice effects
 ///   2 (MIDI ch 3)  — auto-switch: plays audio normally, but in Vocode/Harmony it
 ///                    goes silent-as-synth and drives the vocal effect instead
+///   3 (MIDI ch 4)  — designated vocal lead only; never a raw synth
 ///   9 (MIDI ch 10) — drums, no voice effects
 const VOICE_CTRL_CHANNEL: u8 = 0;
+/// Explicit MIDI lead (channel 4), silent as a raw synth.
+pub const LEAD_CTRL_CHANNEL: u8 = 3;
+fn is_voice_ctrl(channel: u8) -> bool {
+    channel == VOICE_CTRL_CHANNEL || channel == LEAD_CTRL_CHANNEL
+}
 
 /// The auto-switch channel (MIDI ch 3). Feeds the vocal-effect frequency cache and
 /// is silenced as raw synth in Vocode/Harmony (see `get_mixed_sample`).
@@ -182,10 +188,12 @@ pub struct VoiceManager<const MAX_VOICES: usize> {
     sustain: [bool; 16],
     /// Frequencies from voices whose channel isn't voice-ctrl-only or sound-only — fed to vocal effects DSP.
     cached_frequencies: [f32; MAX_VOICES],
-    /// Frequencies from ch 0 (voice-ctrl-only) — also fed to vocal effects DSP.
+    /// Frequencies from the backing/lead control channels, without raw synths.
     voice_ctrl_freqs: [f32; MAX_VOICES],
     voice_ctrl_notes: [Option<u8>; MAX_VOICES],
     voice_ctrl_down: [bool; MAX_VOICES],
+    voice_ctrl_channels: [u8; MAX_VOICES],
+    lead_routing: bool,
 }
 
 impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
@@ -198,6 +206,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             voice_ctrl_freqs: [0.0; MAX_VOICES],
             voice_ctrl_notes: [None; MAX_VOICES],
             voice_ctrl_down: [false; MAX_VOICES],
+            voice_ctrl_channels: [0; MAX_VOICES],
+            lead_routing: false,
         }
     }
 
@@ -219,15 +229,28 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             crate::midi::notes::frequency(note) * bend_factor(self.pitch_bend[channel as usize]);
 
         // Ch 0: voice effects only — track frequency, no audio voice.
-        if channel == VOICE_CTRL_CHANNEL {
+        if is_voice_ctrl(channel) {
+            if channel == LEAD_CTRL_CHANNEL {
+                self.lead_routing = true;
+            }
             let i = self
                 .voice_ctrl_notes
                 .iter()
-                .position(|n| *n == Some(note))
+                .enumerate()
+                .position(|(i, n)| *n == Some(note) && self.voice_ctrl_channels[i] == channel)
                 .or_else(|| self.voice_ctrl_notes.iter().position(Option::is_none))
                 .or_else(|| self.voice_ctrl_down.iter().position(|down| !down))
-                .unwrap_or(0);
+                .or_else(|| {
+                    self.voice_ctrl_channels
+                        .iter()
+                        .position(|&ch| ch != LEAD_CTRL_CHANNEL)
+                })
+                .or_else(|| (channel == LEAD_CTRL_CHANNEL).then_some(0));
+            let Some(i) = i else {
+                return;
+            };
             self.voice_ctrl_notes[i] = Some(note);
+            self.voice_ctrl_channels[i] = channel;
             self.voice_ctrl_freqs[i] = frequency;
             self.voice_ctrl_down[i] = true;
             return;
@@ -297,9 +320,10 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         if channel >= 16 {
             return;
         }
-        if channel == VOICE_CTRL_CHANNEL {
+        if is_voice_ctrl(channel) {
             for i in 0..MAX_VOICES {
-                if self.voice_ctrl_notes[i] == Some(note) {
+                if self.voice_ctrl_notes[i] == Some(note) && self.voice_ctrl_channels[i] == channel
+                {
                     self.voice_ctrl_down[i] = false;
                     if self.sustain[channel as usize] {
                         return;
@@ -412,9 +436,11 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
         let bend_ratio = bend_ratio.clamp(-1.0, 1.0);
         self.pitch_bend[channel as usize] = bend_ratio;
-        if channel == VOICE_CTRL_CHANNEL {
+        if is_voice_ctrl(channel) {
             for i in 0..MAX_VOICES {
-                if let Some(note) = self.voice_ctrl_notes[i] {
+                if let Some(note) =
+                    self.voice_ctrl_notes[i].filter(|_| self.voice_ctrl_channels[i] == channel)
+                {
                     self.voice_ctrl_freqs[i] =
                         crate::midi::notes::frequency(note) * bend_factor(bend_ratio);
                 }
@@ -444,9 +470,9 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         if down {
             return;
         }
-        if channel == VOICE_CTRL_CHANNEL {
+        if is_voice_ctrl(channel) {
             for i in 0..MAX_VOICES {
-                if !self.voice_ctrl_down[i] {
+                if !self.voice_ctrl_down[i] && self.voice_ctrl_channels[i] == channel {
                     self.voice_ctrl_notes[i] = None;
                     self.voice_ctrl_freqs[i] = 0.0;
                 }
@@ -466,9 +492,11 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         if channel >= 16 {
             return;
         }
-        if channel == VOICE_CTRL_CHANNEL {
+        if is_voice_ctrl(channel) {
             for i in 0..MAX_VOICES {
-                if let Some(note) = self.voice_ctrl_notes[i] {
+                if let Some(note) =
+                    self.voice_ctrl_notes[i].filter(|_| self.voice_ctrl_channels[i] == channel)
+                {
                     self.note_off(note, channel);
                 }
             }
@@ -484,10 +512,14 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn all_notes_off(&mut self, channel: Option<u8>) {
-        if channel == Some(VOICE_CTRL_CHANNEL) {
-            self.voice_ctrl_notes = [None; MAX_VOICES];
-            self.voice_ctrl_freqs = [0.0; MAX_VOICES];
-            self.voice_ctrl_down = [false; MAX_VOICES];
+        if channel.is_some_and(is_voice_ctrl) {
+            for i in 0..MAX_VOICES {
+                if Some(self.voice_ctrl_channels[i]) == channel {
+                    self.voice_ctrl_notes[i] = None;
+                    self.voice_ctrl_freqs[i] = 0.0;
+                    self.voice_ctrl_down[i] = false;
+                }
+            }
             return;
         }
 
@@ -502,14 +534,36 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             self.voice_ctrl_notes = [None; MAX_VOICES];
             self.voice_ctrl_freqs = [0.0; MAX_VOICES];
             self.voice_ctrl_down = [false; MAX_VOICES];
+            self.lead_routing = false;
         }
     }
 
-    /// Returns all active frequencies for the vocal effects DSP —
-    /// non-sound-only voice frequencies followed by ch 0 voice-ctrl frequencies.
+    /// Returns active vocal frequencies, prioritizing an explicitly designated
+    /// MIDI lead. Without that role, preserve the legacy cache ordering.
     pub fn get_cached_frequencies(&self) -> [f32; MAX_VOICES] {
+        self.collect_vocal_notes().0
+    }
+    pub fn enable_midi_lead_routing(&mut self) {
+        self.lead_routing = true;
+    }
+
+    fn collect_vocal_notes(&self) -> ([f32; MAX_VOICES], [bool; MAX_VOICES]) {
         let mut result = [0.0f32; MAX_VOICES];
+        let mut lead = [false; MAX_VOICES];
         let mut idx = 0;
+        // Designated lead gets capacity before backing; shared unisons appear once.
+        for i in 0..MAX_VOICES {
+            let f = self.voice_ctrl_freqs[i];
+            if self.voice_ctrl_channels[i] == LEAD_CTRL_CHANNEL
+                && f > 0.0
+                && idx < MAX_VOICES
+                && !result[..idx].contains(&f)
+            {
+                result[idx] = f;
+                lead[idx] = true;
+                idx += 1;
+            }
+        }
         for &f in &self.cached_frequencies {
             if f != 0.0 && idx < MAX_VOICES && !result[..idx].contains(&f) {
                 result[idx] = f;
@@ -522,6 +576,33 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 idx += 1;
             }
         }
-        result
+        (result, lead)
+    }
+
+    /// DSP-relative gains, compensating its existing 1/N normalization. Group
+    /// headroom is reserved while the MIDI lead rests, avoiding backing jumps.
+    pub fn get_harmony_voices(&self, backing_level: u8) -> ([f32; MAX_VOICES], [f32; MAX_VOICES]) {
+        let (frequencies, lead) = self.collect_vocal_notes();
+        if !self.lead_routing {
+            return (frequencies, [1.0; MAX_VOICES]);
+        }
+        let count = frequencies.iter().filter(|&&f| f > 0.0).count();
+        let leads = lead.iter().filter(|&&value| value).count();
+        let backs = count - leads;
+        let back = backing_level.min(127) as f32 / 127.0;
+        let lead_root = libm::sqrtf(leads.max(1) as f32);
+        let back_root = libm::sqrtf(backs.max(1) as f32);
+        let denominator = (lead_root + if backs > 0 { back * back_root } else { 0.0 }).max(1.0);
+        let scale = count as f32 / denominator;
+        let gains = core::array::from_fn(|i| {
+            if frequencies[i] <= 0.0 {
+                0.0
+            } else if lead[i] {
+                scale / lead_root
+            } else {
+                scale * back / back_root
+            }
+        });
+        (frequencies, gains)
     }
 }
