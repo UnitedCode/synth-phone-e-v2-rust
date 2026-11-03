@@ -89,7 +89,7 @@ change introduces no new failures at the default fast setting.
 
 Local verification of DSP revision `d7148ad9dc6f285876bf11d31ddc4e4f268d646f`:
 
-- 97 audio/MIDI/tool tests and 210 emulator-model tests pass on macOS and Linux.
+- 100 audio/MIDI/tool tests and 210 emulator-model tests pass on macOS and Linux.
 - Windows GNU cross-target checks pass for all audio/emulator Rust targets;
   this does not substitute for running on Windows.
 - DSP unit/integration tests pass, including the independent phase-table check.
@@ -216,6 +216,54 @@ artifacts therefore cannot be attributed to physical CPU overload or a codec.
 They establish that software/source issues remain; they do not prove either
 that this algorithm can achieve the desired sound or that the Daisy cannot.
 Keep the experimental DSP on clankers pending a better vocal-quality result.
+
+The user subsequently judged the held A3/E4 real-vowel output to sound good.
+The octave-estimate discrepancies are present with that same input too, so they
+do not by themselves explain the rejected full-arrangement sound. Do not discard
+that listening result or equate a diagnostic pitch statistic with bad sound.
+
+### Separating polyphony, register and changing notes
+
+A waveform regression now renders each voice separately and compares their
+average with simultaneous 2/3/4/6/8-voice output. With the tested harmonic/vibrato
+input, the largest difference is below 0.00000003. This tests held-voice summing,
+not new-note/release transitions, perceptual quality or physical CPU deadlines.
+
+`harmony_isolation VOWEL.wav NEW_OUTPUT_DIRECTORY 288 --polyphony` instead emits
+the accepted A3/E4 reference, a four-note A-minor-seventh chord, and eight notes
+containing that chord's pitch classes between C3 and A4. The two-note raw output
+matches the earlier baseline byte for byte. These controls deliberately avoid
+the full arrangement's extreme low register; their generated MIDI is external.
+
+The full external arrangement previously used spans MIDI 26..76 (36.7..659.3
+Hz), with 204 of 787 note attacks below C3 and 57 below C2. It has up to seven
+held notes and 342 changes in count across successive positive-duration event
+intervals. Driving all of these pitches as vocal parts was an inadequate test
+of an unverified vocal arrangement, particularly for a source near 196 Hz.
+
+To isolate this, generate external diagnostic reductions before rendering:
+
+```text
+midi_reference INPUT.mid --select-vocal-midi RANGE.mid 48 127 8
+midi_reference INPUT.mid --select-vocal-midi TWO.mid 0 127 2
+midi_reference INPUT.mid --select-vocal-midi RANGE_TWO.mid 48 127 2
+```
+
+This selection retains tempo and the original duration, filters the given note
+range, and takes the highest held pitches up to the limit. It processes equal-tick
+events together and restores a lower still-held note when a selected upper note
+releases. Tests cover simultaneous notes, restoration, filtering and final silence.
+The supplied file's range-only reduction has up to five held notes. This is a
+counterfactual listening tool: it does not identify the song's true vocal parts,
+rewrite device MIDI routing, transpose notes or impose a firmware voice limit.
+The moving two-note reduction changes the selected voicing; the range reduction
+changes both register and possible voice count. Compare them with held chords
+before attributing a difference to polyphony alone.
+
+`harmony_capture levels INPUT.wav` reports raw levels for matching controls.
+The local polyphony listening pack uses one constant gain per complete file for
+common RMS 0.05, no new dynamics processing, and identical MP3 encoding. Its
+full-duration files use the shared host DSP; this audit changes no firmware DSP.
 
 ## Remaining acceptance gates
 

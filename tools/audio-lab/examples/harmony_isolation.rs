@@ -70,7 +70,7 @@ fn hz(key: u8) -> f32 {
     440.0 * 2_f32.powf((key as f32 - 69.0) / 12.0)
 }
 
-fn render(source: &[f32], out: &Path, seconds: f64) -> Result<()> {
+fn render(source: &[f32], out: &Path, seconds: f64, polyphony: bool) -> Result<()> {
     let count = (seconds * SAMPLE_RATE as f64) as usize;
     let sample = |i: usize| {
         let j = i % source.len();
@@ -84,12 +84,22 @@ fn render(source: &[f32], out: &Path, seconds: f64) -> Result<()> {
     input.finalize()?;
     let mut report = fs::File::create(out.join("levels.csv"))?;
     writeln!(report, "case,seconds,rms,peak,ceiling_samples,nonfinite")?;
-    for (name, keys) in [
+    let baseline = [
         ("dry", &[][..]),
         ("unison-g3", &[55][..]),
         ("one-a3", &[57][..]),
         ("two-a3-e4", &[57, 64][..]),
-    ] {
+    ];
+    let chords = [
+        ("two-a3-e4", &[57, 64][..]),
+        ("four-am7", &[57, 60, 64, 67][..]),
+        ("eight-am7", &[48, 52, 55, 57, 60, 64, 67, 69][..]),
+    ];
+    for (name, keys) in if polyphony {
+        &chords[..]
+    } else {
+        &baseline[..]
+    } {
         let mut settings = MusicalSettings {
             mode: if keys.is_empty() {
                 ProcessingMode::Dry
@@ -98,7 +108,7 @@ fn render(source: &[f32], out: &Path, seconds: f64) -> Result<()> {
             },
             ..Default::default()
         };
-        for (target, &key) in settings.midi_frequencies.iter_mut().zip(keys) {
+        for (target, &key) in settings.midi_frequencies.iter_mut().zip(*keys) {
             *target = hz(key);
         }
         // Keep exactly the production/default configuration used in the earlier
@@ -257,9 +267,13 @@ fn probes(out: &Path) -> Result<()> {
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let [source, directory, seconds] = args.as_slice() else {
-        return Err("usage: harmony_isolation VOWEL.wav NEW_OUTPUT_DIRECTORY SECONDS".into());
-    };
+    let polyphony = args.get(3).is_some_and(|flag| flag == "--polyphony");
+    if args.len() != 3 && !(args.len() == 4 && polyphony) {
+        return Err(
+            "usage: harmony_isolation VOWEL.wav NEW_OUTPUT_DIRECTORY SECONDS [--polyphony]".into(),
+        );
+    }
+    let (source, directory, seconds) = (&args[0], &args[1], &args[2]);
     let seconds: f64 = seconds.parse()?;
     if !seconds.is_finite() || !(1.0..=600.0).contains(&seconds) {
         return Err("duration must be 1..600 seconds".into());
@@ -280,8 +294,10 @@ fn main() -> Result<()> {
     }
     let out = Path::new(directory);
     fs::create_dir(out)?; // Refuse to replace any prior evidence.
-    probes(out)?;
-    render(&source, out, seconds)
+    if !polyphony {
+        probes(out)?;
+    }
+    render(&source, out, seconds, polyphony)
 }
 
 #[cfg(test)]

@@ -92,6 +92,106 @@ fn vocal_midi(
     Ok(bytes)
 }
 
+/// Diagnostic reduction, deliberately separate from the device's MIDI policy.
+/// Recompute after simultaneous events so selecting the highest held notes does
+/// not emit transient notes from intermediate states within the same tick.
+fn select_vocal_midi(
+    bytes: &[u8],
+    low: u8,
+    high: u8,
+    maximum: usize,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    use midly::{Format, Header, TrackEvent};
+    if low > high || high > 127 || !(1..=8).contains(&maximum) {
+        return Err("require MIDI range 0..127 and voice limit 1..8".into());
+    }
+    let smf = Smf::parse(bytes).map_err(|e| format!("invalid merged MIDI: {e:?}"))?;
+    let mut timed = Vec::new();
+    let mut tick = 0_u64;
+    for event in &smf.tracks[0] {
+        tick += u64::from(event.delta.as_int());
+        timed.push((tick, event.kind));
+    }
+    let (mut active, mut selected) = (BTreeMap::<u8, u8>::new(), BTreeMap::<u8, u8>::new());
+    let (mut track, mut last, mut position) = (Vec::new(), 0_u64, 0);
+    while position < timed.len() {
+        let tick = timed[position].0;
+        let mut emit = |kind| -> Result<(), Box<dyn Error>> {
+            let delta = u32::try_from(tick - last)?;
+            if delta > 0x0fff_ffff {
+                return Err("MIDI delta exceeds SMF limit".into());
+            }
+            track.push(TrackEvent {
+                delta: delta.into(),
+                kind,
+            });
+            last = tick;
+            Ok(())
+        };
+        while position < timed.len() && timed[position].0 == tick {
+            match timed[position].1 {
+                TrackEventKind::Midi {
+                    message: MidiMessage::NoteOn { key, vel },
+                    ..
+                } if vel.as_int() > 0 => {
+                    active.insert(key.as_int(), vel.as_int());
+                }
+                TrackEventKind::Midi {
+                    message: MidiMessage::NoteOn { key, .. } | MidiMessage::NoteOff { key, .. },
+                    ..
+                } => {
+                    active.remove(&key.as_int());
+                }
+                TrackEventKind::Meta(MetaMessage::EndOfTrack) => (),
+                kind => emit(kind)?,
+            }
+            position += 1;
+        }
+        let next: BTreeMap<_, _> = active
+            .range(low..=high)
+            .rev()
+            .take(maximum)
+            .map(|(&key, &vel)| (key, vel))
+            .collect();
+        for &key in selected.keys().filter(|key| !next.contains_key(key)) {
+            emit(TrackEventKind::Midi {
+                channel: 0.into(),
+                message: MidiMessage::NoteOff {
+                    key: key.into(),
+                    vel: 0.into(),
+                },
+            })?;
+        }
+        for (&key, &vel) in next.iter().filter(|(key, _)| !selected.contains_key(key)) {
+            emit(TrackEventKind::Midi {
+                channel: 0.into(),
+                message: MidiMessage::NoteOn {
+                    key: key.into(),
+                    vel: vel.into(),
+                },
+            })?;
+        }
+        selected = next;
+    }
+    let end_delta = u32::try_from(timed.last().map_or(last, |event| event.0) - last)?;
+    if end_delta > 0x0fff_ffff {
+        return Err("MIDI end delta exceeds SMF limit".into());
+    }
+    track.push(TrackEvent {
+        delta: end_delta.into(),
+        kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+    });
+    let reduced = Smf {
+        header: Header::new(Format::SingleTrack, smf.header.timing),
+        tracks: vec![track],
+    };
+    let mut result = Vec::new();
+    reduced
+        .write(&mut result)
+        .map_err(|e| format!("MIDI write failed: {e:?}"))?;
+    Ok(result)
+}
+
 fn render_reference(
     events: &[(f64, u8, MidiMessage)],
     song_seconds: f64,
@@ -215,6 +315,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         tracks.push(count);
     }
     events.sort_by_key(|e| e.0);
+    if args.get(1).is_some_and(|arg| arg == "--select-vocal-midi") {
+        if args.len() != 6 {
+            return Err("usage: midi_reference INPUT.mid --select-vocal-midi OUTPUT.mid LOW_KEY HIGH_KEY MAX_VOICES".into());
+        }
+        if std::path::Path::new(&args[2]).exists() {
+            return Err("output already exists".into());
+        }
+        let merged = vocal_midi(&events, smf.header.timing)?;
+        let selected = select_vocal_midi(
+            &merged,
+            args[3].parse()?,
+            args[4].parse()?,
+            args[5].parse()?,
+        )?;
+        std::fs::write(&args[2], selected)?;
+        eprintln!("exported diagnostic note selection; highest held notes take priority");
+        return Ok(());
+    }
     let export = args.get(1).is_some_and(|arg| arg == "--merge-vocal-midi");
     if export {
         if args.len() != 3 {
@@ -278,6 +396,80 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_selection_preserves_timing_and_restores_held_lower_notes() {
+        let note = |key: u8, on| TrackEventKind::Midi {
+            channel: 0.into(),
+            message: if on {
+                MidiMessage::NoteOn {
+                    key: key.into(),
+                    vel: 100.into(),
+                }
+            } else {
+                MidiMessage::NoteOff {
+                    key: key.into(),
+                    vel: 0.into(),
+                }
+            },
+        };
+        let events = vec![
+            (
+                0,
+                0,
+                TrackEventKind::Meta(MetaMessage::Tempo(500_000.into())),
+            ),
+            (0, 0, note(36, true)),
+            (0, 0, note(57, true)),
+            (0, 0, note(60, true)),
+            (0, 0, note(64, true)),
+            (240, 0, note(64, false)),
+            (480, 0, note(36, false)),
+            (480, 0, note(57, false)),
+            (480, 0, note(60, false)),
+            (960, 0, TrackEventKind::Meta(MetaMessage::EndOfTrack)),
+        ];
+        let merged = vocal_midi(&events, Timing::Metrical(480.into())).unwrap();
+        let bytes = select_vocal_midi(&merged, 48, 72, 2).unwrap();
+        let selected = Smf::parse(&bytes).unwrap();
+        let mut tick = 0;
+        let mut notes = Vec::new();
+        for event in &selected.tracks[0] {
+            tick += event.delta.as_int();
+            if let TrackEventKind::Midi { channel, message } = event.kind {
+                assert_eq!(channel.as_int(), 0);
+                match message {
+                    MidiMessage::NoteOn { key, .. } => notes.push((tick, key.as_int(), true)),
+                    MidiMessage::NoteOff { key, .. } => notes.push((tick, key.as_int(), false)),
+                    other => panic!("unexpected selected event: {other:?}"),
+                }
+            }
+        }
+        assert_eq!(
+            notes,
+            [
+                (0, 60, true),
+                (0, 64, true),
+                (240, 64, false),
+                (240, 57, true),
+                (480, 57, false),
+                (480, 60, false)
+            ]
+        );
+        assert_eq!(tick, 960, "retain the original final silence");
+        let range_only = select_vocal_midi(&merged, 48, 72, 8).unwrap();
+        let smf = Smf::parse(&range_only).unwrap();
+        let keys: Vec<_> = smf.tracks[0]
+            .iter()
+            .filter_map(|e| match e.kind {
+                TrackEventKind::Midi {
+                    message: MidiMessage::NoteOn { key, .. },
+                    ..
+                } => Some(key.as_int()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(keys, [57, 60, 64]);
+    }
     #[test]
     fn merged_unison_keeps_sounding_until_all_vocal_parts_release() {
         let note = |channel, on| TrackEventKind::Midi {

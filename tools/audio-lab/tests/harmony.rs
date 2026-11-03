@@ -99,6 +99,55 @@ fn chord_note_order_does_not_change_the_audio() {
 }
 
 #[test]
+fn held_polyphony_matches_the_average_of_independently_rendered_voices() {
+    let input: Vec<_> = (0..(SAMPLE_RATE * 0.65) as usize)
+        .map(|i| {
+            let t = i as f64 / SAMPLE_RATE as f64;
+            let phase =
+                std::f64::consts::TAU * 196.0 * t + 0.15 * (std::f64::consts::TAU * 5.0 * t).sin();
+            (0.07 * phase.sin() + 0.04 * (phase * 2.0).sin() + 0.02 * (phase * 5.0).sin()) as f32
+        })
+        .collect();
+    let keys = [57, 64, 60, 67, 48, 52, 55, 69];
+    let notes = keys.map(|key| 440.0 * 2_f32.powf((key as f32 - 69.0) / 12.0));
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = SAMPLE_RATE;
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    let separate: Vec<_> = notes
+        .iter()
+        .map(|&note| {
+            settings.midi_frequencies = [0.0; 8];
+            settings.midi_frequencies[0] = note;
+            render(&input, &[], &config, &settings).raw
+        })
+        .collect();
+    for count in [2, 3, 4, 6, 8] {
+        settings.midi_frequencies = [0.0; 8];
+        settings.midi_frequencies[..count].copy_from_slice(&notes[..count]);
+        let mixed = render(&input, &[], &config, &settings);
+        let peak = mixed
+            .raw
+            .iter()
+            .enumerate()
+            .map(|(i, &sample)| {
+                let expected = separate[..count]
+                    .iter()
+                    .map(|voice| voice[i] as f64)
+                    .sum::<f64>()
+                    / count as f64;
+                (sample as f64 - expected).abs()
+            })
+            .fold(0.0, f64::max);
+        eprintln!("{count} held voices: peak difference from independent sum {peak}");
+        assert!(peak < 0.00001, "{count} held voices interfere: {peak}");
+    }
+}
+
+#[test]
 fn shifting_one_clean_tone_does_not_add_audible_sidebands() {
     let input = tone(200.0, 1.3, &[(1, 0.2)]);
     let mut config = vocal_frame::default_config();

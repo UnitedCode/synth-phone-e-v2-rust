@@ -282,6 +282,7 @@ fn inspect(out: &Path) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
+        [mode,input] if mode == "levels" => { let (_,pcm)=read(Path::new(input))?; println!("{:?}",metrics(&pcm)); Ok(()) },
         [mode, source, out] if mode == "prepare" => prepare(Path::new(source), Path::new(out)),
         [mode, out] if mode == "inspect" => inspect(Path::new(out)),
         [mode, input, output] if mode == "listen" => listen(Path::new(input),Path::new(output)),
@@ -296,6 +297,6 @@ fn main() -> Result<()> {
             listen_at(Path::new(a),Path::new(out_a),target)?;
             listen_at(Path::new(b),Path::new(out_b),target)
         }
-        _ => Err("usage: harmony_capture prepare VOCAL.wav OUTPUT | inspect OUTPUT | listen INPUT.wav OUTPUT.wav | match A.wav B.wav OUT_A.wav OUT_B.wav".into()),
+        _ => Err("usage: harmony_capture prepare VOCAL.wav OUTPUT | inspect OUTPUT | levels INPUT.wav | listen INPUT.wav OUTPUT.wav | match A.wav B.wav OUT_A.wav OUT_B.wav".into()),
     }
 }
