@@ -147,12 +147,12 @@ fn render(source: &[f32], out: &Path, seconds: f64, polyphony: bool) -> Result<(
     let mut track = fs::File::create(out.join("input-pitch.csv"))?;
     writeln!(
         track,
-        "seconds,production_yin_hz,independent_autocorrelation_hz,rms"
+        "seconds,harmony_period_hz,independent_autocorrelation_hz,rms"
     )?;
     for start in (0..source.len()).step_by(HOP_SIZE) {
         let x: Vec<_> = (start..start + 8192).map(sample).collect();
-        let yin = synthphone_e_vocal_dsp::dsp::frequency_analysis::find_pitch_yin(
-            &x[..FFT_SIZE],
+        let yin = synthphone_e_vocal_dsp::dsp::frequency_analysis::find_pitch_harmony(
+            &x[..FFT_SIZE * 2],
             &config,
         );
         writeln!(

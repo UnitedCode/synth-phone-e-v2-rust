@@ -40,9 +40,11 @@ relationships. It sums the voice spectra before one shared inverse FFT. The
 fractional-bin interpolation accounts for the centre of the symmetric Hann
 window. This adapts the frequency-domain harmonizing method of
 [Laroche and Dolson](https://www.ee.columbia.edu/~dpwe/papers/LaroD99-pvoc.pdf)
-to monophonic vocal harmonics. A fresh envelope is calculated every hop. YIN
-selects the source harmonic and inter-frame phase refines its tuning; the old
-forced octave folding is absent. Near-unison wet and dry remain coherent.
+to monophonic vocal harmonics. A fresh envelope is calculated every hop. Filtered
+normalized period analysis selects the source harmonic; inter-frame phase refines
+its tuning. A spectral-evidence check with hysteresis resolves an ambiguous
+suboctave without imposing a fixed singer register. Near-unison wet and dry
+remain coherent.
 
 The first independent-bin implementation was a quality regression despite
 passing steady-tone chord tests. Reconstructing phase from the nearest input
@@ -64,8 +66,9 @@ DMA buffers remain together in their original D2 SRAM region. Initialization
 explicitly writes NOLOAD storage and returns one exclusive reference to RTIC.
 The initializer and DSP dispatch boundaries remain out of line. The earlier
 per-bin state could inflate RTIC's initialization frame and cause an emulated
-Cortex-M fault. The harmonic-coherent state occupies a 96-byte aligned SRAM
-section instead of 16,448 bytes. Builds and production captures, including
+Cortex-M fault. The phase-only state occupied 96 bytes instead of 16,448 bytes;
+the 2048-sample source-pitch history now brings the section to 8,288 bytes.
+Builds and production captures, including
 Cortex-M fault-status checks, cover the memory layout.
 
 Legacy DSP entry points remain available. Firmware, host replay and ARM audio
@@ -84,16 +87,18 @@ cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target
 The harmony tests independently probe requested frequencies, cover eight-note
 order independence, unison after silence, changing-pitch sidebands, and MIDI-only silence without keys.
 MIDI tests cover retrigger/release, channel isolation, pitch bend, sustain and
-panic. The established pitch sweep still has 192 known quality failures; this
-change introduces no new failures at the default fast setting.
+panic. The established pitch sweep records 192 known quality failures in the
+unchanged Pitch Control path; this Harmony repair does not claim to fix them.
 
-Local verification of DSP revision `d7148ad9dc6f285876bf11d31ddc4e4f268d646f`:
+Local verification of DSP revision `f7a8cc55f0470563d5815f9acd4c1c4535b5cda5`:
 
-- 100 audio/MIDI/tool tests and 210 emulator-model tests pass on macOS and Linux.
-- Windows GNU cross-target checks pass for all audio/emulator Rust targets;
+- 102 audio/MIDI/tool tests pass on macOS and Linux. The unchanged emulator
+  models previously passed their 210-test suite on both platforms.
+- Windows GNU cross-target checks pass for all audio-lab Rust targets;
   this does not substitute for running on Windows.
 - DSP unit/integration tests pass, including the independent phase-table check.
-- Ten Cortex-M7 DSP guest cases, including changing-pitch harmony, match host PCM within 0.0001 peak error;
+- Twelve Cortex-M7 DSP guest cases, including rich eight-voice vibrato and
+  eight-voice noise, match host PCM within 0.0001 peak error;
   SysTick interrupts run and deliberate loss of an FFT frame is detected.
 - Four real production-ELF scenarios pass on virtual Rev5: matched old/new
   four-note audio, MIDI-only sustain/release, and eight-note harmony. They have
@@ -194,12 +199,13 @@ The generated channel-1 MIDI files contain only the specified held keys and
 their final releases. A regression test parses them to verify that contract.
 
 `levels.csv` reports actual rendered levels, nonfinite values and limiter hits.
-`input-pitch.csv` compares the production 1024-sample YIN estimate with an
+`input-pitch.csv` compares the coarse 2048-sample Harmony period estimate with an
 independent 8192-sample autocorrelation estimate over one repeated vowel cycle.
 The windows have different durations; inspect stable interior passages before
-interpreting discrepancies. The supplied local vowel shows frequent half-pitch
-estimates in the production detector while the independent estimate stays near
-196 Hz. The G3 control is approximately its source pitch, not a zero-shift bypass:
+interpreting discrepancies. The initial diagnostic found frequent half-pitch
+estimates in the old detector while the independent estimate stayed near 196 Hz.
+This CSV excludes the subsequent spectral octave decision and phase refinement.
+The G3 control is approximately its source pitch, not a zero-shift bypass:
 it still depends on that detector and includes the singer's natural variation.
 
 Synthetic probes additionally cover 90/130/200/300 Hz sources with a sine,
@@ -265,10 +271,63 @@ The local polyphony listening pack uses one constant gain per complete file for
 common RMS 0.05, no new dynamics processing, and identical MP3 encoding. Its
 full-duration files use the shared host DSP; this audit changes no firmware DSP.
 
+## Dense-voice pitch and noise repair
+
+Correct addition can still combine several mistuned voices. The legacy YIN
+routine interpolates the first threshold crossing rather than the completed
+period valley. On a known ten-harmonic 200-Hz source with five-Hz, +/-50-cent
+vibrato, some estimates fall to 184..195 Hz while the true local mean is about
+205 Hz. This changes the source-harmonic labels and pitch-shift phases. Eight
+overlapping voices expose many more such mistuned partials than a sparse pair.
+The summing null test cannot detect this because its individual references have
+the same underlying pitch errors.
+
+The repaired Harmony path uses a 2048-sample history, a 65-tap anti-alias filter
+before eightfold decimation, and complete normalized period peaks based on
+[McLeod and Wyvill's NSDF](https://www.cs.otago.ac.nz/graphics/Geoff/tartini/papers/A_Smarter_Way_to_Find_Pitch.pdf).
+The legacy Pitch Control detector is unchanged. Spectral odd/even harmonic
+energy and hysteresis resolve a suboctave only when even harmonics dominate;
+tests preserve an actual low voice with strong odd harmonics. The octave
+reference expires after eight unvoiced hops. It does not force a fixed register.
+The `harmony_filter_coefficients` Rust example reproduces the filter table;
+unit tests independently bound its voice-band and alias-boundary response.
+The detector consults about 43 ms of past samples, so its response to fast vocal
+changes still needs listening checks. The audio FFT/hop and lookahead are unchanged.
+
+A new independent periodic-grid regression uses one voice, two octave-related
+voices, and eight pitches on a 110-Hz harmonic lattice. For the eight-voice
+fixture, energy outside the exact target harmonics drops from 95.93% to 0.063%.
+This is a controlled rich-oscillator result, not a percentage measured on a
+real singer or a perceptual score. The real-vowel source trace contains 44
+suboctave selections before spectral resolution and none afterward; that trace
+uses a repeated raw vowel and is not a sample-by-sample production-ELF trace.
+
+Unvoiced input previously bypassed at unity while pitched voices were averaged.
+At eight voices, noise could therefore sit about 9 dB above the corresponding
+independent-voice power scale. Unvoiced gain now follows 1/sqrt(voice count).
+A deterministic noise regression checks the relative two/four/eight-voice
+levels; unison-onset, pure-tone vibrato, and voiced summing regressions still
+pass. This does not introduce a compressor or a new master-volume setting.
+
+`harmony_pitch_trace` emits a synthetic pitch-error trace with no argument, or a
+real-vowel period/octave trace with one mono 48014-Hz float WAV argument. It
+reports the spectral decision separately from the independent pitch estimate.
+Full-length listening A/Bs keep the same source, eight held pitches or original
+moving MIDI, lead setting and input gain. One constant playback gain per entire
+file matches electrical RMS to 0.05; no new timbre processing is added afterward.
+The previously accepted two-note output is retained alongside a new two-note
+render so listening can catch a regression. Musical acceptance remains open.
+
+The ELF uses 8,288 bytes of AXI SRAM for vocal state, 32,768 bytes of D2 SRAM
+for audio DMA, and 127,408 bytes of loadable internal-flash sections, leaving
+3,664 bytes in the 128-KiB flash region. Extending beyond eight voices requires
+a separate allocation, memory and physical-deadline assessment.
+
 ## Remaining acceptance gates
 
-There are at most eight distinct harmony pitches. Source pitch detection still
-uses YIN's existing nominal 80..600 Hz vocal range. Unvoiced consonants pass
+There are at most eight distinct harmony pitches. Source pitch detection retains
+the nominal 80..600 Hz vocal range. A ninth MIDI key replaces an existing voice;
+this change does not expand the voice count. Unvoiced consonants pass
 through while a chord is held; with CC47 zero and no MIDI notes the voice is
 muted. Large shifts, breaths, noisy or clipped microphones and wide vibrato can
 still sound artificial. This change retains natural-envelope preservation;

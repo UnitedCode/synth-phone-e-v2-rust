@@ -8,7 +8,7 @@ publish = false
 [workspace]
 
 [dependencies]
-synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "d7148ad9dc6f285876bf11d31ddc4e4f268d646f"}
+synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "f7a8cc55f0470563d5815f9acd4c1c4535b5cda5"}
 hound = "3.5"
 libm = "0.2.15"
 log = "=0.4.28"

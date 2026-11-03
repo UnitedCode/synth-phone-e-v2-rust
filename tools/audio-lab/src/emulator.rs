@@ -1,5 +1,5 @@
 //! Build a real no_std ARM guest, execute it in QEMU, and grade returned samples.
-use crate::{constants::*, estimate_pitch, metrics, render, steady, vocal_frame};
+use crate::{constants::*, estimate_pitch, metrics, render, steady};
 use std::{
     error::Error,
     fs::{self, File},
@@ -201,7 +201,7 @@ pub fn run(directory: &Path) -> Result<()> {
         let expected = render(
             &input,
             &carrier,
-            &vocal_frame::default_config(),
+            &cases::config(case),
             &cases::settings(case),
         )
         .audio;
@@ -228,7 +228,10 @@ pub fn run(directory: &Path) -> Result<()> {
         return Err(format!("{failures} ARM/host mismatches; see arm-comparison.csv").into());
     }
 
-    println!("All nine ARM cases match. Checking an injected lost frame...");
+    println!(
+        "All {} ARM cases match. Checking an injected lost frame...",
+        cases::COUNT
+    );
     let broken_elf = build_guest(&root, true)?;
     let broken = execute(&qemu, &broken_elf, &directory, "arm-lost-frame")?;
     let (fault_error, _) = sample_error(&broken.audio[4], &references[4])?;

@@ -129,14 +129,16 @@ fn held_polyphony_matches_the_average_of_independently_rendered_voices() {
         settings.midi_frequencies = [0.0; 8];
         settings.midi_frequencies[..count].copy_from_slice(&notes[..count]);
         let mixed = render(&input, &[], &config, &settings);
-        let peak = mixed
-            .raw
+        // This equality is for voiced frames. Onsets/consonants have one shared
+        // noise path, whose polyphony-dependent power is checked separately.
+        let region = (SAMPLE_RATE * 0.2) as usize..(SAMPLE_RATE * 0.6) as usize;
+        let peak = mixed.raw[region.clone()]
             .iter()
             .enumerate()
             .map(|(i, &sample)| {
                 let expected = separate[..count]
                     .iter()
-                    .map(|voice| voice[i] as f64)
+                    .map(|voice| voice[i + region.start] as f64)
                     .sum::<f64>()
                     / count as f64;
                 (sample as f64 - expected).abs()
@@ -224,4 +226,106 @@ fn a_held_midi_note_removes_vibrato_without_garbled_sidebands() {
         "vibrato becomes distortion: {:.2}% unwanted energy",
         unwanted * 100.0
     );
+}
+
+#[test]
+fn rich_voiced_vibrato_stays_on_the_requested_harmonic_grid() {
+    let mut phase = 0.0_f64;
+    let input: Vec<_> = (0..(SAMPLE_RATE * 2.0) as usize)
+        .map(|i| {
+            let t = i as f64 / SAMPLE_RATE as f64;
+            let hz = 200.0 * 2_f64.powf(50.0 * (std::f64::consts::TAU * 5.0 * t).sin() / 1200.0);
+            phase += std::f64::consts::TAU * hz / SAMPLE_RATE as f64;
+            (1..=10)
+                .map(|h| 0.15 / h as f64 * (phase * h as f64).sin())
+                .sum::<f64>() as f32
+        })
+        .collect();
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = SAMPLE_RATE;
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    let mut failures = Vec::new();
+    for (name, notes, grid, harmonics) in [
+        ("one-220", &[220.0_f32][..], 220.0, 20),
+        ("one-440", &[440.0][..], 440.0, 20),
+        ("two-octaves", &[220.0, 440.0][..], 220.0, 40),
+        (
+            "eight-harmonic-pitches",
+            &[110.0, 220.0, 330.0, 440.0, 550.0, 660.0, 770.0, 880.0][..],
+            110.0,
+            100,
+        ),
+    ] {
+        settings.midi_frequencies = [0.0; 8];
+        settings.midi_frequencies[..notes.len()].copy_from_slice(notes);
+        let output = render(&input, &[], &config, &settings);
+        let x = &output.audio[(SAMPLE_RATE * 0.4) as usize..(SAMPLE_RATE * 1.8) as usize];
+        let energy = x.iter().map(|&s| (s as f64).powi(2)).sum::<f64>();
+        let mut captured = 0.0;
+        for h in 1..=harmonics {
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, &s) in x.iter().enumerate() {
+                let phase = std::f64::consts::TAU * grid * h as f64 * i as f64 / SAMPLE_RATE as f64;
+                re += s as f64 * phase.cos();
+                im += s as f64 * phase.sin();
+            }
+            captured += 2.0 * (re * re + im * im) / x.len() as f64;
+        }
+        let outside = (1.0 - captured / energy).max(0.0);
+        eprintln!(
+            "rich voiced {name}: {:.3}% outside target harmonics",
+            outside * 100.0
+        );
+        if outside >= 0.05 {
+            failures.push((name, outside));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "rich voiced targets miss their harmonic grids: {failures:?}"
+    );
+}
+
+#[test]
+fn unvoiced_noise_does_not_jump_above_the_polyphonic_voice_power_scale() {
+    let mut random = 0x12345678_u32;
+    let input: Vec<_> = (0..(SAMPLE_RATE * 0.6) as usize)
+        .map(|_| {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            ((random as f64 / u32::MAX as f64) * 0.2 - 0.1) as f32
+        })
+        .collect();
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = SAMPLE_RATE;
+    config.harmony_lead_gain = 0.0;
+    let mut reference = 0.0;
+    for count in [2, 4, 8] {
+        let mut settings = MusicalSettings {
+            mode: ProcessingMode::Harmony,
+            ..Default::default()
+        };
+        for i in 0..count {
+            settings.midi_frequencies[i] = 220.0 + i as f32 * 35.0;
+        }
+        let output = render(&input, &[], &config, &settings);
+        let rms = audio_lab::metrics(
+            &output.raw[(SAMPLE_RATE * 0.2) as usize..(SAMPLE_RATE * 0.5) as usize],
+        )
+        .rms;
+        if count == 2 {
+            reference = rms;
+        }
+        let expected = (2.0 / count as f64).sqrt();
+        assert!(
+            (rms / reference - expected).abs() < 0.03,
+            "{count} unvoiced voices: {} power ratio, expected {expected}",
+            rms / reference
+        );
+    }
 }

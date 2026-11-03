@@ -2,7 +2,7 @@
 use crate::constants::SAMPLE_RATE;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
-pub const COUNT: usize = 10;
+pub const COUNT: usize = 12;
 pub const INPUT_SAMPLES: usize = 24_000;
 pub const MAGIC: &[u8; 8] = b"SAEARM01";
 pub const NAMES: [&str; COUNT] = [
@@ -16,12 +16,22 @@ pub const NAMES: [&str; COUNT] = [
     "female-bright-220",
     "male-sine-440",
     "harmony-vibrato",
+    "harmony-rich-eight",
+    "harmony-noise-eight",
 ];
+
+pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
+    let mut config = crate::vocal_frame::default_config();
+    if case >= 9 {
+        config.harmony_lead_gain = 0.0;
+    }
+    config
+}
 
 pub fn settings(case: usize) -> MusicalSettings {
     let mode = match case {
         4 => ProcessingMode::Dry,
-        5 | 9 => ProcessingMode::Harmony,
+        5 | 9 | 10 | 11 => ProcessingMode::Harmony,
         6 => ProcessingMode::Vocode,
         _ => ProcessingMode::PitchControl,
     };
@@ -34,6 +44,10 @@ pub fn settings(case: usize) -> MusicalSettings {
         },
         midi_frequencies: if case == 5 {
             [220.0, 330.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        } else if case >= 10 {
+            [
+                130.81278, 164.81378, 195.99771, 220.0, 261.62555, 329.62756, 391.99542, 440.0,
+            ]
         } else if case == 9 {
             [220.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         } else {
@@ -47,11 +61,26 @@ pub fn input(case: usize, index: usize) -> f32 {
     if case == 0 || index >= INPUT_SAMPLES {
         return 0.0;
     }
-    if case == 9 {
+    if case == 11 {
+        let mut random = (index as u32)
+            .wrapping_mul(0x9e3779b9)
+            .wrapping_add(0x12345678);
+        random ^= random << 13;
+        random ^= random >> 17;
+        random ^= random << 5;
+        return random as f32 / u32::MAX as f32 * 0.2 - 0.1;
+    }
+    if case == 9 || case == 10 {
         let time = index as f32 / SAMPLE_RATE;
         let phase = core::f32::consts::TAU * 200.0 * time
             - 1.2 * libm::cosf(core::f32::consts::TAU * 5.0 * time);
-        return 0.2 * libm::sinf(phase);
+        return if case == 10 {
+            (1..=10)
+                .map(|h| 0.15 / h as f32 * libm::sinf(phase * h as f32))
+                .sum()
+        } else {
+            0.2 * libm::sinf(phase)
+        };
     }
     let hz = match case {
         1 => 110.0,
