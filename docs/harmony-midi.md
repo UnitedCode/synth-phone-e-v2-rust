@@ -174,6 +174,49 @@ A public file's title does not establish that it is the vocal arrangement.
 Inspect its register, track labels and chords before using it for rehearsal;
 accompaniment bass notes may need a different arrangement or register.
 
+## Isolating sound quality from the arrangement
+
+The moving-sine regression above does **not** establish acceptable vocal quality.
+The user rejected the repaired full-arrangement sound too. Independent held-note
+diagnostics find remaining source-pitch and complex-voice problems; do not treat
+successful firmware execution or note-presence tests as musical acceptance.
+
+```text
+cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target HOST_TARGET --example harmony_isolation -- VOWEL.wav NEW_OUTPUT_DIRECTORY 288
+```
+
+This uses the same vowel repetition, ten-ms edge fades, input gain, default DSP
+configuration and overlap-add as `midi_reference`. It emits the exact dry input,
+firmware Dry, G3 unison control (195.998 Hz), held A3 (220 Hz), and held A3/E4
+(220/329.628 Hz) for the entire duration. All Harmony versions have the dry lead
+muted. These are stationary diagnostic notes, **not** a song transcription.
+The generated channel-1 MIDI files contain only the specified held keys and
+their final releases. A regression test parses them to verify that contract.
+
+`levels.csv` reports actual rendered levels, nonfinite values and limiter hits.
+`input-pitch.csv` compares the production 1024-sample YIN estimate with an
+independent 8192-sample autocorrelation estimate over one repeated vowel cycle.
+The windows have different durations; inspect stable interior passages before
+interpreting discrepancies. The supplied local vowel shows frequent half-pitch
+estimates in the production detector while the independent estimate stays near
+196 Hz. The G3 control is approximately its source pitch, not a zero-shift bypass:
+it still depends on that detector and includes the singer's natural variation.
+
+Synthetic probes additionally cover 90/130/200/300 Hz sources with a sine,
+ten harmonics, ten harmonics plus vibrato, and moving harmonic amplitudes.
+Their source and DSP clocks match, avoiding a clock-mismatch false positive.
+The CSV measures energy outside exact target harmonics, plus independently
+estimated pitch and RMS. This metric is sensitive to small tuning errors and
+intentional amplitude modulation, so it must not be described as a general
+distortion percentage or perceptual quality score. Broader voiced fixtures
+expose defects that the single-sine vibrato regression does not catch.
+
+These full-duration controls are host DSP renders with no deadline loss. Their
+artifacts therefore cannot be attributed to physical CPU overload or a codec.
+They establish that software/source issues remain; they do not prove either
+that this algorithm can achieve the desired sound or that the Daisy cannot.
+Keep the experimental DSP on clankers pending a better vocal-quality result.
+
 ## Remaining acceptance gates
 
 There are at most eight distinct harmony pitches. Source pitch detection still

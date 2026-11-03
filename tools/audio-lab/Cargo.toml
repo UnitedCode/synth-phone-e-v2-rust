@@ -18,6 +18,10 @@ midly = { version = "0.5.3", default-features = false, features = ["alloc"] }
 name = "midi_reference"
 test = true
 
+[[example]]
+name = "harmony_isolation"
+test = true
+
 [profile.release]
 opt-level = "s"
 lto = true
