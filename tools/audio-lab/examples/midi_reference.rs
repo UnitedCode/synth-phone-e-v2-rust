@@ -100,6 +100,7 @@ fn select_vocal_midi(
     low: u8,
     high: u8,
     maximum: usize,
+    skip_highest: usize,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     use midly::{Format, Header, TrackEvent};
     if low > high || high > 127 || !(1..=8).contains(&maximum) {
@@ -147,9 +148,13 @@ fn select_vocal_midi(
             }
             position += 1;
         }
+        if skip_highest > 0 && active.len() > 8 {
+            return Err("split preview supports up to eight simultaneous notes; refusing to lose backing notes".into());
+        }
         let next: BTreeMap<_, _> = active
             .range(low..=high)
             .rev()
+            .skip(skip_highest)
             .take(maximum)
             .map(|(&key, &vel)| (key, vel))
             .collect();
@@ -315,6 +320,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         tracks.push(count);
     }
     events.sort_by_key(|e| e.0);
+    if args.get(1).is_some_and(|arg| arg == "--split-upper-voice") {
+        if args.len() != 4 {
+            return Err(
+                "usage: midi_reference INPUT.mid --split-upper-voice UPPER.mid BACKING.mid".into(),
+            );
+        }
+        if args[2] == args[3]
+            || std::path::Path::new(&args[2]).exists()
+            || std::path::Path::new(&args[3]).exists()
+        {
+            return Err("choose two distinct new output files".into());
+        }
+        let merged = vocal_midi(&events, smf.header.timing)?;
+        let upper = select_vocal_midi(&merged, 0, 127, 1, 0)?;
+        let backing = select_vocal_midi(&merged, 0, 127, 8, 1)?;
+        std::fs::write(&args[2], upper)?;
+        std::fs::write(&args[3], backing)?;
+        eprintln!("split highest held note from its complementary backing; this does not identify a verified melody");
+        return Ok(());
+    }
     if args.get(1).is_some_and(|arg| arg == "--select-vocal-midi") {
         if args.len() != 6 {
             return Err("usage: midi_reference INPUT.mid --select-vocal-midi OUTPUT.mid LOW_KEY HIGH_KEY MAX_VOICES".into());
@@ -328,6 +353,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             args[3].parse()?,
             args[4].parse()?,
             args[5].parse()?,
+            0,
         )?;
         std::fs::write(&args[2], selected)?;
         eprintln!("exported diagnostic note selection; highest held notes take priority");
@@ -397,6 +423,85 @@ fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     #[test]
+    fn upper_and_backing_are_disjoint_and_preserve_all_held_notes() {
+        use std::collections::BTreeSet;
+        let note = |key: u8, on| TrackEventKind::Midi {
+            channel: 0.into(),
+            message: if on {
+                MidiMessage::NoteOn {
+                    key: key.into(),
+                    vel: 90.into(),
+                }
+            } else {
+                MidiMessage::NoteOff {
+                    key: key.into(),
+                    vel: 0.into(),
+                }
+            },
+        };
+        let events = vec![
+            (0, 0, note(48, true)),
+            (0, 0, note(60, true)),
+            (240, 0, note(64, true)),
+            (480, 0, note(64, false)),
+            (720, 0, note(60, false)),
+            (960, 0, note(48, false)),
+            (1200, 0, TrackEventKind::Meta(MetaMessage::EndOfTrack)),
+        ];
+        let original = vocal_midi(&events, Timing::Metrical(480.into())).unwrap();
+        let upper = select_vocal_midi(&original, 0, 127, 1, 0).unwrap();
+        let backing = select_vocal_midi(&original, 0, 127, 8, 1).unwrap();
+        let snapshot = |bytes: &[u8], until: u64| {
+            let midi = Smf::parse(bytes).unwrap();
+            let (mut tick, mut held) = (0_u64, BTreeSet::new());
+            for event in &midi.tracks[0] {
+                tick += u64::from(event.delta.as_int());
+                if tick > until {
+                    break;
+                }
+                match event.kind {
+                    TrackEventKind::Midi {
+                        message: MidiMessage::NoteOn { key, vel },
+                        ..
+                    } if vel.as_int() > 0 => {
+                        held.insert(key.as_int());
+                    }
+                    TrackEventKind::Midi {
+                        message: MidiMessage::NoteOff { key, .. } | MidiMessage::NoteOn { key, .. },
+                        ..
+                    } => {
+                        held.remove(&key.as_int());
+                    }
+                    _ => (),
+                }
+            }
+            held
+        };
+        for tick in [0, 240, 480, 720, 960, 1200] {
+            let all = snapshot(&original, tick);
+            let lead = snapshot(&upper, tick);
+            let back = snapshot(&backing, tick);
+            assert!(lead.is_disjoint(&back));
+            assert_eq!(lead.union(&back).copied().collect::<BTreeSet<_>>(), all);
+            assert_eq!(lead.last(), all.last());
+            assert!(lead.len() <= 1);
+        }
+        for bytes in [&upper, &backing] {
+            assert_eq!(
+                Smf::parse(bytes).unwrap().tracks[0]
+                    .iter()
+                    .map(|e| e.delta.as_int())
+                    .sum::<u32>(),
+                1200
+            );
+        }
+        let mut crowded=Vec::new();
+        for key in 48..57 {crowded.push((0,0,note(key,true)));}
+        for key in 48..57 {crowded.push((480,0,note(key,false)));}
+        let merged=vocal_midi(&crowded,Timing::Metrical(480.into())).unwrap();
+        assert!(select_vocal_midi(&merged,0,127,8,1).is_err(),"never silently drop a backing note in a split preview");
+    }
+    #[test]
     fn diagnostic_selection_preserves_timing_and_restores_held_lower_notes() {
         let note = |key: u8, on| TrackEventKind::Midi {
             channel: 0.into(),
@@ -429,7 +534,7 @@ mod tests {
             (960, 0, TrackEventKind::Meta(MetaMessage::EndOfTrack)),
         ];
         let merged = vocal_midi(&events, Timing::Metrical(480.into())).unwrap();
-        let bytes = select_vocal_midi(&merged, 48, 72, 2).unwrap();
+        let bytes = select_vocal_midi(&merged, 48, 72, 2, 0).unwrap();
         let selected = Smf::parse(&bytes).unwrap();
         let mut tick = 0;
         let mut notes = Vec::new();
@@ -456,7 +561,7 @@ mod tests {
             ]
         );
         assert_eq!(tick, 960, "retain the original final silence");
-        let range_only = select_vocal_midi(&merged, 48, 72, 8).unwrap();
+        let range_only = select_vocal_midi(&merged, 48, 72, 8, 0).unwrap();
         let smf = Smf::parse(&range_only).unwrap();
         let keys: Vec<_> = smf.tracks[0]
             .iter()

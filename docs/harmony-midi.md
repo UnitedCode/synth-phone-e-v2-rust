@@ -92,7 +92,7 @@ unchanged Pitch Control path; this Harmony repair does not claim to fix them.
 
 Local verification of DSP revision `f7a8cc55f0470563d5815f9acd4c1c4535b5cda5`:
 
-- 102 audio/MIDI/tool tests pass on macOS and Linux. The unchanged emulator
+- 104 audio/MIDI/tool tests pass on macOS and Linux. The unchanged emulator
   models previously passed their 210-test suite on both platforms.
 - Windows GNU cross-target checks pass for all audio-lab Rust targets;
   this does not substitute for running on Windows.
@@ -322,6 +322,42 @@ The ELF uses 8,288 bytes of AXI SRAM for vocal state, 32,768 bytes of D2 SRAM
 for audio DMA, and 127,408 bytes of loadable internal-flash sections, leaving
 3,664 bytes in the 128-KiB flash region. Extending beyond eight voices requires
 a separate allocation, memory and physical-deadline assessment.
+
+## Auditioning a foreground line
+
+The all-note MIDI demo has no lead role: every requested pitch has the same
+per-voice weight, and CC47 is zero because the input is a fixed repeated vowel.
+It therefore cannot demonstrate a singer performing a foreground melody over
+backing chords. MIDI velocity does not weight Harmony voices. The external
+single-track file mostly uses velocity 3, and has no labelled melody part.
+
+For an explicit listening experiment, split the highest held pitch from the
+complementary backing, render both through the shared host DSP, then set a
+constant whole-recording bus balance:
+
+```text
+midi_reference INPUT.mid --split-upper-voice UPPER.mid BACKING.mid
+midi_reference UPPER.mid VOWEL.wav UPPER.wav 0 full
+midi_reference BACKING.mid VOWEL.wav BACKING.wav 0 full
+harmony_capture balance UPPER.wav BACKING.wav PREVIEW.wav 6
+```
+
+`6` requests upper-part RMS 6 dB above the combined backing. A shared constant
+playback gain targets whole-file RMS 0.05 and peak at most 0.9; no compressor or
+limiter reshapes the stems. The independent mix test recovers both lines using
+Fourier projections with an initially much quieter upper line. A MIDI test
+requires the two selected note sets to remain disjoint, preserve their union and
+end time, and restore displaced notes correctly. More than eight simultaneous
+source notes is refused in split mode rather than silently losing backing notes.
+
+This is a highest-note proxy, **not** melody transcription. Between melody
+phrases the highest held pitch could belong to another part. The two stems are
+resynthesized separately, not extracted bit-for-bit from the original composite;
+voice-role changes can therefore alter phase histories. This offline two-bus
+audition is not a firmware gain change or a processor-load test. An isolated
+upper-line listening copy accompanies the local full-length preview so the user
+can recognize or reject that proposed lead. Real-device controls must distinguish
+the sung lead from a MIDI-designated lead before assuming a melody priority.
 
 ## Remaining acceptance gates
 

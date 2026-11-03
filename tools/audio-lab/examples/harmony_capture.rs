@@ -282,6 +282,17 @@ fn inspect(out: &Path) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
+        [mode,upper,backing,output,db] if mode == "balance" => {
+            if Path::new(output).exists() {return Err("choose a new output file".into());}
+            let (rate,a)=read(Path::new(upper))?;
+            let (other_rate,b)=read(Path::new(backing))?;
+            if rate!=other_rate {return Err("stem rates differ".into());}
+            let mix=audio_lab::stem_mix::balance(&a,&b,db.parse()?)?;
+            let mut writer=hound::WavWriter::create(output,hound::WavSpec {channels:1,sample_rate:rate,bits_per_sample:32,sample_format:hound::SampleFormat::Float})?;
+            for &s in &mix.audio {writer.write_sample(s)?;} writer.finalize()?;
+            println!("constant upper gain={}, backing gain={}; upper RMS {} dB above backing; {:?}",mix.upper_gain,mix.backing_gain,db,metrics(&mix.audio));
+            Ok(())
+        },
         [mode,input] if mode == "levels" => { let (_,pcm)=read(Path::new(input))?; println!("{:?}",metrics(&pcm)); Ok(()) },
         [mode, source, out] if mode == "prepare" => prepare(Path::new(source), Path::new(out)),
         [mode, out] if mode == "inspect" => inspect(Path::new(out)),
@@ -297,6 +308,6 @@ fn main() -> Result<()> {
             listen_at(Path::new(a),Path::new(out_a),target)?;
             listen_at(Path::new(b),Path::new(out_b),target)
         }
-        _ => Err("usage: harmony_capture prepare VOCAL.wav OUTPUT | inspect OUTPUT | levels INPUT.wav | listen INPUT.wav OUTPUT.wav | match A.wav B.wav OUT_A.wav OUT_B.wav".into()),
+        _ => Err("usage: harmony_capture prepare VOCAL.wav OUTPUT | inspect OUTPUT | levels INPUT.wav | listen INPUT.wav OUTPUT.wav | match A.wav B.wav OUT_A.wav OUT_B.wav | balance UPPER.wav BACKING.wav OUTPUT.wav UPPER_DB".into()),
     }
 }

@@ -3,6 +3,7 @@ use std::time::Instant;
 use synthphone_e_vocal_dsp::{dsp::normalize_sample, MusicalSettings, VocalEffectsConfig};
 pub mod emulator;
 pub mod replay;
+pub mod stem_mix;
 #[path = "../../../src/audio/mod.rs"]
 pub mod audio;
 #[path = "../../../src/percussion.rs"]
