@@ -120,9 +120,18 @@ pub fn audio_handler(
                                         controller,
                                         value,
                                     } => match controller {
-                                        123 => {
+                                        120 => {
                                             voice_manager.all_notes_off(Some(channel));
                                         }
+                                        123 => voice_manager.release_channel_notes(channel),
+                                        64 => voice_manager.set_sustain(channel, value >= 64),
+                                        121 => {
+                                            voice_manager.set_sustain(channel, false);
+                                            voice_manager.apply_channel_pitch_bend(channel, 0.0);
+                                        }
+                                        47 => shared.app_state_machine.lock(|msm| {
+                                            msm.set_harmony_lead_from_midi(value);
+                                        }),
                                         7 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_volume_from_midi(value);
@@ -163,9 +172,9 @@ pub fn audio_handler(
                                         }
                                         _ => {}
                                     },
-                                    crate::midi::MidiEvent::PitchBend { channel: _, value } => {
+                                    crate::midi::MidiEvent::PitchBend { channel, value } => {
                                         let bend_ratio = (value as f32 - 8192.0) / 8192.0;
-                                        voice_manager.apply_pitch_bend(bend_ratio);
+                                        voice_manager.apply_channel_pitch_bend(channel, bend_ratio);
                                     }
                                     crate::midi::MidiEvent::ProgramChange { channel, program } => {
                                         shared.app_state_machine.lock(|msm| {
@@ -383,7 +392,7 @@ pub fn handle_vocal_effects(
     last_output_phases: &mut [f32; FFT_SIZE],
     cached_harmony_envelope: &mut [f32; FFT_SIZE / 2],
     cached_harmony_inv_envelope: &mut [f32; FFT_SIZE / 2],
-    previous_pitch_shift_ratio: &mut f32,
+    vocal_state: &mut app_lib::vocal_frame::VocalStreamState,
     carrier_buffer: &mut RingBuffer<BUFFER_SIZE>,
     osc: &mut Oscillator,
     carrier_oscs: &mut [Oscillator; 8],
@@ -398,6 +407,7 @@ pub fn handle_vocal_effects(
     let mut key = 0i8;
     let mut pitch_ratio = 1.0f32;
     let mut autotune_speed = 5;
+    let mut harmony_lead = 1.0;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
         let snapshot = asm.snapshot();
@@ -411,6 +421,7 @@ pub fn handle_vocal_effects(
         }
         formant = snapshot.formant;
         autotune_speed = snapshot.autotune_speed;
+        harmony_lead = snapshot.harmony_lead as f32 / 127.0;
         synth_gain = output_mix::synth_gain(snapshot.melody_volume);
         key = snapshot.key;
         // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
@@ -525,7 +536,8 @@ pub fn handle_vocal_effects(
         octave_ratio: pitch_ratio,
         mode,
     };
-    let config = config_for_speed(autotune_speed);
+    let mut config = config_for_speed(autotune_speed);
+    config.harmony_lead_gain = harmony_lead;
     let mut input_buffer = [0.0; FFT_SIZE];
     let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);
     ctx.in_ring
@@ -542,7 +554,7 @@ pub fn handle_vocal_effects(
         last_output_phases,
         cached_harmony_envelope,
         cached_harmony_inv_envelope,
-        previous_pitch_shift_ratio,
+        vocal_state,
         &config,
         &musical_settings,
     );

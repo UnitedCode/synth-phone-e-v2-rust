@@ -1,6 +1,7 @@
 //! Hardware-independent entry point shared by the firmware and audio lab.
+pub use synthphone_e_vocal_dsp::VocalStreamState;
 use synthphone_e_vocal_dsp::{
-    process_vocal_effects_1024_with_state, MusicalSettings, VocalEffectsConfig,
+    process_vocal_effects_1024_stream, MusicalSettings, VocalEffectsConfig,
 };
 
 /// Keep the existing firmware configuration in one place for offline replay.
@@ -32,18 +33,18 @@ pub fn process_frame(
     output_phases: &mut [f32; 1024],
     harmony_envelope: &mut [f32; 512],
     harmony_inv_envelope: &mut [f32; 512],
-    previous_ratio: &mut f32,
+    state: &mut VocalStreamState,
     config: &VocalEffectsConfig,
     settings: &MusicalSettings,
 ) -> [f32; 1024] {
-    process_vocal_effects_1024_with_state(
+    process_vocal_effects_1024_stream(
         input,
         Some(carrier),
         input_phases,
         output_phases,
         harmony_envelope,
         harmony_inv_envelope,
-        previous_ratio,
+        state,
         config,
         settings,
     )

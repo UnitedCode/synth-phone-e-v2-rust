@@ -26,6 +26,9 @@ mod percussion;
 mod settings_storage;
 mod state_machine;
 mod types;
+// CPU-owned SRAM needs one localized initializer; other modules deny unsafe.
+#[allow(unsafe_code)]
+mod vocal_storage;
 
 mod rtic_app {
     #[rtic::app(
@@ -133,7 +136,7 @@ mod rtic_app {
             carrier_ring: RingBuffer<BUFFER_SIZE>,
             osc: Oscillator,
             carrier_oscs: [Oscillator; 8],
-            previous_pitch_shift_ratio: f32,
+            vocal_state: &'static mut app_lib::vocal_frame::VocalStreamState,
             midi_receiver: MidiReceiver,
             sprite_atlas: ImageRawBE<'static, BinaryColor>,
             held_keys: HeldKeys,
@@ -361,7 +364,8 @@ mod rtic_app {
                     hop_counter: 0,
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
-                    previous_pitch_shift_ratio: 1.0,
+                    vocal_state: crate::vocal_storage::take()
+                        .expect("Vocal state already initialized"),
                     last_input_phases: [0.0; FFT_SIZE],
                     last_output_phases: [0.0; FFT_SIZE],
                     cached_harmony_envelope: [1.0; FFT_SIZE / 2],
@@ -614,7 +618,7 @@ mod rtic_app {
                 last_output_phases,
                 cached_harmony_envelope,
                 cached_harmony_inv_envelope,
-                previous_pitch_shift_ratio,
+                vocal_state,
                 carrier_ring,
                 osc,
                 carrier_oscs,
@@ -628,7 +632,7 @@ mod rtic_app {
                 ctx.local.last_output_phases,
                 ctx.local.cached_harmony_envelope,
                 ctx.local.cached_harmony_inv_envelope,
-                ctx.local.previous_pitch_shift_ratio,
+                ctx.local.vocal_state,
                 ctx.local.carrier_ring,
                 ctx.local.osc,
                 ctx.local.carrier_oscs,

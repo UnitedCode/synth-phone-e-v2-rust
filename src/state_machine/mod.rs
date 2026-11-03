@@ -356,6 +356,8 @@ pub struct AppStateMachine {
     current_formant: i8,
     current_waveform: i8,
     current_percussion: i8,
+    /// Transient MIDI CC47 performance control; does not change flash format.
+    harmony_lead: u8,
     pub volume: i8,
     pub note: i8,
     pub key_down_pressed: bool,
@@ -390,6 +392,7 @@ pub struct AppStateMachineSnapshot {
     pub key_up_pressed: bool,
     pub waveform: i8,
     pub percussion: i8,
+    pub harmony_lead: u8,
 }
 
 // Add a MenuContext struct for menu display
@@ -417,6 +420,7 @@ impl AppStateMachine {
             current_formant: 0,
             current_waveform: 0,
             current_percussion: 2, // drums
+            harmony_lead: 127,
             volume: 10,
             note: 0,
             key_down_pressed: false,
@@ -515,6 +519,7 @@ impl AppStateMachine {
             key_up_pressed: self.key_up_pressed,
             waveform: self.current_waveform,
             percussion: self.current_percussion,
+            harmony_lead: self.harmony_lead,
         }
     }
 
@@ -740,6 +745,10 @@ impl AppStateMachine {
 
     /// Sets formant from an incoming MIDI CC81 value: 0=Male, 64=Off,
     /// 127=Female — mirrors the EffectsProfile keypad's formant row.
+    pub fn set_harmony_lead_from_midi(&mut self, value: u8) {
+        self.harmony_lead = value.min(127);
+    }
+
     pub fn set_formant_from_midi(&mut self, value: u8) {
         self.current_formant = if value < 43 {
             1

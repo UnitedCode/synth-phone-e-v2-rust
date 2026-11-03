@@ -8,10 +8,15 @@ publish = false
 [workspace]
 
 [dependencies]
-synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "cddeddc84ad5b1d11a8c7e15f414f381186e633f"}
+synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "55338e4d962f2ad85639b19226c4beba87d598d4"}
 hound = "3.5"
 libm = "0.2.15"
 log = "=0.4.28"
+midly = { version = "0.5.3", default-features = false, features = ["alloc"] }
+
+[[example]]
+name = "midi_reference"
+test = true
 
 [profile.release]
 opt-level = "s"

@@ -187,6 +187,11 @@ public static class DaisyHost
         }
         if(args[5]=="startup") File.WriteAllText(args[3]+".startup-time.txt",$"elapsed_ns={machine.ElapsedVirtualTime.TimeElapsed.TotalNanoseconds}\n");
         Console.WriteLine("PC: " + cpu.PC);
+        using(var faults=new StreamWriter(args[3]+".cpu-faults.txt")) {
+            foreach(var address in new uint[]{0xE000ED28,0xE000ED2C,0xE000ED34,0xE000ED38})
+                faults.WriteLine($"0x{address:X8}=0x{bus.ReadDoubleWord(address):X8}");
+            for(int register=0;register<16;register++) faults.WriteLine($"r{register}={cpu.GetRegister(register)}");
+        }
         File.WriteAllBytes(args[3], bus.ReadBytes(0x20000000UL, 0x20000));
         sai.Save(args[3] + ".wav");
         ((DaisyFmc)machine["sysbus.fmc"]).Save(args[3]+".sdram.txt");

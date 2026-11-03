@@ -24,6 +24,7 @@ pub struct HybridVoice {
     note: Option<u8>,
     velocity: u8,
     channel: u8,
+    key_down: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,7 @@ impl HybridVoice {
             note: None,
             velocity: 0,
             channel: 0,
+            key_down: false,
         }
     }
 
@@ -70,6 +72,7 @@ impl HybridVoice {
         self.note = Some(note);
         self.velocity = velocity;
         self.channel = channel;
+        self.key_down = true;
 
         // Channel 9 (0-indexed) = MIDI channel 10 = drums
         if channel == 9 {
@@ -88,6 +91,7 @@ impl HybridVoice {
     pub fn note_off(&mut self) {
         self.note = None;
         self.velocity = 0;
+        self.key_down = false;
         // Synth will just stop producing sound when we stop calling it
         // Drum will finish its envelope naturally
     }
@@ -141,7 +145,7 @@ impl HybridVoice {
         if let Some(note) = self.note {
             if self.active_type == VoiceTypeId::Synth {
                 let base_freq = crate::midi::notes::frequency(note);
-                let bent_freq = base_freq * (1.0 + bend_ratio * 0.1);
+                let bent_freq = base_freq * bend_factor(bend_ratio);
                 self.synth.set_freq(bent_freq);
             }
             // Drums don't pitch bend
@@ -166,24 +170,34 @@ fn is_sound_only_channel(channel: u8) -> bool {
     channel == 1 || channel == 9
 }
 
+/// Fixed default wheel range: two semitones in either direction. RPN bend
+/// sensitivity is not implemented; keep this explicit rather than a linear Hz shift.
+fn bend_factor(bend: f32) -> f32 {
+    libm::exp2f(bend.clamp(-1.0, 1.0) / 6.0)
+}
+
 pub struct VoiceManager<const MAX_VOICES: usize> {
     voices: [HybridVoice; MAX_VOICES],
-    pitch_bend_ratio: f32,
+    pitch_bend: [f32; 16],
+    sustain: [bool; 16],
     /// Frequencies from voices whose channel isn't voice-ctrl-only or sound-only — fed to vocal effects DSP.
     cached_frequencies: [f32; MAX_VOICES],
     /// Frequencies from ch 0 (voice-ctrl-only) — also fed to vocal effects DSP.
     voice_ctrl_freqs: [f32; MAX_VOICES],
     voice_ctrl_notes: [Option<u8>; MAX_VOICES],
+    voice_ctrl_down: [bool; MAX_VOICES],
 }
 
 impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             voices: core::array::from_fn(|_| HybridVoice::new(sample_rate)),
-            pitch_bend_ratio: 0.0,
+            pitch_bend: [0.0; 16],
+            sustain: [false; 16],
             cached_frequencies: [0.0; MAX_VOICES],
             voice_ctrl_freqs: [0.0; MAX_VOICES],
             voice_ctrl_notes: [None; MAX_VOICES],
+            voice_ctrl_down: [false; MAX_VOICES],
         }
     }
 
@@ -194,17 +208,28 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
-        let frequency = crate::midi::notes::frequency(note);
+        if channel >= 16 || MAX_VOICES == 0 {
+            return;
+        }
+        if velocity == 0 {
+            self.note_off(note, channel);
+            return;
+        }
+        let frequency =
+            crate::midi::notes::frequency(note) * bend_factor(self.pitch_bend[channel as usize]);
 
         // Ch 0: voice effects only — track frequency, no audio voice.
         if channel == VOICE_CTRL_CHANNEL {
-            for i in 0..MAX_VOICES {
-                if self.voice_ctrl_notes[i] == Some(note) || self.voice_ctrl_notes[i].is_none() {
-                    self.voice_ctrl_notes[i] = Some(note);
-                    self.voice_ctrl_freqs[i] = frequency;
-                    return;
-                }
-            }
+            let i = self
+                .voice_ctrl_notes
+                .iter()
+                .position(|n| *n == Some(note))
+                .or_else(|| self.voice_ctrl_notes.iter().position(Option::is_none))
+                .or_else(|| self.voice_ctrl_down.iter().position(|down| !down))
+                .unwrap_or(0);
+            self.voice_ctrl_notes[i] = Some(note);
+            self.voice_ctrl_freqs[i] = frequency;
+            self.voice_ctrl_down[i] = true;
             return;
         }
 
@@ -223,6 +248,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_playing(note, channel) {
                 self.voices[i].note_on(note, velocity, channel, frequency);
+                self.cached_frequencies[i] = 0.0;
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
@@ -234,6 +260,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_free() && self.voices[i].type_id() == needed_type {
                 self.voices[i].note_on(note, velocity, channel, frequency);
+                self.cached_frequencies[i] = 0.0;
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
@@ -245,6 +272,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         for i in 0..MAX_VOICES {
             if self.voices[i].is_free() {
                 self.voices[i].note_on(note, velocity, channel, frequency);
+                self.cached_frequencies[i] = 0.0;
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
@@ -254,6 +282,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
         // 4. Voice stealing - steal voice 0
         self.voices[0].note_on(note, velocity, channel, frequency);
+        self.cached_frequencies[0] = 0.0;
         if update_cache {
             self.update_frequency_cache(0, frequency);
         }
@@ -261,13 +290,20 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
     #[inline(always)]
     fn update_frequency_cache(&mut self, idx: usize, base_freq: f32) {
-        self.cached_frequencies[idx] = base_freq * (1.0 + self.pitch_bend_ratio * 0.1);
+        self.cached_frequencies[idx] = base_freq;
     }
 
     pub fn note_off(&mut self, note: u8, channel: u8) {
+        if channel >= 16 {
+            return;
+        }
         if channel == VOICE_CTRL_CHANNEL {
             for i in 0..MAX_VOICES {
                 if self.voice_ctrl_notes[i] == Some(note) {
+                    self.voice_ctrl_down[i] = false;
+                    if self.sustain[channel as usize] {
+                        return;
+                    }
                     self.voice_ctrl_notes[i] = None;
                     self.voice_ctrl_freqs[i] = 0.0;
                     return;
@@ -292,6 +328,10 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
         for i in 0..MAX_VOICES {
             if self.voices[i].is_playing(note, channel) {
+                self.voices[i].key_down = false;
+                if self.sustain[channel as usize] {
+                    return;
+                }
                 self.voices[i].note_off();
                 self.cached_frequencies[i] = 0.0;
                 return;
@@ -311,7 +351,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         melody_gain: f32,
         drum_gain: f32,
     ) -> f32 {
-        let (melody, drums) = self.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain);
+        let (melody, drums) =
+            self.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain);
         melody + drums
     }
 
@@ -319,7 +360,12 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         self.get_mixed_sources_with_gains(false, 1.0, 1.0)
     }
 
-    pub fn get_mixed_sources_with_gains(&mut self, mute_melody_synth: bool, melody_gain: f32, drum_gain: f32) -> (f32, f32) {
+    pub fn get_mixed_sources_with_gains(
+        &mut self,
+        mute_melody_synth: bool,
+        melody_gain: f32,
+        drum_gain: f32,
+    ) -> (f32, f32) {
         let mut melody = 0.0f32;
         let mut drums = 0.0f32;
         let mut count = 0usize;
@@ -355,12 +401,84 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn apply_pitch_bend(&mut self, bend_ratio: f32) {
-        self.pitch_bend_ratio = bend_ratio;
+        for channel in 0..16 {
+            self.apply_channel_pitch_bend(channel, bend_ratio);
+        }
+    }
+
+    pub fn apply_channel_pitch_bend(&mut self, channel: u8, bend_ratio: f32) {
+        if channel >= 16 || !bend_ratio.is_finite() {
+            return;
+        }
+        let bend_ratio = bend_ratio.clamp(-1.0, 1.0);
+        self.pitch_bend[channel as usize] = bend_ratio;
+        if channel == VOICE_CTRL_CHANNEL {
+            for i in 0..MAX_VOICES {
+                if let Some(note) = self.voice_ctrl_notes[i] {
+                    self.voice_ctrl_freqs[i] =
+                        crate::midi::notes::frequency(note) * bend_factor(bend_ratio);
+                }
+            }
+        }
         for i in 0..MAX_VOICES {
+            if self.voices[i].channel != channel {
+                continue;
+            }
             self.voices[i].apply_pitch_bend(bend_ratio);
-            if let Some(note) = self.voices[i].note {
+            self.cached_frequencies[i] = 0.0;
+            if let Some(note) = self.voices[i]
+                .note
+                .filter(|_| !is_sound_only_channel(channel))
+            {
                 let base_freq = crate::midi::notes::frequency(note);
-                self.cached_frequencies[i] = base_freq * (1.0 + bend_ratio * 0.1);
+                self.cached_frequencies[i] = base_freq * bend_factor(bend_ratio);
+            }
+        }
+    }
+
+    pub fn set_sustain(&mut self, channel: u8, down: bool) {
+        if channel >= 16 || channel == 9 {
+            return;
+        }
+        self.sustain[channel as usize] = down;
+        if down {
+            return;
+        }
+        if channel == VOICE_CTRL_CHANNEL {
+            for i in 0..MAX_VOICES {
+                if !self.voice_ctrl_down[i] {
+                    self.voice_ctrl_notes[i] = None;
+                    self.voice_ctrl_freqs[i] = 0.0;
+                }
+            }
+        }
+        for i in 0..MAX_VOICES {
+            if self.voices[i].channel == channel && !self.voices[i].key_down {
+                self.voices[i].note_off();
+                self.cached_frequencies[i] = 0.0;
+            }
+        }
+    }
+
+    /// MIDI CC123 releases keys while respecting Hold 1; app panic uses the
+    /// immediate all_notes_off API below (also used by MIDI CC120).
+    pub fn release_channel_notes(&mut self, channel: u8) {
+        if channel >= 16 {
+            return;
+        }
+        if channel == VOICE_CTRL_CHANNEL {
+            for i in 0..MAX_VOICES {
+                if let Some(note) = self.voice_ctrl_notes[i] {
+                    self.note_off(note, channel);
+                }
+            }
+        } else {
+            for i in 0..MAX_VOICES {
+                if self.voices[i].channel == channel {
+                    if let Some(note) = self.voices[i].note {
+                        self.note_off(note, channel);
+                    }
+                }
             }
         }
     }
@@ -369,6 +487,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         if channel == Some(VOICE_CTRL_CHANNEL) {
             self.voice_ctrl_notes = [None; MAX_VOICES];
             self.voice_ctrl_freqs = [0.0; MAX_VOICES];
+            self.voice_ctrl_down = [false; MAX_VOICES];
             return;
         }
 
@@ -382,6 +501,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         if channel.is_none() {
             self.voice_ctrl_notes = [None; MAX_VOICES];
             self.voice_ctrl_freqs = [0.0; MAX_VOICES];
+            self.voice_ctrl_down = [false; MAX_VOICES];
         }
     }
 
@@ -391,13 +511,13 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         let mut result = [0.0f32; MAX_VOICES];
         let mut idx = 0;
         for &f in &self.cached_frequencies {
-            if f != 0.0 && idx < MAX_VOICES {
+            if f != 0.0 && idx < MAX_VOICES && !result[..idx].contains(&f) {
                 result[idx] = f;
                 idx += 1;
             }
         }
         for &f in &self.voice_ctrl_freqs {
-            if f != 0.0 && idx < MAX_VOICES {
+            if f != 0.0 && idx < MAX_VOICES && !result[..idx].contains(&f) {
                 result[idx] = f;
                 idx += 1;
             }
