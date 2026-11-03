@@ -48,6 +48,11 @@ messages reuse their note slot, including when an earlier slot is free.
 
 ## DSP and memory
 
+The later [formant responsiveness change](formant-responsiveness.md) reduces
+cepstral-envelope cost and lets input IRQs preempt DSP. The streaming Harmony
+algorithm and lead/backing controls below remain unchanged; the complete
+lead-forward song render matches the preceding revision byte for byte.
+
 The old Harmony path mixed magnitudes from every note into one shared frequency
 and phase per FFT bin. Close notes could overwrite one another. An independent
 sinusoidal projection test found the requested 220 Hz note almost absent in a

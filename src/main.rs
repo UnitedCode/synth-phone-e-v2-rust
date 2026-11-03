@@ -543,7 +543,9 @@ mod rtic_app {
                 settings_ready,
                 settings_save_failed,
             ],
-            priority = 3
+            // Scan physical controls before the next FFT job. Formant work
+            // must not delay an entire press/release until both are missed.
+            priority = 6
         )]
         fn interface_handler(mut ctx: interface_handler::Context) {
             // Flash belongs to a background task: an erase must not block
@@ -623,7 +625,8 @@ mod rtic_app {
                 osc,
                 carrier_oscs,
             ],
-            priority = 7,
+            // Audio DMA stays highest; short MIDI/keypad IRQs can preempt DSP.
+            priority = 5,
         )]
         fn dma1_stream0_fft_task(mut ctx: dma1_stream0_fft_task::Context) {
             crate::handler::handle_vocal_effects(
@@ -639,7 +642,7 @@ mod rtic_app {
             );
         }
 
-        #[task(binds = USART1, local = [midi_receiver], shared = [midi_events], priority = 4)]
+        #[task(binds = USART1, local = [midi_receiver], shared = [midi_events], priority = 7)]
         fn usart1_interrupt(ctx: usart1_interrupt::Context) {
             let usart1_interrupt::LocalResources { midi_receiver, .. } = ctx.local;
             let mut midi_events = ctx.shared.midi_events;

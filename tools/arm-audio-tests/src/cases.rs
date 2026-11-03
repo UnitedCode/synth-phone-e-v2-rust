@@ -2,7 +2,7 @@
 use crate::constants::SAMPLE_RATE;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
-pub const COUNT: usize = 13;
+pub const COUNT: usize = 14;
 pub const INPUT_SAMPLES: usize = 24_000;
 pub const MAGIC: &[u8; 8] = b"SAEARM01";
 pub const NAMES: [&str; COUNT] = [
@@ -19,6 +19,7 @@ pub const NAMES: [&str; COUNT] = [
     "harmony-rich-eight",
     "harmony-noise-eight",
     "harmony-weighted-lead",
+    "dry-female-237",
 ];
 
 pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
@@ -31,7 +32,7 @@ pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
 
 pub fn settings(case: usize) -> MusicalSettings {
     let mode = match case {
-        4 => ProcessingMode::Dry,
+        4 | 13 => ProcessingMode::Dry,
         5 | 9 | 10 | 11 | 12 => ProcessingMode::Harmony,
         6 => ProcessingMode::Vocode,
         _ => ProcessingMode::PitchControl,
@@ -39,7 +40,7 @@ pub fn settings(case: usize) -> MusicalSettings {
     MusicalSettings {
         mode,
         formant: match case {
-            7 => 2,
+            7 | 13 => 2,
             8 => 1,
             _ => 0,
         },
@@ -47,7 +48,7 @@ pub fn settings(case: usize) -> MusicalSettings {
             [220.0, 330.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         } else if case == 12 {
             [220.0, 329.62756, 391.99542, 440.0, 0.0, 0.0, 0.0, 0.0]
-        } else if case >= 10 {
+        } else if case == 10 || case == 11 {
             [
                 130.81278, 164.81378, 195.99771, 220.0, 261.62555, 329.62756, 391.99542, 440.0,
             ]
@@ -93,7 +94,7 @@ pub fn input(case: usize, index: usize) -> f32 {
     let hz = match case {
         1 => 110.0,
         3 | 8 => 440.0,
-        4 => 237.0,
+        4 | 13 => 237.0,
         _ => 220.0,
     };
     let detune = if case == 4 { 1.0 } else { 1.0204225 }; // 35 cents

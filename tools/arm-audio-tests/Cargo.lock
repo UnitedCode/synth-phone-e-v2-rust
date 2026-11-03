@@ -216,7 +216,7 @@ dependencies = [
 [[package]]
 name = "synthphone-e-vocal-dsp"
 version = "0.1.1"
-source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=b2163e5a2bd6c03bd32772c9a571f2454c58fd7b#b2163e5a2bd6c03bd32772c9a571f2454c58fd7b"
+source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=cf493b7a6c8c6b5addef2a0c649dc10795f46287#cf493b7a6c8c6b5addef2a0c649dc10795f46287"
 dependencies = [
  "libm",
  "microfft",

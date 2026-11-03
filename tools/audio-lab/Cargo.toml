@@ -8,7 +8,7 @@ publish = false
 [workspace]
 
 [dependencies]
-synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "b2163e5a2bd6c03bd32772c9a571f2454c58fd7b"}
+synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "cf493b7a6c8c6b5addef2a0c649dc10795f46287"}
 hound = "3.5"
 libm = "0.2.15"
 log = "=0.4.28"
@@ -20,6 +20,10 @@ test = true
 
 [[example]]
 name = "harmony_isolation"
+test = true
+
+[[example]]
+name = "formant_capture"
 test = true
 
 [profile.release]
