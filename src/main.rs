@@ -175,7 +175,8 @@ mod rtic_app {
                 .into_pull_up_input();
 
             let mut encoder_button = hid::Switch::new(encoder_sw_pin, hid::SwitchType::PullUp);
-            encoder_button.set_double_thresh(Some(100));
+
+            encoder_button.set_double_thresh(Some(400));
 
             let encoder_1 = RotaryEncoder::new(encoder_dt, encoder_clk).into_standard_mode();
             let knob_1 = Knob::new(encoder_1);
