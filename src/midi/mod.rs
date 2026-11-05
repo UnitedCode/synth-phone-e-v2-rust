@@ -131,8 +131,19 @@ impl MidiReceiver {
                 Ok(None)
             }
             Err(nb::Error::WouldBlock) => Ok(None),
-            Err(nb::Error::Other(_)) => {
-                // UART hardware error (framing, noise, overrun) — typically caused by
+            Err(nb::Error::Other(stm32h7xx_hal::serial::Error::Noise)) => {
+                // Noise only flags a marginal edge sample: the HAL clears the flag
+                // and leaves the byte in the FIFO, so the next read still returns
+                // it. Resetting here would wipe running status, and dense streams
+                // send their NoteOffs as running-status NoteOn vel 0. Every one of
+                // those would then be ignored until the next status byte,
+                // leaving notes stuck on.
+                warn!("MIDI UART noise flag (byte kept)");
+                Ok(None)
+            }
+            Err(nb::Error::Other(e)) => {
+                warn!("MIDI UART error {:?}: parser reset", e);
+                // UART hardware error (framing, parity, overrun) — typically caused by
                 // a MIDI device being disconnected.  Reset parser state so the next
                 // device can start fresh without misinterpreting stale context.
                 self.state = MidiParserState::WaitingForStatus;
