@@ -14,6 +14,8 @@ pub mod settings_storage;
 #[path = "../../../src/state_machine/mod.rs"]
 pub mod state_machine;
 pub mod stem_mix;
+pub mod tuning;
+pub mod wav;
 pub mod midi {
     pub use crate::midi_notes as notes;
 }
@@ -163,11 +165,18 @@ pub fn metrics(samples: &[f32]) -> Metrics {
 /// Independent normalized autocorrelation oracle (not the firmware's HPS/YIN).
 /// For steady monophonic passages only; a missing estimate fails pitch criteria.
 pub fn estimate_pitch(samples: &[f32]) -> Option<f64> {
+    estimate_pitch_at_rate(samples, SAMPLE_RATE as f64)
+}
+
+pub fn estimate_pitch_at_rate(samples: &[f32], sample_rate: f64) -> Option<f64> {
+    if !sample_rate.is_finite() || !(8000.0..=192000.0).contains(&sample_rate) {
+        return None;
+    }
     if samples.len() < 4096 || metrics(samples).rms < 1e-5 {
         return None;
     }
     let x: Vec<f64> = samples.iter().step_by(4).map(|&x| x as f64).collect();
-    let sr = SAMPLE_RATE as f64 / 4.0;
+    let sr = sample_rate / 4.0;
     let min_lag = (sr / 1000.0) as usize;
     let max_lag = (sr / 65.0) as usize;
     let window = x.len() - max_lag - 1;
@@ -184,14 +193,28 @@ pub fn estimate_pitch(samples: &[f32]) -> Option<f64> {
         }
         *value = xy / (xx * yy).sqrt().max(1e-30);
     }
+    let is_peak = |lag: usize| corr[lag] > corr[lag - 1] && corr[lag] >= corr[lag + 1];
+    let peak = |lag: usize| {
+        let denominator = corr[lag - 1] - 2.0 * corr[lag] + corr[lag + 1];
+        let offset = if denominator.abs() > 1e-12 {
+            0.5 * (corr[lag - 1] - corr[lag + 1]) / denominator
+        } else {
+            0.0
+        };
+        let height = (corr[lag] - 0.25 * (corr[lag - 1] - corr[lag + 1]) * offset).min(1.0);
+        (offset, height)
+    };
+    let strongest = (min_lag..max_lag)
+        .filter(|&lag| is_peak(lag))
+        .map(|lag| peak(lag).1)
+        .fold(0.0_f64, f64::max);
+    // A strong upper partial can exceed the absolute periodicity gate at a
+    // fraction of the true period. Require a peak close to the best complete
+    // period; a genuine octave-shifted tone still has its first peak there.
+    let threshold = (strongest * 0.98).max(0.8);
     for lag in min_lag..max_lag {
-        if corr[lag] > 0.8 && corr[lag] > corr[lag - 1] && corr[lag] >= corr[lag + 1] {
-            let denominator = corr[lag - 1] - 2.0 * corr[lag] + corr[lag + 1];
-            let offset = if denominator.abs() > 1e-12 {
-                0.5 * (corr[lag - 1] - corr[lag + 1]) / denominator
-            } else {
-                0.0
-            };
+        if is_peak(lag) && peak(lag).1 >= threshold {
+            let offset = peak(lag).0;
             return Some(sr / (lag as f64 + offset));
         }
     }
@@ -204,7 +227,11 @@ pub fn cents(measured: f64, target: f64) -> f64 {
 
 /// Ignore startup and tail; assess the middle of a sustained fixture.
 pub fn steady(samples: &[f32]) -> &[f32] {
-    let start = (SAMPLE_RATE * 0.2) as usize;
+    steady_at_rate(samples, SAMPLE_RATE as f64)
+}
+
+pub fn steady_at_rate(samples: &[f32], sample_rate: f64) -> &[f32] {
+    let start = (sample_rate * 0.2) as usize;
     let end = samples.len().saturating_sub(FFT_SIZE * 3);
     &samples[start.min(end)..end]
 }

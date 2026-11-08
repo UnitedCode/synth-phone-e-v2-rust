@@ -6,11 +6,15 @@ from a previous ratio of 1.0 on every frame. There was no retained correction
 trajectory, so a slower transition could not accumulate toward its target.
 
 The firmware now uses the DSP's `process_vocal_effects_1024_stream` entry point,
-pinned at `cf493b7a6c8c6b5addef2a0c649dc10795f46287`. Firmware, host replay and
+pinned at `5fb637c96d71801ee8856686e89f6cb9082cb3d4`. Firmware, host replay and
 the ARM guest share that exact revision. Virtual Daisy boots the resulting ELF
 through the separately maintained board models. The legacy by-value DSP APIs
 remain compatible for other callers. The measurements below record earlier
 stages of this work as well as the current behavior.
+
+The later [pitch and WAV audit](pitch-audit.md) updates pitch tracking,
+reconstruction and measurement. Its 720/720 strict result supersedes the
+historical quality counts below; the speed controls and persistence stay active.
 
 ## Controls and state
 

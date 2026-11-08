@@ -7,6 +7,7 @@ use synthphone_e_vocal_dsp::{
 /// Keep the existing firmware configuration in one place for offline replay.
 pub fn default_config() -> VocalEffectsConfig {
     VocalEffectsConfig {
+        sample_rate: crate::constants::SAMPLE_RATE,
         // Preserve the stateless path's 99% steady-state correction.
         pitch_correction_strength: 0.99,
         // Keep the fresh default fast; lower menu settings now glide.

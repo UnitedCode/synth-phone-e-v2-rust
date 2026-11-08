@@ -7,67 +7,7 @@ use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 fn write_wav(path: &Path, audio: &[f32]) -> Result<()> {
-    let mut writer = hound::WavWriter::create(
-        path,
-        hound::WavSpec {
-            channels: 1,
-            sample_rate: SAMPLE_RATE.round() as u32,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        },
-    )?;
-    for &x in audio {
-        writer.write_sample(x)?;
-    }
-    writer.finalize()?;
-    Ok(())
-}
-
-fn read_wav(path: &str) -> Result<Vec<f32>> {
-    let mut reader = hound::WavReader::open(path)?;
-    let spec = reader.spec();
-    if spec.channels != 1 || ![48000, 48014].contains(&spec.sample_rate) {
-        return Err(
-            "Use a mono 48,000 or 48,014 Hz WAV (no implicit channel mix or resampling)".into(),
-        );
-    }
-    let samples = match spec.sample_format {
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-        hound::SampleFormat::Int => {
-            let scale = 2_f32.powi(spec.bits_per_sample as i32 - 1);
-            reader
-                .samples::<i32>()
-                .map(|x| x.map(|x| x as f32 / scale))
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        }
-    };
-    if samples.is_empty() || samples.iter().any(|x| !x.is_finite()) {
-        return Err("Input WAV must contain finite audio samples".into());
-    }
-    Ok(samples)
-}
-
-// Independent musical oracle: pitch classes, not the DSP's frequency tables.
-fn nearest_scale_hz(hz: f64, key: usize) -> f64 {
-    let tonics = [
-        0, 7, 2, 9, 4, 11, 6, 1, 5, 10, 3, 8, 9, 4, 11, 6, 1, 8, 3, 10, 2, 7, 0, 5,
-    ];
-    let intervals = if key < 12 {
-        [0, 2, 4, 5, 7, 9, 11]
-    } else {
-        [0, 2, 3, 5, 7, 8, 10]
-    };
-    (24..96)
-        .filter(|midi| {
-            intervals
-                .iter()
-                .any(|d| (tonics[key] + d) % 12 == midi % 12)
-        })
-        .map(|midi| 440.0 * 2_f64.powf((midi as f64 - 69.0) / 12.0))
-        .min_by(|a, b| cents(hz, *a).abs().total_cmp(&cents(hz, *b).abs()))
-        .unwrap()
+    audio_lab::wav::write(path, audio, SAMPLE_RATE.round() as u32)
 }
 
 fn sweep(directory: &Path, strict: bool, speed: i8) -> Result<()> {
@@ -77,6 +17,7 @@ fn sweep(directory: &Path, strict: bool, speed: i8) -> Result<()> {
     let mut failures = 0;
     let known_failures: BTreeSet<&str> = include_str!("../known-pitch-failures.csv")
         .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect();
     let mut regressions = 0;
     let mut improvements = 0;
@@ -100,7 +41,8 @@ fn sweep(directory: &Path, strict: bool, speed: i8) -> Result<()> {
                     let samples = steady(&output.audio);
                     let m = metrics(samples);
                     let raw = metrics(&output.raw);
-                    let target = nearest_scale_hz(hz, key);
+                    let target = audio_lab::tuning::nearest_scale_hz(hz, key)
+                        .expect("validated fixture pitch and key");
                     let pitch = estimate_pitch(samples);
                     let error = pitch.map(|p| cents(p, target));
                     let pass = error.is_some_and(|c| c.abs() <= 20.0)
@@ -171,9 +113,9 @@ fn sweep(directory: &Path, strict: bool, speed: i8) -> Result<()> {
     let summary = format!(
         "Speed preset {speed}; fixed 0.65s fixtures, 0.2s measurement warmup (slow settings may still be gliding).\n\
         {count} pitch cases; {} pass; {failures} fail (20-cent tolerance).\n\
-        {regressions} new failures; {improvements} improvements against the initial baseline.\n\
+        {regressions} new failures; {improvements} improvements against the recorded failure list.\n\
         {unresponsive_controls} of 2 correction controls produced no measurable response.\n\
-        These are measured quality failures, not approved behavior. Missing pitch also fails.\n\
+        Any reported quality failure remains a failure; missing pitch also fails.\n\
         Host timings are relative benchmarks, not Daisy CPU timings.\n\
         Model: current firmware DSP pin, 1024-point FFT, 256-sample hop, 2-sample DMA block.\n\
         Scope: steady synthetic monophonic input; startup, consonants, expressive singing,\n\
@@ -194,7 +136,10 @@ fn sweep(directory: &Path, strict: bool, speed: i8) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("levels-recording") if args.len() == 3 => audio_lab::recording_levels::run(&read_wav(&args[1])?, Path::new(&args[2])),
+        Some("levels-recording") if args.len() == 3 => {
+            let input = audio_lab::wav::read(Path::new(&args[1]))?;
+            audio_lab::recording_levels::run_at_rate(&input.samples, input.sample_rate, Path::new(&args[2]))
+        },
         Some("levels") if args.len() == 2 => audio_lab::levels::run(Path::new(&args[1])),
         Some("emulate") if args.len() == 2 => audio_lab::emulator::run(Path::new(&args[1])),
         Some("sweep") if args.len() == 2 || (args.len() == 3 && args[2] == "--strict") => {
@@ -206,7 +151,6 @@ fn main() -> Result<()> {
             sweep(Path::new(&args[1]), false, speed)
         }
         Some("render") if (3..=5).contains(&args.len()) => {
-            let input = read_wav(&args[1])?;
             let mode = match args.get(3).map(String::as_str).unwrap_or("pitch") {
                 "pitch" => ProcessingMode::PitchControl, "dry" => ProcessingMode::Dry,
                 "harmony" => ProcessingMode::Harmony, "vocode" => ProcessingMode::Vocode,
@@ -214,10 +158,8 @@ fn main() -> Result<()> {
             };
             let key: i8 = args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(0);
             if !(0..24).contains(&key) { return Err("key must be 0..23".into()); }
-            let settings = MusicalSettings { key, mode, midi_frequencies: if mode == ProcessingMode::Harmony { [220.0, 330.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] } else { [0.0; 8] }, ..Default::default() };
-            let carrier = tone(220.0, input.len() as f64 / SAMPLE_RATE as f64 + 0.1, &[(1, 0.2), (2, 0.1), (3, 0.06)]);
-            let output = render(&input, &carrier, &vocal_frame::default_config(), &settings);
-            write_wav(Path::new(&args[2]), &output.audio)?;
+            let settings = MusicalSettings { key, mode, midi_frequencies: if mode == ProcessingMode::Harmony { [audio_lab::midi_notes::frequency(57), audio_lab::midi_notes::frequency(64), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] } else { [0.0; 8] }, ..Default::default() };
+            let output = audio_lab::wav::render(Path::new(&args[1]), Path::new(&args[2]), &vocal_frame::default_config(), &settings)?;
             println!("Output: {:?}\nRaw before limiter: {:?}", metrics(&output.audio), metrics(&output.raw));
             Ok(())
         }

@@ -41,6 +41,9 @@ percussion mapper and sound engines, avoiding the hardware HAL in desktop tests.
 
 ## Local verification, with CI skipped
 
+These are historical integration results. The later [pitch audit](pitch-audit.md)
+records the current 720/720 sweep and responding correction controls.
+
 - DSP: 45 unit tests and a no-std Cortex-M7 build check.
 - Host audio/features: 69 tests on macOS and Linux, including all 47 GM drums,
   held release of all 24 phone sounds, MIDI routing, saved-setting restoration

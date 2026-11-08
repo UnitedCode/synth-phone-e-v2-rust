@@ -70,6 +70,12 @@ fn independent_pitch_oracle_handles_harmonics_and_rejects_silence() {
         assert!(cents(pitch, hz).abs() < 3.0, "{hz}: {pitch}");
     }
     assert!(estimate_pitch(&vec![0.0; 8192]).is_none());
+    for frequency in [220.0, 233.081881, 277.182631, 329.627557] {
+        let upper_partial = tone(frequency, 0.4, &[(1, 0.04), (3, 0.01), (4, 0.2)]);
+        assert!(cents(estimate_pitch(&upper_partial).unwrap(), frequency).abs() < 3.0);
+    }
+    let octave_error = tone(880.0, 0.4, &[(1, 0.2)]);
+    assert!(cents(estimate_pitch(&octave_error).unwrap(), 220.0).abs() > 2300.0);
     // A 100-cent error must not pass the 20-cent acceptance threshold.
     assert!(
         cents(

@@ -1,5 +1,9 @@
 # Formant responsiveness on clankers
 
+The measurements below describe the responsiveness change at its original DSP
+pin. The later [pitch audit](pitch-audit.md) updates correction/formant processing
+and supersedes the historical 192-case quality-failure count.
+
 [Issue 98](https://github.com/UnitedCode/synth-phone-e-v2-rust/issues/98)
 reports slow screen refresh and missed keypad presses when formant is enabled,
 including difficulty switching it off. This change reduces the formant work and
