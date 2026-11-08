@@ -9,6 +9,7 @@ dependencies = [
  "hound",
  "libm",
  "log",
+ "midly",
  "synthphone-e-vocal-dsp",
 ]
 
@@ -60,6 +61,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
 
 [[package]]
+name = "midly"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "207d755f4cb882d20c4da58d707ca9130a0c9bc5061f657a4f299b8e36362b7a"
+
+[[package]]
 name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -86,7 +93,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "synthphone-e-vocal-dsp"
 version = "0.1.1"
-source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=59a1c1a08776a747bd71014fd508e3c936c83093#59a1c1a08776a747bd71014fd508e3c936c83093"
+source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=cf493b7a6c8c6b5addef2a0c649dc10795f46287#cf493b7a6c8c6b5addef2a0c649dc10795f46287"
 dependencies = [
  "libm",
  "microfft",

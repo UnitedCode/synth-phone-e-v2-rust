@@ -1,5 +1,5 @@
 //! Build a real no_std ARM guest, execute it in QEMU, and grade returned samples.
-use crate::{constants::*, estimate_pitch, metrics, render, steady, vocal_frame};
+use crate::{constants::*, estimate_pitch, metrics, render, steady};
 use std::{
     error::Error,
     fs::{self, File},
@@ -201,7 +201,7 @@ pub fn run(directory: &Path) -> Result<()> {
         let expected = render(
             &input,
             &carrier,
-            &vocal_frame::default_config(),
+            &cases::config(case),
             &cases::settings(case),
         )
         .audio;
@@ -228,14 +228,18 @@ pub fn run(directory: &Path) -> Result<()> {
         return Err(format!("{failures} ARM/host mismatches; see arm-comparison.csv").into());
     }
 
-    println!("All nine ARM cases match. Checking an injected lost frame...");
+    println!(
+        "All {} ARM cases match. Checking an injected lost frame...",
+        cases::COUNT
+    );
     let broken_elf = build_guest(&root, true)?;
     let broken = execute(&qemu, &broken_elf, &directory, "arm-lost-frame")?;
     let (fault_error, _) = sample_error(&broken.audio[4], &references[4])?;
     if fault_error <= MAX_SAMPLE_ERROR {
         return Err("ARM lost-frame negative control was not detected".into());
     }
-    let summary = format!("9/9 Cortex-M7 audio cases match host output within {MAX_SAMPLE_ERROR} peak sample error.\n\
+    let count = cases::COUNT;
+    let summary = format!("{count}/{count} Cortex-M7 audio cases match host output within {MAX_SAMPLE_ERROR} peak sample error.\n\
         SysTick interrupts occurred during the ARM workload ({} observed).\n\
         Injected lost frame was detected (peak sample error {fault_error:.6}).\n\
         ARM target: thumbv7em-none-eabihf; QEMU board: mps2-an500; CPU: cortex-m7.\n\

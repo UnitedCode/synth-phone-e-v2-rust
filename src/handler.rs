@@ -2,7 +2,8 @@ use crate::midi::get_midi_queue_status;
 use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
-use app_lib::vocal_frame::{default_config, process_frame};
+use app_lib::output_mix;
+use app_lib::vocal_frame::{config_for_speed, process_frame};
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -10,12 +11,9 @@ use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
 use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator, Waveform};
-use synthphone_e_vocal_dsp::dsp::{
-    bitcrush, normalize_sample, sample_rate_reduce, Fft1024, FftOps,
-};
+use synthphone_e_vocal_dsp::dsp::{bitcrush, sample_rate_reduce, Fft1024, FftOps};
 use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
-const MELODY_TRIM: f32 = 6.0;
 
 pub fn audio_handler(
     audio: &mut audio::Audio,
@@ -32,7 +30,6 @@ pub fn audio_handler(
     let mut sr_factor = 1;
     let mut wave_type = Waveform::Sine;
     let mut bit_depth = 32;
-    let mut waveform_compensation = 1.0f32;
     let mut crush_voices = false;
     // In Vocode / Harmony the auto-switch channel (MIDI ch 3) drives the vocal
     // effect only — its notes are silenced as raw synth so you hear the processed
@@ -52,17 +49,6 @@ pub fn audio_handler(
             _ => Waveform::Sine,
         };
         bit_depth = snapshot.bit_rate;
-        // Sine and triangle are perceptually quieter than saw/square at the same
-        // peak amplitude — they're spectrally pure, while saw/square spread energy
-        // across many harmonics, which the ear perceives as louder. Compensate so
-        // waveform choice doesn't also change perceived volume. Applied before the
-        // peak limiter below (not after) so boosted peaks still get clamped instead
-        // of hard-clipping at the DAC.
-        waveform_compensation = match wave_type {
-            Waveform::Sine => 1.4,
-            Waveform::Triangle => 1.2,
-            Waveform::Square | Waveform::Saw => 1.0,
-        };
         let profile = match snapshot.current_state {
             AppState::Processing(p) | AppState::EffectsProfile(p) | AppState::Menu(_, p) => p,
             AppState::Splash => ProcessingProfile::PitchControl,
@@ -74,8 +60,8 @@ pub fn audio_handler(
             profile,
             ProcessingProfile::Vocode | ProcessingProfile::Harmony
         );
-        voice_gain = snapshot.voice_volume as f32 * 0.1;
-        melody_gain = snapshot.melody_volume as f32 * 0.1 * MELODY_TRIM;
+        voice_gain = output_mix::level_gain(snapshot.voice_volume);
+        melody_gain = output_mix::synth_gain(snapshot.melody_volume);
         drum_gain = snapshot.drum_volume as f32 * 0.1;
         master_gain = snapshot.volume as f32 * 0.1;
     });
@@ -87,7 +73,9 @@ pub fn audio_handler(
                 true => *left,
             };
 
-            shared.in_ring.lock(|in_ring| in_ring.push(sample));
+            shared
+                .in_ring
+                .lock(|in_ring| in_ring.push(sample * voice_gain));
 
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
@@ -132,15 +120,30 @@ pub fn audio_handler(
                                         controller,
                                         value,
                                     } => match controller {
-                                        123 => {
+                                        120 => {
                                             voice_manager.all_notes_off(Some(channel));
+                                        }
+                                        123 => voice_manager.release_channel_notes(channel),
+                                        64 => voice_manager.set_sustain(channel, value >= 64),
+                                        121 => {
+                                            voice_manager.set_sustain(channel, false);
+                                            voice_manager.apply_channel_pitch_bend(channel, 0.0);
+                                        }
+                                        47 => shared.app_state_machine.lock(|msm| {
+                                            msm.set_harmony_lead_from_midi(value);
+                                        }),
+                                        48 => {
+                                            voice_manager.enable_midi_lead_routing();
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_harmony_backing_from_midi(value);
+                                            });
                                         }
                                         7 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_volume_from_midi(value);
                                             });
                                         }
-                                        34..=42 => {
+                                        34..=42 | 44..=46 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_menu_value_from_cc(controller, value);
                                             });
@@ -175,9 +178,9 @@ pub fn audio_handler(
                                         }
                                         _ => {}
                                     },
-                                    crate::midi::MidiEvent::PitchBend { channel: _, value } => {
+                                    crate::midi::MidiEvent::PitchBend { channel, value } => {
                                         let bend_ratio = (value as f32 - 8192.0) / 8192.0;
-                                        voice_manager.apply_pitch_bend(bend_ratio);
+                                        voice_manager.apply_channel_pitch_bend(channel, bend_ratio);
                                     }
                                     crate::midi::MidiEvent::ProgramChange { channel, program } => {
                                         shared.app_state_machine.lock(|msm| {
@@ -197,15 +200,11 @@ pub fn audio_handler(
             });
 
             // ************** ADD MIDI OUTPUT **************
-            // Get MIDI sample and mix it with the processed audio. Waveform
-            // compensation applies only to the synthesized note, not the live
-            // audio-in signal already folded into out_sample above.
-            let midi_sample = shared
-                .voice_manager
-                .lock(|vm| vm.get_mixed_sample(mute_melody_synth, melody_gain, drum_gain));
-            out_sample = (out_sample * 0.75 * voice_gain
-                + (midi_sample * waveform_compensation) * 0.1)
-                * master_gain;
+            let (melody, drums) = shared.voice_manager.lock(|vm| {
+                vm.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain)
+            });
+            out_sample =
+                output_mix::sum_sources(out_sample, melody, drums, wave_type) * master_gain;
 
             if crush_voices {
                 // Percussion: crush the voice and every MIDI voice together.
@@ -215,7 +214,7 @@ pub fn audio_handler(
             }
 
             // Normalize final output
-            out_sample = normalize_sample(out_sample, 0.8);
+            out_sample = output_mix::finish(out_sample, 1.0);
             // **********************************************
 
             // Check and handle hop counter
@@ -400,7 +399,7 @@ pub fn handle_vocal_effects(
     last_output_phases: &mut [f32; FFT_SIZE],
     cached_harmony_envelope: &mut [f32; FFT_SIZE / 2],
     cached_harmony_inv_envelope: &mut [f32; FFT_SIZE / 2],
-    previous_pitch_shift_ratio: &mut f32,
+    vocal_state: &mut app_lib::vocal_frame::VocalStreamState,
     carrier_buffer: &mut RingBuffer<BUFFER_SIZE>,
     osc: &mut Oscillator,
     carrier_oscs: &mut [Oscillator; 8],
@@ -411,8 +410,12 @@ pub fn handle_vocal_effects(
     let mut formant_female_ratio = 2.0f32;
     let mut note = 0;
     let mut synth_octave_ratio = 1.0f32;
+    let mut synth_gain = 1.0f32;
     let mut key = 0i8;
     let mut pitch_ratio = 1.0f32;
+    let mut autotune_speed = 5;
+    let mut harmony_lead = 1.0;
+    let mut harmony_backing = 64;
     let mut wave_type = Waveform::Sine;
     ctx.app_state_machine.lock(|asm| {
         let snapshot = asm.snapshot();
@@ -425,6 +428,10 @@ pub fn handle_vocal_effects(
             AppState::Splash => {}
         }
         formant = snapshot.formant;
+        autotune_speed = snapshot.autotune_speed;
+        harmony_lead = snapshot.harmony_lead as f32 / 127.0;
+        harmony_backing = snapshot.harmony_backing;
+        synth_gain = output_mix::synth_gain(snapshot.melody_volume);
         key = snapshot.key;
         // Continuous pitch offset: semitones → frequency ratio (2^(st/12)),
         // so -12/0/+12 give 0.5×/1×/2× and everything in between is chromatic.
@@ -460,7 +467,9 @@ pub fn handle_vocal_effects(
         note = 0;
     }
 
-    let midi_frequencies = ctx.voice_manager.lock(|vm| vm.get_cached_frequencies());
+    let (midi_frequencies, midi_gains) = ctx
+        .voice_manager
+        .lock(|vm| vm.get_harmony_voices(harmony_backing));
 
     let is_tuned = current_process == ProcessingProfile::Tuned;
 
@@ -506,7 +515,8 @@ pub fn handle_vocal_effects(
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
                 for _ in 0..HOP_SIZE {
-                    carrier_buffer.push(osc.next_value());
+                    carrier_buffer
+                        .push(osc.next_value() * output_mix::keypad_gain(wave_type) * synth_gain);
                 }
             } else {
                 for _ in 0..HOP_SIZE {
@@ -534,11 +544,13 @@ pub fn handle_vocal_effects(
         formant_female_ratio,
         note: if is_tuned { 0 } else { note },
         midi_frequencies: effect_midi_frequencies,
+        midi_gains,
         key,
         octave_ratio: pitch_ratio,
         mode,
     };
-    let config = default_config();
+    let mut config = config_for_speed(autotune_speed);
+    config.harmony_lead_gain = harmony_lead;
     let mut input_buffer = [0.0; FFT_SIZE];
     let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);
     ctx.in_ring
@@ -555,7 +567,7 @@ pub fn handle_vocal_effects(
         last_output_phases,
         cached_harmony_envelope,
         cached_harmony_inv_envelope,
-        *previous_pitch_shift_ratio,
+        vocal_state,
         &config,
         &musical_settings,
     );

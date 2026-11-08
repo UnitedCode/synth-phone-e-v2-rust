@@ -6,6 +6,32 @@ use crate::state_machine::{MenuValues, MENU_ITEMS};
 /// Number of menu values in a saved record — one per entry in `MENU_ITEMS`.
 pub const MENU_VALUE_COUNT: usize = MENU_ITEMS.len();
 
+/// Quiet-time debounce driven by elapsed core cycles, not serviced UI ticks.
+/// The two-second delay is below one counter wrap at the supported core clock.
+pub struct SaveDebounce {
+    delay_cycles: u32,
+    changed_at: Option<u32>,
+}
+
+impl SaveDebounce {
+    pub const fn new(delay_cycles: u32) -> Self {
+        Self {
+            delay_cycles,
+            changed_at: None,
+        }
+    }
+    pub fn changed(&mut self, now: u32) {
+        self.changed_at = Some(now);
+    }
+    pub fn ready(&self, now: u32) -> bool {
+        self.changed_at
+            .is_some_and(|start| now.wrapping_sub(start) >= self.delay_cycles)
+    }
+    pub fn submitted(&mut self) {
+        self.changed_at = None;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SavedSettings {
     pub master: i8,

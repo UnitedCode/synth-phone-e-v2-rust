@@ -8,10 +8,23 @@ publish = false
 [workspace]
 
 [dependencies]
-synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "59a1c1a08776a747bd71014fd508e3c936c83093"}
+synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "cf493b7a6c8c6b5addef2a0c649dc10795f46287"}
 hound = "3.5"
 libm = "0.2.15"
 log = "=0.4.28"
+midly = { version = "0.5.3", default-features = false, features = ["alloc"] }
+
+[[example]]
+name = "midi_reference"
+test = true
+
+[[example]]
+name = "harmony_isolation"
+test = true
+
+[[example]]
+name = "formant_capture"
+test = true
 
 [profile.release]
 opt-level = "s"

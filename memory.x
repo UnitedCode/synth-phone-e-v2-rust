@@ -18,6 +18,14 @@ REGION_ALIAS(RAM, DTCMRAM);
 
 SECTIONS
 {
+	/* CPU-only phases; keep DMA buffers together in their aligned D2 region. */
+	.vocal_state (NOLOAD) :
+	{
+		. = ALIGN(32);
+		*(.vocal_state)
+		. = ALIGN(32);
+	} > SRAM
+
 	.sram1_bss (NOLOAD) :
 	{
 		. = ALIGN(4);

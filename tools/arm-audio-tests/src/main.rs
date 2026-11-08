@@ -51,9 +51,9 @@ fn main() -> ! {
     stdout
         .write_all(&(cases::COUNT as u32).to_le_bytes())
         .unwrap();
-    let config = vocal_frame::default_config();
     let total = (cases::INPUT_SAMPLES + 2 * FFT_SIZE).div_ceil(BLOCK_SIZE) * BLOCK_SIZE;
     for case in 0..cases::COUNT {
+        let config = cases::config(case);
         REPLAY.reset();
         stdout.write_all(&(case as u32).to_le_bytes()).unwrap();
         stdout.write_all(&(total as u32).to_le_bytes()).unwrap();

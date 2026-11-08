@@ -102,8 +102,8 @@ menu_items! {
     Magnitude    => { field: magnitude,               name: "Magnitude",     min: 1, max: 10 },
     PadMatrix    => { field: pad_matrix,              name: "Pad Matrix",    min: 0, max: 1  },
     SynthOctave  => { field: synth_octave,            name: "Synth Octave",  min: -1, max: 1 },
-    VoiceVolume  => { field: voice_volume,            name: "Voice Volume",  min: 0, max: 20 },
-    MelodyVolume => { field: melody_volume,           name: "Melody Volume", min: 0, max: 20 },
+    VoiceVolume  => { field: voice_volume,            name: "Voice Level",   min: 0, max: 20 },
+    MelodyVolume => { field: melody_volume,           name: "Synth Level",   min: 0, max: 20 },
     DrumVolume   => { field: drum_volume,             name: "Drum Volume",   min: 0, max: 20 },
     // Per-mode on/off (1 = enabled). Disabled modes are skipped when cycling.
     ModePitch      => { field: mode_pitch,       name: "Pitch On",    min: 0, max: 1 },
@@ -155,7 +155,7 @@ impl Default for MenuValues {
             sample_reduction_harsh: 16,
             formant_male: 5,
             formant_female: 5,
-            autotune_speed: 5,
+            autotune_speed: 10,
             magnitude: 5,
             pad_matrix: 0,
             synth_octave: 0,
@@ -356,6 +356,10 @@ pub struct AppStateMachine {
     current_formant: i8,
     current_waveform: i8,
     current_percussion: i8,
+    /// Transient MIDI CC47 performance control; does not change flash format.
+    harmony_lead: u8,
+    /// Transient CC48: backing group relative to explicit MIDI-channel-4 lead.
+    harmony_backing: u8,
     pub volume: i8,
     pub note: i8,
     pub key_down_pressed: bool,
@@ -390,6 +394,8 @@ pub struct AppStateMachineSnapshot {
     pub key_up_pressed: bool,
     pub waveform: i8,
     pub percussion: i8,
+    pub harmony_lead: u8,
+    pub harmony_backing: u8,
 }
 
 // Add a MenuContext struct for menu display
@@ -417,6 +423,8 @@ impl AppStateMachine {
             current_formant: 0,
             current_waveform: 0,
             current_percussion: 2, // drums
+            harmony_lead: 127,
+            harmony_backing: 64,
             volume: 10,
             note: 0,
             key_down_pressed: false,
@@ -515,6 +523,8 @@ impl AppStateMachine {
             key_up_pressed: self.key_up_pressed,
             waveform: self.current_waveform,
             percussion: self.current_percussion,
+            harmony_lead: self.harmony_lead,
+            harmony_backing: self.harmony_backing,
         }
     }
 
@@ -613,7 +623,7 @@ impl AppStateMachine {
                 _ => {}
             },
 
-            (AppState::Processing(profile), AppEvent::KeypadRelease(_key)) => {
+            (AppState::Processing(_), AppEvent::KeypadRelease(_key)) => {
                 self.play_note(0); // stop tone for those modes
             }
 
@@ -738,8 +748,16 @@ impl AppStateMachine {
         };
     }
 
-    /// Sets formant from an incoming MIDI CC81 value: 0=Male, 64=Off,
-    /// 127=Female — mirrors the EffectsProfile keypad's formant row.
+    /// CC47 blends the original unshifted input, independently of MIDI lead.
+    pub fn set_harmony_lead_from_midi(&mut self, value: u8) {
+        self.harmony_lead = value.min(127);
+    }
+    /// CC48: backing-group gain relative to MIDI lead, 0=mute, 127=unity.
+    pub fn set_harmony_backing_from_midi(&mut self, value: u8) {
+        self.harmony_backing = value.min(127);
+    }
+
+    /// MIDI CC81: 0=Male, 64=Off, 127=Female.
     pub fn set_formant_from_midi(&mut self, value: u8) {
         self.current_formant = if value < 43 {
             1
@@ -752,7 +770,7 @@ impl AppStateMachine {
 
     /// Sets one of the fine-tune menu values (pitch presets, bit rate,
     /// sample rate, formant ratios, magnitude) from an incoming MIDI CC on
-    /// 34-42, scaling the 0-127 CC value proportionally into that item's
+    /// 34-42 and 44-46, scaling the 0-127 CC value proportionally into that item's
     /// range.
     pub fn set_menu_value_from_cc(&mut self, controller: u8, value: u8) {
         let item = match controller {
@@ -765,6 +783,9 @@ impl AppStateMachine {
             40 => MenuItem::FormantMale,
             41 => MenuItem::FormantFemale,
             42 => MenuItem::Magnitude,
+            44 => MenuItem::VoiceVolume,
+            45 => MenuItem::MelodyVolume,
+            46 => MenuItem::AutotuneSpeed,
             _ => return,
         };
         let (min, max) = MenuValues::range(item);

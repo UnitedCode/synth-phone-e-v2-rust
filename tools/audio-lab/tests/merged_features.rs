@@ -1,6 +1,25 @@
 use audio_lab::{constants::SAMPLE_RATE, metrics, voice_generator::VoiceManager};
 
 #[test]
+fn settings_quiet_interval_survives_skipped_ui_ticks_and_counter_wrap() {
+    use audio_lab::settings_storage::SaveDebounce;
+    let mut save = SaveDebounce::new(100);
+    assert!(!save.ready(1000));
+    save.changed(7);
+    assert!(!save.ready(106));
+    assert!(save.ready(107)); // One delayed UI tick is enough; no 100-tick loop.
+    save.changed(90);
+    assert!(!save.ready(189));
+    assert!(save.ready(190));
+    save.submitted();
+    assert!(!save.ready(200));
+    let mut wrap = SaveDebounce::new(10);
+    wrap.changed(u32::MAX - 5);
+    assert!(!wrap.ready(3));
+    assert!(wrap.ready(4));
+}
+
+#[test]
 fn midi_channels_keep_their_sound_and_vocal_control_roles() {
     let mut manager = VoiceManager::<8>::new(SAMPLE_RATE);
     manager.note_on(57, 127, 0);

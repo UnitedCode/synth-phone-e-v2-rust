@@ -70,7 +70,7 @@ fn nearest_scale_hz(hz: f64, key: usize) -> f64 {
         .unwrap()
 }
 
-fn sweep(directory: &Path, strict: bool) -> Result<()> {
+fn sweep(directory: &Path, strict: bool, speed: i8) -> Result<()> {
     fs::create_dir_all(directory)?;
     let mut csv = fs::File::create(directory.join("pitch.csv"))?;
     writeln!(csv, "key,input_hz,shape,formant,target_hz,output_hz,error_cents,rms,peak,dc,silent_hops,non_finite,raw_over_full_scale,host_p95_us,host_max_us,pass")?;
@@ -81,7 +81,7 @@ fn sweep(directory: &Path, strict: bool) -> Result<()> {
     let mut regressions = 0;
     let mut improvements = 0;
     let mut count = 0;
-    let config = vocal_frame::default_config();
+    let config = vocal_frame::config_for_speed(speed);
     for key in 0..24 {
         for base in [110.0, 146.8324, 220.0, 329.6276, 440.0] {
             for (shape, harmonics) in [
@@ -141,7 +141,14 @@ fn sweep(directory: &Path, strict: bool) -> Result<()> {
     writeln!(controls, "control,value,maximum_output_difference,responds")?;
     let mut unresponsive_controls = 0;
     for (name, value) in [
-        ("transition_speed", 1.0),
+        (
+            "transition_speed",
+            if config.transition_speed == 1.0 {
+                0.01
+            } else {
+                1.0
+            },
+        ),
         ("pitch_correction_strength", 0.0),
     ] {
         let mut changed = config;
@@ -162,7 +169,8 @@ fn sweep(directory: &Path, strict: bool) -> Result<()> {
         writeln!(controls, "{name},{value},{difference},{responds}")?;
     }
     let summary = format!(
-        "{count} pitch cases; {} pass; {failures} fail (20-cent tolerance).\n\
+        "Speed preset {speed}; fixed 0.65s fixtures, 0.2s measurement warmup (slow settings may still be gliding).\n\
+        {count} pitch cases; {} pass; {failures} fail (20-cent tolerance).\n\
         {regressions} new failures; {improvements} improvements against the initial baseline.\n\
         {unresponsive_controls} of 2 correction controls produced no measurable response.\n\
         These are measured quality failures, not approved behavior. Missing pitch also fails.\n\
@@ -186,9 +194,16 @@ fn sweep(directory: &Path, strict: bool) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("levels-recording") if args.len() == 3 => audio_lab::recording_levels::run(&read_wav(&args[1])?, Path::new(&args[2])),
+        Some("levels") if args.len() == 2 => audio_lab::levels::run(Path::new(&args[1])),
         Some("emulate") if args.len() == 2 => audio_lab::emulator::run(Path::new(&args[1])),
         Some("sweep") if args.len() == 2 || (args.len() == 3 && args[2] == "--strict") => {
-            sweep(Path::new(&args[1]), args.len() == 3)
+            sweep(Path::new(&args[1]), args.len() == 3, 10)
+        }
+        Some("sweep-speed") if args.len() == 3 => {
+            let speed: i8 = args[2].parse()?;
+            if !(1..=10).contains(&speed) { return Err("Speed must be 1..10".into()); }
+            sweep(Path::new(&args[1]), false, speed)
         }
         Some("render") if (3..=5).contains(&args.len()) => {
             let input = read_wav(&args[1])?;
@@ -206,6 +221,6 @@ fn main() -> Result<()> {
             println!("Output: {:?}\nRaw before limiter: {:?}", metrics(&output.audio), metrics(&output.raw));
             Ok(())
         }
-        _ => Err("Usage: audio-lab sweep OUTPUT_DIRECTORY [--strict]\n       audio-lab emulate OUTPUT_DIRECTORY\n       audio-lab render INPUT.wav OUTPUT.wav [pitch|dry|harmony|vocode] [KEY_0_TO_23]".into()),
+        _ => Err("Usage: audio-lab sweep OUTPUT_DIRECTORY [--strict]\n       audio-lab sweep-speed OUTPUT_DIRECTORY SPEED_1_TO_10\n       audio-lab levels OUTPUT_DIRECTORY\n       audio-lab levels-recording INPUT.wav OUTPUT_DIRECTORY\n       audio-lab emulate OUTPUT_DIRECTORY\n       audio-lab render INPUT.wav OUTPUT.wav [pitch|dry|harmony|vocode] [KEY_0_TO_23]".into()),
     }
 }

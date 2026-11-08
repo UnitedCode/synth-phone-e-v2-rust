@@ -12,6 +12,7 @@ pub struct Replay {
     inv_envelope: [f32; FFT_SIZE / 2],
     counter: usize,
     pending: Option<u32>,
+    vocal_state: vocal_frame::VocalStreamState,
     pub hops: usize,
 }
 
@@ -33,11 +34,12 @@ impl Replay {
             inv_envelope: [1.0; FFT_SIZE / 2],
             counter: 0,
             pending: None,
+            vocal_state: vocal_frame::VocalStreamState::new(),
             hops: 0,
         }
     }
 
-    /// Clear in place without placing another 60 KB state object on the ARM stack.
+    /// Clear in place without placing another large stream object on the ARM stack.
     pub fn reset(&mut self) {
         for _ in 0..BUFFER_SIZE {
             self.input.push(0.0);
@@ -50,6 +52,7 @@ impl Replay {
         self.inv_envelope.fill(1.0);
         self.counter = 0;
         self.pending = None;
+        self.vocal_state.reset();
         self.hops = 0;
     }
 
@@ -95,7 +98,7 @@ impl Replay {
             &mut self.output_phases,
             &mut self.envelope,
             &mut self.inv_envelope,
-            1.0,
+            &mut self.vocal_state,
             config,
             settings,
         );
