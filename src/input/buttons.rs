@@ -89,14 +89,3 @@ pub fn handle_button_press(row: usize, col: usize, current_state: AppState) -> A
         AppState::Splash => AppEvent::SplashComplete,
     }
 }
-
-pub fn handle_button_release(row: usize, col: usize, current_state: AppState) -> AppEvent {
-    // Use the same mapping as press
-    let actual_col = 2 - col;
-    let key_num = row * 3 + actual_col + 1;
-
-    match current_state {
-        AppState::Processing(_) | AppState::EffectsProfile(_) => AppEvent::KeypadRelease(key_num),
-        _ => AppEvent::NoOp,
-    }
-}
