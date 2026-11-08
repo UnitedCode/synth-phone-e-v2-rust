@@ -57,12 +57,16 @@ cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target
 cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" -- emulate audio-lab-results/arm
 ```
 
-The [virtual Daisy](docs/virtual-daisy.md) now boots the **actual production ELF**
+[Virtual Daisy](https://github.com/UnitedCode/virtual-daisy) lives in its own
+repository, pinned here at `tools/virtual-daisy`. Clone with `--recurse-submodules`
+or run `git submodule update --init tools/virtual-daisy`. It boots the **actual production ELF**
 under Renode, feeds audio through modeled codec/SAI/DMA peripherals and records
 stereo WAV output. Its regression command checks tuning, boot completion and
 audio continuity, then verifies detection of silent input and lost RX DMA.
 
 ```sh
+cargo build --release --locked
+export VIRTUAL_DAISY_ELF="$PWD/target/thumbv7em-none-eabihf/release/app"
 cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target "$LAB_HOST" -- run /absolute/path/to/renode-runtime audio-lab-results/daisy --board rev5
 ```
 

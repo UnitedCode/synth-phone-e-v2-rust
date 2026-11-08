@@ -1,0 +1,3 @@
+[submodule "tools/virtual-daisy"]
+	path = tools/virtual-daisy
+	url = https://github.com/UnitedCode/virtual-daisy.git
