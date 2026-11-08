@@ -174,8 +174,6 @@ impl Default for MenuValues {
     }
 }
 
-use log::info;
-
 /// Events that can be triggered by hardware inputs
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AppEvent {
@@ -362,6 +360,8 @@ pub struct AppStateMachine {
     harmony_backing: u8,
     pub volume: i8,
     pub note: i8,
+    /// Most recently pressed pitched keypad key first; zero marks an empty slot.
+    held_notes: [u8; 12],
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
@@ -427,6 +427,7 @@ impl AppStateMachine {
             harmony_backing: 64,
             volume: 10,
             note: 0,
+            held_notes: [0; 12],
             key_down_pressed: false,
             process_cycle_pressed: false,
             key_up_pressed: false,
@@ -532,6 +533,17 @@ impl AppStateMachine {
     pub fn handle_event(&mut self, event: AppEvent) {
         // Handle special events for specific states
         match (&self.state, event) {
+            // A release belongs to its original press, regardless of the screen
+            // or profile that is open when the physical key comes back up.
+            (_, AppEvent::KeypadRelease(key)) => {
+                self.release_note(key);
+                match key {
+                    10 => self.key_down_pressed = false,
+                    11 => self.process_cycle_pressed = false,
+                    12 => self.key_up_pressed = false,
+                    _ => {}
+                }
+            }
             //adjust volume
             (AppState::Processing(_), AppEvent::EncoderRotate(delta))
             | (AppState::EffectsProfile(_), AppEvent::EncoderRotate(delta)) => {
@@ -540,8 +552,7 @@ impl AppStateMachine {
 
             // Handle keypad presses in Processing profile (for notes)
             (AppState::Processing(_), AppEvent::KeypadPress(key)) => {
-                self.play_note(key);
-                self.note = key as i8;
+                self.press_note(key);
             }
 
             // Handle keypad presses in Effects profile
@@ -616,17 +627,6 @@ impl AppStateMachine {
                 }
             }
 
-            (AppState::EffectsProfile(_), AppEvent::KeypadRelease(key)) => match key {
-                10 => self.key_down_pressed = false,
-                11 => self.process_cycle_pressed = false,
-                12 => self.key_up_pressed = false,
-                _ => {}
-            },
-
-            (AppState::Processing(_), AppEvent::KeypadRelease(_key)) => {
-                self.play_note(0); // stop tone for those modes
-            }
-
             // Handle encoder rotation in Menu profile
             (AppState::Menu(menu_state, _), AppEvent::EncoderRotate(delta)) => {
                 // Convert rotation to next/prev events
@@ -692,15 +692,24 @@ impl AppStateMachine {
         }
     }
 
-    /// Play a note based on the current key and octave
-    fn play_note(&mut self, key_index: usize) {
-        info!("the note before {}", key_index);
-        // Convert keypad position to a note in the current key and octave
-        // Implementation depends on your audio system
-        // This is just a placeholder
-        self.note = key_index as i8; //self.current_key + (key_index as i8) + (self.current_octave * 12);
-                                     // Play the note with current effects
-        info!("the note after {}", self.note);
+    fn press_note(&mut self, key: usize) {
+        if !(1..=12).contains(&key) || self.held_notes.contains(&(key as u8)) {
+            return;
+        }
+        self.held_notes.copy_within(..11, 1);
+        self.held_notes[0] = key as u8;
+        self.note = key as i8;
+    }
+
+    fn release_note(&mut self, key: usize) {
+        if !(1..=12).contains(&key) {
+            return;
+        }
+        if let Some(index) = self.held_notes.iter().position(|&note| note == key as u8) {
+            self.held_notes.copy_within(index + 1.., index);
+            self.held_notes[11] = 0;
+            self.note = self.held_notes[0] as i8;
+        }
     }
 
     /// Get a snapshot of all current values

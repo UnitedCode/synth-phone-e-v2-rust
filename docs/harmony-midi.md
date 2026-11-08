@@ -125,8 +125,9 @@ cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target
 The harmony tests independently probe requested frequencies, cover eight-note
 order independence, unison after silence, changing-pitch sidebands, and MIDI-only silence without keys.
 MIDI tests cover retrigger/release, channel isolation, pitch bend, sustain and
-panic. The established pitch sweep records 192 known quality failures in the
-unchanged Pitch Control path; this Harmony repair does not claim to fix them.
+panic. At this Harmony repair's revision, the pitch sweep recorded 192 known
+failures in Pitch Control. The later [pitch audit](pitch-audit.md) supersedes
+that count with DSP fixes and corrections to the measurement oracle.
 
 Local verification of DSP revision `b2163e5a2bd6c03bd32772c9a571f2454c58fd7b`:
 

@@ -86,12 +86,12 @@ const RELEASE_DECAY: u16 = 63_790;
 const DTMF_ROW_HZ: [u32; 4] = [697, 770, 852, 941];
 const DTMF_COL_HZ: [u32; 3] = [1209, 1336, 1477];
 
-/// phase_inc = freq_hz * 89_443  (2^32 / 48_014.312 Hz ≈ 89_443)
+/// Integer phase advance uses the same clock as synthesis and vocal analysis.
 const fn hz_to_phase_inc(hz: u32) -> u32 {
-    hz * 89_443
+    hz * (4_294_967_296.0 / crate::constants::SAMPLE_RATE + 0.5) as u32
 }
 
-const SAMPLE_RATE_HZ: u32 = 48_014;
+const SAMPLE_RATE_HZ: u32 = crate::constants::SAMPLE_RATE as u32;
 const SAMPLES_PER_MS: u32 = 48;
 /// Fade at every ring and note edge (~2 ms) so gating doesn't click.
 const EDGE_RAMP: u32 = 96;
@@ -99,10 +99,17 @@ const FULL_GAIN: i32 = 32_767;
 
 /// Phase increment for MIDI notes 0–11 (C-1 … B-1); each octave up is one
 /// left shift, so melodies need no float math per sample.
-const SEMITONE_PHASE_INC: [u32; 12] = [
-    731_340, 774_828, 820_901, 869_715, 921_431, 976_222, 1_034_271, 1_095_772, 1_160_930,
-    1_229_962, 1_303_100, 1_380_586,
-];
+const SEMITONE_PHASE_INC: [u32; 12] = {
+    let mut increments = [0; 12];
+    let mut note = 0;
+    while note < 12 {
+        increments[note] = (synthphone_e_vocal_dsp::audio::frequencies::BASE_FREQUENCIES[note]
+            * 0.5
+            * (4_294_967_296.0 / crate::constants::SAMPLE_RATE)) as u32;
+        note += 1;
+    }
+    increments
+};
 
 #[inline(always)]
 fn note_phase_inc(note: u8) -> u32 {
@@ -377,7 +384,6 @@ enum SynthEngine {
     Ringer,
 }
 
-// phase_inc = freq_hz * 89_443  (2^32 / 48_014.312 Hz ≈ 89_443)
 pub struct DrumSampler {
     drum_type: DrumType,
     engine: SynthEngine,
@@ -819,7 +825,7 @@ impl DrumSampler {
             DrumType::MuteTriangle => {
                 self.engine = SynthEngine::PureTone;
                 self.max_samples = 1_200;
-                self.phase_inc = 314_839_360; // 3520 Hz (A7)
+                self.phase_inc = hz_to_phase_inc(3520); // A7
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_200;
@@ -829,7 +835,7 @@ impl DrumSampler {
             DrumType::OpenTriangle => {
                 self.engine = SynthEngine::PureTone;
                 self.max_samples = 28_800; // 600 ms ring
-                self.phase_inc = 314_839_360; // 3520 Hz (A7)
+                self.phase_inc = hz_to_phase_inc(3520); // A7
                 self.target_phase_inc = 0;
                 self.pitch_decay = 0;
                 self.env_decay = 65_530;
@@ -1415,9 +1421,20 @@ mod tests {
 
     #[test]
     fn melody_notes_hit_their_pitch() {
-        // A5 (81) should be 880 Hz.
-        let hz = note_phase_inc(81) as f32 * 48_014.312 / 4_294_967_296.0;
-        assert!((hz - 880.0).abs() < 1.0, "got {hz} Hz");
+        for note in 0..=127 {
+            let hz = note_phase_inc(note) as f32 * crate::constants::SAMPLE_RATE / 4_294_967_296.0;
+            let expected = 440.0 * libm::powf(2.0, (note as f32 - 69.0) / 12.0);
+            let cents = 1200.0 * libm::log2f(hz / expected);
+            assert!(
+                cents.abs() < 0.01,
+                "MIDI {note}: got {hz} Hz ({cents} cents)"
+            );
+        }
+        for hz in DTMF_ROW_HZ.into_iter().chain(DTMF_COL_HZ) {
+            let actual =
+                hz_to_phase_inc(hz) as f32 * crate::constants::SAMPLE_RATE / 4_294_967_296.0;
+            assert!((1200.0 * libm::log2f(actual / hz as f32)).abs() < 0.01);
+        }
     }
 
     #[test]

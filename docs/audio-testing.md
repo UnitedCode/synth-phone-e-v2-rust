@@ -37,8 +37,7 @@ The sweep generates:
 - `controls.csv`: whether changing correction strength and transition speed
   actually changes rendered audio.
 - `summary.txt`: failures, newly failing cases, and improvements.
-- Eight short WAVs: sine/bright inputs and outputs with each formant setting,
-  including a reproducible failing case.
+- Eight short WAVs: sine/bright inputs and outputs with each formant setting.
 
 A pitch case passes when the sustained output has a measurable pitch within
 20 cents of its independently calculated target, nonzero RMS, no non-finite samples
@@ -55,10 +54,11 @@ an entry when its fix is verified on both supported host platforms. To require
 cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" -- sweep audio-lab-results --strict
 ```
 
-Strict acceptance currently fails. CI runs the regression tests, checks all 720
-cases against the existing-failure list, and uploads the CSV/WAV results. A green
-CI run means the protected behavior did not regress; it does not mean the known
-pitch defects were fixed.
+The November pitch audit reaches strict acceptance on macOS and Linux. See
+[pitch and WAV audit](pitch-audit.md) for the fixes, measurement corrections and
+remaining limits. The historical baseline below used an older estimator and an
+incorrect target mapping for six minor keys; its failure count is not a count of
+independently confirmed DSP defects.
 
 ## Replay recordings
 
@@ -68,13 +68,15 @@ cargo run --release --locked --manifest-path tools/audio-lab/Cargo.toml --target
 
 The last two arguments select `pitch`, `dry`, `harmony`, or `vocode`, and key 0–23
 (the same ordering as the DSP library). Input must be mono PCM or float WAV at
-48,000 or 48,014 Hz. Samples are treated as samples arriving at the board's
-48,014.312 Hz rate; there is no resampler. A nominal 48 kHz recording therefore plays
-about 0.03% faster, approximately half a cent. Output is mono float WAV at rounded
-48,014 Hz, with a drained processing tail and the firmware's final 0.8 peak limiter.
+8,000 through 192,000 Hz. The declared file rate configures the DSP, generated
+carriers and output header; no resampling or channel mixing occurs. Output is
+mono float WAV at the original rate, with a drained processing tail and the
+firmware's final 0.8 peak limiter. File replay tests cover 44,100, 48,000, 48,014
+and 96,000 Hz. The embedded path uses 48,187.487 Hz, derived from the pinned
+HAL's programmed PLL3/SAI dividers; physical clock measurement remains pending.
 
 For reproducibility the vocoder uses a fixed 220 Hz harmonic carrier; harmony uses
-fixed 220/330 Hz MIDI targets. This does not reproduce the MIDI parser or live note
+fixed MIDI 57/64 targets (220/329.62756 Hz). This does not reproduce the MIDI parser or live note
 changes. Arbitrary recordings get audio/level statistics, **not** an automatic
 accuracy grade: grading sung recordings needs intended note/timing annotations.
 
@@ -116,10 +118,10 @@ default preserves the old fast sound, while lower settings glide. See
 [autotune speed verification](autotune-speed.md) for its regression scope and
 the remaining formant/estimator limitations.
 
-Another mismatch is preserved for a faithful baseline: the DSP's default sample
+Another mismatch was preserved for the original baseline: the DSP's default sample
 rate is 48,000 Hz while the device constant is 48,014.312 Hz. This is only about half
-a cent and cannot explain the large failures. The lab deliberately does not change
-the sound while establishing the baseline.
+a cent and cannot explain the large failures. The November audit removes that
+mismatch in the shared firmware configuration.
 
 ## Performance and hardware testing
 
@@ -128,8 +130,8 @@ overlap-add bookkeeping.
 They can help compare versions on the same host/build configuration. They cannot
 predict Cortex-M7 cycles, interrupt deadlines or physical round-trip latency.
 
-The current two-sample DMA block arrives every approximately 41.65 microseconds;
-a 256-sample FFT hop arrives every approximately 5.33 milliseconds. The FFT task
+The configured two-sample DMA block arrives every approximately 41.50 microseconds;
+a 256-sample FFT hop arrives every approximately 5.31 milliseconds. The FFT task
 must finish with room for higher-priority audio interrupts. An average faster than
 real time is insufficient; worst-case duration, scheduling delay and missed hops
 matter. The next on-device instrument should record DWT cycle high-water marks,

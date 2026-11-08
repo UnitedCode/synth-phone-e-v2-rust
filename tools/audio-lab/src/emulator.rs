@@ -245,7 +245,7 @@ pub fn run(directory: &Path) -> Result<()> {
         ARM target: thumbv7em-none-eabihf; QEMU board: mps2-an500; CPU: cortex-m7.\n\
         This executes the DSP/replay test guest, not the complete Daisy firmware.\n\
         STM32 SAI/DMA, codec, cache timing and real-time deadline accuracy are not modeled.\n\
-        Matching host output does not fix or approve the known pitch-quality failures.\n", captured.interrupt_count);
+        Matching host output alone does not establish pitch quality.\n", captured.interrupt_count);
     fs::write(directory.join("emulator-summary.txt"), &summary)?;
     print!("{summary}");
     Ok(())

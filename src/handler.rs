@@ -332,11 +332,7 @@ pub fn interface_handler(
                         });
                     }
                     shared.app_state_machine.lock(|msm| {
-                        msm.handle_event(handle_button_release(
-                            row,
-                            col,
-                            msm.snapshot().current_state,
-                        ));
+                        msm.handle_event(AppEvent::KeypadRelease(key_num));
                     });
                 }
             }

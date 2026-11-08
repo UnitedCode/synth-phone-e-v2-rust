@@ -1,7 +1,7 @@
 //! Original-level A/B replay of a real vocal recording and generated notes.
 use crate::{
-    constants::SAMPLE_RATE, levels::db_ratio, metrics, output_mix, render, steady, vocal_frame,
-    voice_generator::VoiceManager,
+    constants::SAMPLE_RATE, levels::db_ratio, metrics, output_mix, render, steady_at_rate,
+    vocal_frame, voice_generator::VoiceManager,
 };
 use std::{error::Error, fs, io::Write, path::Path};
 use synthphone_e_vocal_dsp::{
@@ -9,23 +9,6 @@ use synthphone_e_vocal_dsp::{
     dsp::{bitcrush, normalize_sample},
     MusicalSettings, ProcessingMode,
 };
-
-fn wav(path: &Path, audio: &[f32]) -> Result<(), Box<dyn Error>> {
-    let mut out = hound::WavWriter::create(
-        path,
-        hound::WavSpec {
-            channels: 1,
-            sample_rate: SAMPLE_RATE.round() as u32,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        },
-    )?;
-    for &x in audio {
-        out.write_sample(x)?;
-    }
-    out.finalize()?;
-    Ok(())
-}
 
 fn finish(
     processed: f32,
@@ -48,14 +31,26 @@ fn finish(
 }
 
 pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
+    run_at_rate(input, SAMPLE_RATE.round() as u32, directory)
+}
+
+pub fn run_at_rate(
+    input: &[f32],
+    sample_rate: u32,
+    directory: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let rate = sample_rate as f64;
     fs::create_dir_all(directory)?;
-    wav(&directory.join("input.wav"), input)?;
+    crate::wav::write(&directory.join("input.wav"), input, sample_rate)?;
     let mut csv = fs::File::create(directory.join("levels.csv"))?;
     writeln!(
         csv,
         "version,voice_level,synth_level,source,rms,peak,db_vs_voice,non_finite,over_full_scale"
     )?;
-    let config = vocal_frame::default_config();
+    let config = synthphone_e_vocal_dsp::VocalEffectsConfig {
+        sample_rate: sample_rate as f32,
+        ..vocal_frame::default_config()
+    };
     let default = MusicalSettings::default();
     for (version, legacy, settings, voice_level, synth_level) in [
         ("before", true, false, 10, 10),
@@ -78,7 +73,7 @@ pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
             })
             .collect();
         let voice_raw = render(&signal, &[], &config, &default).raw;
-        let mut osc = Oscillator::new(110.0, SAMPLE_RATE, Waveform::Triangle);
+        let mut osc = Oscillator::new(110.0, sample_rate as f32, Waveform::Triangle);
         let synth_gain = if legacy {
             output_mix::level_gain(synth_level)
         } else {
@@ -97,7 +92,7 @@ pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
         };
         let keypad_raw = render(&vec![0.0; input.len()], &carrier, &config, &dry).raw;
         let keypad_mix_raw = render(&signal, &carrier, &config, &dry).raw;
-        let mut voices = VoiceManager::<8>::new(SAMPLE_RATE);
+        let mut voices = VoiceManager::<8>::new(sample_rate as f32);
         voices.set_waveform(Waveform::Triangle);
         voices.note_on(45, 127, 1); // A2, matching the keypad's default note6.
         let melody: Vec<_> = (0..voice_raw.len())
@@ -124,7 +119,7 @@ pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
             .iter()
             .map(|&v| finish(v, 0.0, legacy, 1.0, settings_voice))
             .collect();
-        let reference = metrics(steady(&voice)).rms;
+        let reference = metrics(steady_at_rate(&voice, rate)).rms;
         for (name, audio) in [
             ("autotune", &voice),
             ("keypad", &keypad),
@@ -132,7 +127,7 @@ pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
             ("keypad-mix", &keypad_mix),
             ("midi-mix", &midi_mix),
         ] {
-            let m = metrics(steady(audio));
+            let m = metrics(steady_at_rate(audio, rate));
             writeln!(
                 csv,
                 "{version},{voice_level},{synth_level},{name},{:.9},{:.9},{:.5},{},{}",
@@ -142,19 +137,24 @@ pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
                 m.non_finite,
                 m.over_full_scale
             )?;
-            wav(&directory.join(format!("{version}-{name}.wav")), audio)?;
+            crate::wav::write(
+                &directory.join(format!("{version}-{name}.wav")),
+                audio,
+                sample_rate,
+            )?;
         }
         // Recorded/autotuned voice, then isolated keypad and MIDI. No separate
         // normalization; the first six seconds of the vocal stay at their level.
-        let mut sequence = voice[..voice.len().min((SAMPLE_RATE * 6.0) as usize)].to_vec();
+        let mut sequence = voice[..voice.len().min((rate * 6.0) as usize)].to_vec();
         for tone in [&keypad, &midi] {
-            sequence.resize(sequence.len() + (SAMPLE_RATE * 0.35) as usize, 0.0);
-            let clip = steady(tone);
-            sequence.extend_from_slice(&clip[..clip.len().min((SAMPLE_RATE * 2.0) as usize)]);
+            sequence.resize(sequence.len() + (rate * 0.35) as usize, 0.0);
+            let clip = steady_at_rate(tone, rate);
+            sequence.extend_from_slice(&clip[..clip.len().min((rate * 2.0) as usize)]);
         }
-        wav(
+        crate::wav::write(
             &directory.join(format!("{version}-comparison.wav")),
             &sequence,
+            sample_rate,
         )?;
     }
     println!("{}", fs::read_to_string(directory.join("levels.csv"))?);
