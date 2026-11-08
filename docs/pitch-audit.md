@@ -1,8 +1,12 @@
 # Pitch, notes and WAV audit
 
-The `clankers-pitch-audit` branch starts at firmware `main` revision `6403420`.
-Firmware, host audio lab and ARM guest pin DSP revision
-`5fb637c96d71801ee8856686e89f6cb9082cb3d4` from its matching audit branch.
+The pitch audit started at firmware `main` revision `6403420`.
+Firmware, host audio lab and ARM guest pin DSP `main` revision
+`4cf708acb2c1744707a316c9fc37bf15b46d8f3e`, merged through
+[DSP PR #11](https://github.com/nathansbradshaw/synthphone_e_vocal_dsp/pull/11).
+It includes all streaming, harmony, formant and pitch-audit changes. Its DSP
+implementation matches audit revision `5fb637c`; the only subsequent source
+changes make two documentation links compatible with strict rustdoc.
 Virtual Daisy stays at v0.1.1; its models are unchanged.
 
 ## Corrections
@@ -68,6 +72,39 @@ The final native vocal capture boots ELF SHA256
 Its channels match and RTT contains no warnings/errors. Native acceptance here
 covers this targeted production capture; a fresh complete model/fault-suite run
 is not claimed. QEMU's lost-frame control is listed separately above.
+
+## Verification against merged DSP main, 2026-11-08
+
+The firmware merge uses DSP `4cf708a` in all three manifests and lockfiles.
+It also retains the independently completed keypad-release fix `c590ee2` from
+the shared audit branch, including its seven regression tests.
+
+- DSP: 50 unit tests, 6 integration tests and 12 doctests pass. The separate
+  embedded-only 50-test suite, strict Clippy (all targets, all-feature library
+  and embedded-only library), formatting, strict rustdoc and no-std Cortex-M7
+  release build pass.
+- Firmware library: 52 tests pass in the existing offline Linux ARM64 image.
+  The macOS host build of this suite is unsupported by the STM32 dependency's
+  ELF vector-table section; it is not counted as a passing macOS suite.
+- Audio/MIDI/tools: 131 tests pass on each of macOS and Linux ARM64. The strict
+  720-case pitch sweep passes on both platforms, with both correction controls
+  responding. Strict host audio-lab and ARM-guest Clippy and formatting pass.
+- QEMU: all 14 Cortex-M7 audio cases match host PCM within 0.0001 peak sample
+  error. SysTick executes during processing, and the injected dropped frame is
+  detected with 0.250108 peak sample error.
+- Production release firmware builds in the unchanged 128 KiB flash region,
+  with 288 bytes remaining after alignment. Existing firmware compiler warnings
+  remain; a warning-free full firmware build is not claimed.
+- A fresh Rev5 serial-boundary capture boots ELF SHA256
+  `20161bf02eac174620b4e0fc6a83017c3baf9087524596b8b01dd3da27a7f996`.
+  Both channels contain 48,099 frames, measure 220.382 Hz (3.003 cents from
+  220 Hz), and have no silent hops or SAI FIFO underruns/overruns. The capture
+  and independent audio grade both pass. This is a targeted production-audio
+  check, not a fresh complete peripheral/fault-suite run.
+
+These checks run locally, with GitHub CI skipped to conserve minutes. They do
+not establish physical-board timing, analog behavior or listening acceptance;
+no hardware was flashed.
 
 ## Existing audio file
 

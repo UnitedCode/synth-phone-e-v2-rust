@@ -6,7 +6,7 @@ from a previous ratio of 1.0 on every frame. There was no retained correction
 trajectory, so a slower transition could not accumulate toward its target.
 
 The firmware now uses the DSP's `process_vocal_effects_1024_stream` entry point,
-pinned at `5fb637c96d71801ee8856686e89f6cb9082cb3d4`. Firmware, host replay and
+pinned at `4cf708acb2c1744707a316c9fc37bf15b46d8f3e`. Firmware, host replay and
 the ARM guest share that exact revision. Virtual Daisy boots the resulting ELF
 through the separately maintained board models. The legacy by-value DSP APIs
 remain compatible for other callers. The measurements below record earlier
