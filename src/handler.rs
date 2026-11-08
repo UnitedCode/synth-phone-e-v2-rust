@@ -2,8 +2,8 @@ use crate::midi::get_midi_queue_status;
 use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
-use app_lib::vocal_frame::{config_for_speed, process_frame};
 use app_lib::output_mix;
+use app_lib::vocal_frame::{config_for_speed, process_frame};
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -11,9 +11,7 @@ use log::{info, warn};
 use rotary_encoder_embedded::Direction;
 use rtic::Mutex;
 use synthphone_e_vocal_dsp::audio::{get_frequency, Oscillator, Waveform};
-use synthphone_e_vocal_dsp::dsp::{
-    bitcrush, sample_rate_reduce, Fft1024, FftOps,
-};
+use synthphone_e_vocal_dsp::dsp::{bitcrush, sample_rate_reduce, Fft1024, FftOps};
 use synthphone_e_vocal_dsp::ring_buffer::RingBuffer;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
@@ -75,7 +73,9 @@ pub fn audio_handler(
                 true => *left,
             };
 
-            shared.in_ring.lock(|in_ring| in_ring.push(sample * voice_gain));
+            shared
+                .in_ring
+                .lock(|in_ring| in_ring.push(sample * voice_gain));
 
             let mut out_sample = shared.out_ring.lock(|out_ring| out_ring.pop());
 
@@ -200,10 +200,11 @@ pub fn audio_handler(
             });
 
             // ************** ADD MIDI OUTPUT **************
-            let (melody, drums) = shared
-                .voice_manager
-                .lock(|vm| vm.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain));
-            out_sample = output_mix::sum_sources(out_sample, melody, drums, wave_type) * master_gain;
+            let (melody, drums) = shared.voice_manager.lock(|vm| {
+                vm.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain)
+            });
+            out_sample =
+                output_mix::sum_sources(out_sample, melody, drums, wave_type) * master_gain;
 
             if crush_voices {
                 // Percussion: crush the voice and every MIDI voice together.
@@ -514,7 +515,8 @@ pub fn handle_vocal_effects(
                 osc.set_waveform(wave_type);
                 osc.set_freq(carrier_hz);
                 for _ in 0..HOP_SIZE {
-                    carrier_buffer.push(osc.next_value() * output_mix::keypad_gain(wave_type) * synth_gain);
+                    carrier_buffer
+                        .push(osc.next_value() * output_mix::keypad_gain(wave_type) * synth_gain);
                 }
             } else {
                 for _ in 0..HOP_SIZE {

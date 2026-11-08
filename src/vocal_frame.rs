@@ -6,14 +6,13 @@ use synthphone_e_vocal_dsp::{
 
 /// Keep the existing firmware configuration in one place for offline replay.
 pub fn default_config() -> VocalEffectsConfig {
-    let mut config = VocalEffectsConfig::default();
-    // The old stateless path applied 99% correction from unity every hop.
-    // Preserve that steady-state amount while making transition speed stateful.
-    config.pitch_correction_strength = 0.99;
-    // Existing devices always snapped quickly because the speed was ignored.
-    // Keep that sound as the fresh default (menu 10); lower settings now glide.
-    config.transition_speed = 1.0;
-    config
+    VocalEffectsConfig {
+        // Preserve the stateless path's 99% steady-state correction.
+        pitch_correction_strength: 0.99,
+        // Keep the fresh default fast; lower menu settings now glide.
+        transition_speed: 1.0,
+        ..VocalEffectsConfig::default()
+    }
 }
 
 /// Higher menu values correct faster. Coefficients are fractions per FFT hop.

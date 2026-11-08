@@ -101,8 +101,8 @@ The formant audit requires every expected button in order, including repeated
 same-key presses, audible finite matching stereo, clear CPU fault registers,
 the CPU execution guards, zero reported dropped tasks and DMA FIFO errors,
 and no unexpected emulator warnings. It does not measure contact bounce,
-physical input latency, display timing or CPU deadline margin. CI stays off;
-the experimental firmware and DSP remain on clankers branches.
+physical input latency, display timing or CPU deadline margin. These were local
+checks; the physical acceptance work below remains necessary.
 
 For physical acceptance, enable male/female formant, sing while pressing the
 usual controls, and switch formant off repeatedly. Check recognition, display

@@ -1,6 +1,6 @@
 pub mod midi_voice;
-pub mod voice_generator;
 pub mod notes;
+pub mod voice_generator;
 
 use log::warn;
 use stm32h7xx_hal::{nb, prelude::*, serial::Rx, stm32};
@@ -241,7 +241,6 @@ pub enum MidiEvent {
     },
     Other,
 }
-
 
 // MIDI note utilities
 impl MidiEvent {

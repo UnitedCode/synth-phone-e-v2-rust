@@ -1,24 +1,26 @@
 //! Deterministic audio replay, not CPU/peripheral emulation.
 use std::time::Instant;
 use synthphone_e_vocal_dsp::{dsp::normalize_sample, MusicalSettings, VocalEffectsConfig};
-pub mod emulator;
-pub mod replay;
-pub mod stem_mix;
 #[path = "../../../src/audio/mod.rs"]
 pub mod audio;
+pub mod emulator;
+#[path = "../../../src/midi/notes.rs"]
+pub mod midi_notes;
 #[path = "../../../src/percussion.rs"]
 pub mod percussion;
+pub mod replay;
 #[path = "../../../src/settings_storage.rs"]
 pub mod settings_storage;
 #[path = "../../../src/state_machine/mod.rs"]
 pub mod state_machine;
-#[path = "../../../src/midi/notes.rs"]
-pub mod midi_notes;
-pub mod midi { pub use crate::midi_notes as notes; }
-#[path = "../../../src/midi/voice_generator.rs"]
-pub mod voice_generator;
+pub mod stem_mix;
+pub mod midi {
+    pub use crate::midi_notes as notes;
+}
 #[path = "../../../src/output_mix.rs"]
 pub mod output_mix;
+#[path = "../../../src/midi/voice_generator.rs"]
+pub mod voice_generator;
 pub use audio::drum_synth;
 pub mod levels;
 pub mod recording_levels;

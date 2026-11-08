@@ -23,7 +23,7 @@ pub const NAMES: [&str; COUNT] = [
 ];
 
 pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
-    let mut config = crate::vocal_frame::default_config();
+    let mut config = crate::vocal_frame::config_for_speed(10);
     if case >= 9 {
         config.harmony_lead_gain = 0.0;
     }

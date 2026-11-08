@@ -379,7 +379,9 @@ mod rtic_app {
                     midi_receiver,
                     sprite_atlas,
                     held_keys: HeldKeys::new(),
-                    save_debounce: crate::settings_storage::SaveDebounce::new(ccdr.clocks.c_ck().raw().saturating_mul(2)),
+                    save_debounce: crate::settings_storage::SaveDebounce::new(
+                        ccdr.clocks.c_ck().raw().saturating_mul(2),
+                    ),
                 },
                 init::Monotonics(),
             )
@@ -560,7 +562,7 @@ mod rtic_app {
                 .shared
                 .app_state_machine
                 .lock(|state| state.saved_settings());
-            let now=cortex_m::peripheral::DWT::cycle_count();
+            let now = cortex_m::peripheral::DWT::cycle_count();
             if ctx.local.last_settings.is_none() {
                 *ctx.local.last_settings = Some(before);
             }
@@ -574,7 +576,11 @@ mod rtic_app {
                 // changes made by the audio task are persisted too.
                 *ctx.local.last_settings = Some(after);
                 ctx.local.save_debounce.changed(now);
-            } else if ctx.shared.settings_save_failed.lock(|failed| core::mem::take(failed)) {
+            } else if ctx
+                .shared
+                .settings_save_failed
+                .lock(|failed| core::mem::take(failed))
+            {
                 ctx.local.save_debounce.changed(now);
             } else if ctx.local.save_debounce.ready(now) {
                 if settings_flash_task::spawn(Some(after)).is_ok() {
@@ -586,19 +592,26 @@ mod rtic_app {
         }
 
         #[task(priority = 1, local = [flash], shared = [app_state_machine, settings_ready, settings_save_failed, display_needs_update])]
-        fn settings_flash_task(mut ctx: settings_flash_task::Context, settings: Option<crate::settings_storage::SavedSettings>) {
+        fn settings_flash_task(
+            mut ctx: settings_flash_task::Context,
+            settings: Option<crate::settings_storage::SavedSettings>,
+        ) {
             if let Some(settings) = settings {
                 if crate::settings_storage::save(ctx.local.flash, settings) {
                     info!("settings saved");
                 } else {
                     log::warn!("settings save failed");
-                    ctx.shared.settings_save_failed.lock(|failed| *failed = true);
+                    ctx.shared
+                        .settings_save_failed
+                        .lock(|failed| *failed = true);
                 }
             } else {
                 // Defer restoration until after init has constructed the large
                 // audio buffers in place, avoiding its former boot stack overflow.
                 if let Some(saved) = crate::settings_storage::load(ctx.local.flash) {
-                    ctx.shared.app_state_machine.lock(|state| state.apply_saved_settings(saved));
+                    ctx.shared
+                        .app_state_machine
+                        .lock(|state| state.apply_saved_settings(saved));
                     ctx.shared.display_needs_update.lock(|flag| *flag = true);
                     display_update_task::spawn().ok();
                     info!("restored saved settings");

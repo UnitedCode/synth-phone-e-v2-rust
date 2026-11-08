@@ -5,11 +5,12 @@ configure vocal processing. The DSP applied a fixed 0.99 correction coefficient
 from a previous ratio of 1.0 on every frame. There was no retained correction
 trajectory, so a slower transition could not accumulate toward its target.
 
-The firmware now uses the DSP's `process_vocal_effects_1024_with_state` entry
-point, pinned at `cddeddc84ad5b1d11a8c7e15f414f381186e633f` on the separate
-`codex/clankers-autotune` DSP branch. Firmware, host replay, ARM guest and native
-emulator tools share that exact revision. Neither repository's main is changed.
-The legacy by-value DSP APIs remain compatible for other callers.
+The firmware now uses the DSP's `process_vocal_effects_1024_stream` entry point,
+pinned at `cf493b7a6c8c6b5addef2a0c649dc10795f46287`. Firmware, host replay and
+the ARM guest share that exact revision. Virtual Daisy boots the resulting ELF
+through the separately maintained board models. The legacy by-value DSP APIs
+remain compatible for other callers. The measurements below record earlier
+stages of this work as well as the current behavior.
 
 ## Controls and state
 

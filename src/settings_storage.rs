@@ -14,12 +14,22 @@ pub struct SaveDebounce {
 }
 
 impl SaveDebounce {
-    pub const fn new(delay_cycles: u32) -> Self {Self {delay_cycles,changed_at:None}}
-    pub fn changed(&mut self, now: u32) {self.changed_at=Some(now);}
-    pub fn ready(&self, now: u32) -> bool {
-        self.changed_at.is_some_and(|start|now.wrapping_sub(start)>=self.delay_cycles)
+    pub const fn new(delay_cycles: u32) -> Self {
+        Self {
+            delay_cycles,
+            changed_at: None,
+        }
     }
-    pub fn submitted(&mut self) {self.changed_at=None;}
+    pub fn changed(&mut self, now: u32) {
+        self.changed_at = Some(now);
+    }
+    pub fn ready(&self, now: u32) -> bool {
+        self.changed_at
+            .is_some_and(|start| now.wrapping_sub(start) >= self.delay_cycles)
+    }
+    pub fn submitted(&mut self) {
+        self.changed_at = None;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

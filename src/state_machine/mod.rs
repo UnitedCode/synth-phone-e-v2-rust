@@ -623,7 +623,7 @@ impl AppStateMachine {
                 _ => {}
             },
 
-            (AppState::Processing(profile), AppEvent::KeypadRelease(_key)) => {
+            (AppState::Processing(_), AppEvent::KeypadRelease(_key)) => {
                 self.play_note(0); // stop tone for those modes
             }
 

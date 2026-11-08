@@ -4,15 +4,15 @@ use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
 
 // Precomputed 1/sqrt(n) for n = 1..=8, indexed by active voice count
 const INV_SQRT: [f32; 9] = [
-    0.0,        // unused (count = 0 handled separately)
-    1.0,        // 1/sqrt(1)
-    0.70710678, // 1/sqrt(2)
-    0.57735027, // 1/sqrt(3)
-    0.5,        // 1/sqrt(4)
-    0.44721360, // 1/sqrt(5)
-    0.40824829, // 1/sqrt(6)
-    0.37796447, // 1/sqrt(7)
-    0.35355339, // 1/sqrt(8)
+    0.0, // unused (count = 0 handled separately)
+    1.0, // 1/sqrt(1)
+    core::f32::consts::FRAC_1_SQRT_2,
+    0.57735027,  // 1/sqrt(3)
+    0.5,         // 1/sqrt(4)
+    0.447_213_6, // 1/sqrt(5)
+    0.40824829,  // 1/sqrt(6)
+    0.37796447,  // 1/sqrt(7)
+    0.35355339,  // 1/sqrt(8)
 ];
 
 /// Voice that holds BOTH generators, only one active at a time
@@ -579,7 +579,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         (result, lead)
     }
 
-    /// DSP-relative gains on its equal-power chord shares. Group headroom is
+    /// DSP-relative gains compensating its 1/N normalization. Group headroom is
     /// reserved while the MIDI lead rests, avoiding backing jumps.
     pub fn get_harmony_voices(&self, backing_level: u8) -> ([f32; MAX_VOICES], [f32; MAX_VOICES]) {
         let (frequencies, lead) = self.collect_vocal_notes();
@@ -592,12 +592,11 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         let back = backing_level.min(127) as f32 / 127.0;
         let lead_root = libm::sqrtf(leads.max(1) as f32);
         let back_root = libm::sqrtf(backs.max(1) as f32);
-        // The DSP gives each unity-gain voice 1/sqrt(count) of the chord's
-        // power, so sqrt(count) cancels that and these gains become absolute.
-        // The lead group gets power 1 and backing back^2, scaled so a full
-        // lead+backing chord exactly fills the chord's power. Shares do not
-        // grow when the other group rests, so neither jumps.
-        let scale = libm::sqrtf(count as f32) / libm::sqrtf(1.0 + back * back);
+        // The pinned DSP averages voiced parts by their active count. Cancel
+        // that attenuation, then budget both groups' summed amplitudes. Keep
+        // the lead's share reserved during rests so backing does not jump.
+        let denominator = (lead_root + if backs > 0 { back * back_root } else { 0.0 }).max(1.0);
+        let scale = count as f32 / denominator;
         let gains = core::array::from_fn(|i| {
             if frequencies[i] <= 0.0 {
                 0.0

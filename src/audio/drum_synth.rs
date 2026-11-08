@@ -1006,7 +1006,11 @@ impl DrumSampler {
                 let tone = if warble_hz > 0 {
                     // One phase with switching increments, so the warble never clicks.
                     let half_period = SAMPLE_RATE_HZ / (2 * warble_hz as u32);
-                    let hz = if (sc / half_period) % 2 == 0 { f1 } else { f2 };
+                    let hz = if (sc / half_period).is_multiple_of(2) {
+                        f1
+                    } else {
+                        f2
+                    };
                     self.phase = self.phase.wrapping_add(hz_to_phase_inc(hz as u32));
                     ringer_wave(self.phase, square)
                 } else {
@@ -1120,9 +1124,9 @@ impl DrumSampler {
             SynthEngine::Clap => {
                 // Four tight 2 ms noise bursts (96 samples each), then decaying tail
                 let in_burst = sc < 96
-                    || (sc >= 192 && sc < 288)
-                    || (sc >= 384 && sc < 480)
-                    || (sc >= 576 && sc < 672);
+                    || (192..288).contains(&sc)
+                    || (384..480).contains(&sc)
+                    || (576..672).contains(&sc);
                 if in_burst || sc >= 672 {
                     noise_i as i32
                 } else {

@@ -104,6 +104,11 @@ legacy song render is byte-identical to the predecessor, SHA256
 `c412cb27e491783b46da2264812fcfee039407c258d079f965c5f634a14b1671`.
 The older stateless DSP entry points retain their prior gain behavior.
 
+Role gains compensate the pinned DSP's active-voice averaging by `1/N` and
+reserve the lead group's amplitude budget while it rests. The existing PCM
+regression keeps each held backing component within 4% across lead release;
+the MIDI tests also enforce the summed-amplitude headroom bound.
+
 Legacy DSP entry points remain available. Firmware, host replay and ARM audio
 guest use the same pinned DSP revision; streaming pitch-correction state and
 the previous source-volume controls are retained.
@@ -256,7 +261,8 @@ These full-duration controls are host DSP renders with no deadline loss. Their
 artifacts therefore cannot be attributed to physical CPU overload or a codec.
 They establish that software/source issues remain; they do not prove either
 that this algorithm can achieve the desired sound or that the Daisy cannot.
-Keep the experimental DSP on clankers pending a better vocal-quality result.
+The DSP remains experimental; merging the firmware does not establish vocal
+quality or physical-board timing beyond the checks documented here.
 
 The user subsequently judged the held A3/E4 real-vowel output to sound good.
 The octave-estimate discrepancies are present with that same input too, so they

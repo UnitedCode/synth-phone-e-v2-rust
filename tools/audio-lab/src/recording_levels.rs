@@ -79,7 +79,11 @@ pub fn run(input: &[f32], directory: &Path) -> Result<(), Box<dyn Error>> {
             .collect();
         let voice_raw = render(&signal, &[], &config, &default).raw;
         let mut osc = Oscillator::new(110.0, SAMPLE_RATE, Waveform::Triangle);
-        let synth_gain = if legacy {output_mix::level_gain(synth_level)} else {output_mix::synth_gain(synth_level)};
+        let synth_gain = if legacy {
+            output_mix::level_gain(synth_level)
+        } else {
+            output_mix::synth_gain(synth_level)
+        };
         let drive = if legacy {
             1.0
         } else {

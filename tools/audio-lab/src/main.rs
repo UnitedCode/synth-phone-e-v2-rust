@@ -141,7 +141,14 @@ fn sweep(directory: &Path, strict: bool, speed: i8) -> Result<()> {
     writeln!(controls, "control,value,maximum_output_difference,responds")?;
     let mut unresponsive_controls = 0;
     for (name, value) in [
-        ("transition_speed", if config.transition_speed == 1.0 { 0.01 } else { 1.0 }),
+        (
+            "transition_speed",
+            if config.transition_speed == 1.0 {
+                0.01
+            } else {
+                1.0
+            },
+        ),
         ("pitch_correction_strength", 0.0),
     ] {
         let mut changed = config;
