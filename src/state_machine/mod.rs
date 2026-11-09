@@ -749,9 +749,9 @@ impl AppStateMachine {
     }
 
     /// Sets output volume from an incoming MIDI CC7 value (0-127), scaled to the
-    /// internal 0-10 range shared with the encoder-driven volume control.
+    /// encoder's 0-20 range: 0=mute, 64=unity (10), 127=maximum (20).
     pub fn set_volume_from_midi(&mut self, value: u8) {
-        self.volume = ((value as i16 * 10) / 127) as i8;
+        self.volume = ((value.min(127) as i16 * 20) / 127) as i8;
     }
 
     /// Sets waveform from an incoming MIDI Program Change value, wrapped onto

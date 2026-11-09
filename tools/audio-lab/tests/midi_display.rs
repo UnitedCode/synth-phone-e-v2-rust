@@ -9,10 +9,58 @@ fn phone() -> AppStateMachine {
 #[test]
 fn midi_volume_requests_a_redraw_with_the_new_display_value() {
     let mut app = phone();
-    assert!(app.apply_midi_control_change(7, 0));
-    assert_eq!(app.snapshot().volume, 0);
-    assert!(app.apply_midi_control_change(7, 127));
-    assert_eq!(app.snapshot().volume, 10);
+    for (value, expected) in [(0, 0), (64, 10), (127, 20)] {
+        assert!(app.apply_midi_control_change(7, value));
+        assert_eq!(app.snapshot().volume, expected);
+    }
+}
+
+#[test]
+fn midi_volume_sweep_reaches_every_encoder_level_without_jumps_or_reversals() {
+    let mut app = phone();
+    let mut reached = [false; 21];
+    let mut previous = 0;
+    for value in 0..=127 {
+        app.apply_midi_control_change(7, value);
+        let level = app.snapshot().volume;
+        assert!((previous..=previous + 1).contains(&level));
+        assert!((0..=20).contains(&level));
+        reached[level as usize] = true;
+        previous = level;
+    }
+    assert!(reached.into_iter().all(|level| level));
+    // Parser values are seven-bit; direct callers must not exceed the UI range.
+    for value in 128..=255 {
+        app.set_volume_from_midi(value);
+        assert_eq!(app.snapshot().volume, 20);
+    }
+}
+
+#[test]
+fn encoder_and_midi_share_the_same_master_range_and_saved_value() {
+    for processing_screen in [false, true] {
+        let mut app = phone();
+        if processing_screen {
+            app.handle_event(AppEvent::EncoderPress);
+        }
+        let menu = app.saved_settings().menu;
+        app.apply_midi_control_change(7, 127);
+        app.handle_event(AppEvent::EncoderRotate(1));
+        assert_eq!(app.snapshot().volume, 20);
+        app.handle_event(AppEvent::EncoderRotate(-1));
+        assert_eq!(app.snapshot().volume, 19);
+        let saved = app.saved_settings();
+        assert_eq!(saved.master, 19);
+        assert_eq!(saved.menu, menu);
+        let mut restored = phone();
+        restored.apply_saved_settings(saved);
+        assert_eq!(restored.snapshot().volume, 19);
+        app.apply_midi_control_change(7, 0);
+        app.handle_event(AppEvent::EncoderRotate(-1));
+        assert_eq!(app.snapshot().volume, 0);
+        app.handle_event(AppEvent::EncoderRotate(1));
+        assert_eq!(app.snapshot().volume, 1);
+    }
 }
 
 #[test]
