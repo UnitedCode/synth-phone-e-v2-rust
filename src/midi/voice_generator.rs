@@ -230,6 +230,11 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             self.note_off(note, channel);
             return;
         }
+        // Unmapped drum notes must not allocate or steal a voice: a reused
+        // drum engine could retain a held phone sound under an unreleasable key.
+        if channel == 9 && midi_note_to_drum_type(note).is_none() {
+            return;
+        }
         let frequency =
             crate::midi::notes::frequency(note) * bend_factor(self.pitch_bend[channel as usize]);
 
