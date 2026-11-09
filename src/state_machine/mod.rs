@@ -758,6 +758,14 @@ impl AppStateMachine {
         true
     }
 
+    /// Restore transient MIDI performance controls without erasing phone settings.
+    pub fn reset_midi_performance(&mut self) {
+        self.midi_pitch_class = None;
+        self.current_waveform = 0;
+        self.harmony_lead = 127;
+        self.harmony_backing = 64;
+    }
+
     /// Sets output volume from an incoming MIDI CC7 value (0-127), scaled to the
     /// encoder's 0-20 range: 0=mute, 64=unity (10), 127=maximum (20).
     pub fn set_volume_from_midi(&mut self, value: u8) {

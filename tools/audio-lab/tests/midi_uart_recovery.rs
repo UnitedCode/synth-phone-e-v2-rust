@@ -103,10 +103,177 @@ fn apply(
                 voices.apply_channel_pitch_bend(channel, (value as f32 - 8192.0) / 8192.0)
             }
             MidiEvent::UartError | MidiEvent::QueueOverflow => voices.reset_midi_performance(),
+            MidiEvent::SystemReset => {
+                voices.reset_midi_performance();
+                app.reset_midi_performance();
+            }
             _ => {}
         }
     }
     app.set_midi_note_for_display(voices.display_note());
+}
+
+#[test]
+fn system_reset_stops_midi_voices_and_restores_performance_defaults() {
+    let (mut receiver, input) = receiver();
+    let mut voices = VoiceManager::<8>::new(constants::SAMPLE_RATE);
+    let mut app = AppStateMachine::new();
+    app.set_waveform_from_midi(2, 2);
+    app.set_harmony_lead_from_midi(20);
+    app.set_harmony_backing_from_midi(100);
+    app.apply_midi_control_change(7, 80);
+    let saved = app.saved_settings();
+    let setup = [
+        0xb2, 64, 127, 0xe2, 0, 96, 0x92, 69, 100, 69, 0, 0x99, 94, 100, 0x90, 60, 100, 0x93, 64,
+        100,
+    ];
+    apply(
+        &mut voices,
+        &mut app,
+        send(&mut receiver, &input, setup.map(Ok)),
+    );
+    assert!(voices.display_note().is_some());
+    apply(
+        &mut voices,
+        &mut app,
+        send(&mut receiver, &input, [Ok(0xff)]),
+    );
+    assert_eq!(voices.get_cached_frequencies(), [0.0; 8]);
+    assert_eq!(voices.get_mixed_sources(), (0.0, 0.0));
+    assert_eq!(app.snapshot().midi_pitch_class, None);
+    assert_eq!(app.snapshot().waveform, 0);
+    assert_eq!(app.snapshot().harmony_lead, 127);
+    assert_eq!(app.snapshot().harmony_backing, 64);
+    assert_eq!(app.saved_settings(), saved);
+    apply(
+        &mut voices,
+        &mut app,
+        send(&mut receiver, &input, [0x92, 69, 100].map(Ok)),
+    );
+    assert_eq!(voices.get_cached_frequencies()[0], 440.0);
+    apply(
+        &mut voices,
+        &mut app,
+        send(&mut receiver, &input, [69, 0].map(Ok)),
+    );
+    assert_eq!(voices.display_note(), None);
+}
+
+#[test]
+fn system_reset_clears_partial_and_running_status_without_dropping_fresh_messages() {
+    for prefix in [&[0x92, 60][..], &[0x92, 60, 100][..]] {
+        let (mut receiver, input) = receiver();
+        send(&mut receiver, &input, prefix.iter().copied().map(Ok));
+        let events = send(
+            &mut receiver,
+            &input,
+            [0xff, 100, 61, 100, 0x92, 62, 100].map(Ok),
+        );
+        assert_eq!(
+            events,
+            [
+                MidiEvent::SystemReset,
+                MidiEvent::NoteOn {
+                    channel: 2,
+                    key: 62,
+                    velocity: 100
+                }
+            ]
+        );
+    }
+}
+
+#[test]
+fn other_realtime_messages_preserve_partial_and_running_status() {
+    for realtime in 0xf8..=0xfe {
+        let (mut receiver, input) = receiver();
+        let events = send(
+            &mut receiver,
+            &input,
+            [0x92, 60, realtime, 100, 60, 0].map(Ok),
+        );
+        assert_eq!(
+            events,
+            [
+                MidiEvent::Other,
+                MidiEvent::NoteOn {
+                    channel: 2,
+                    key: 60,
+                    velocity: 100
+                },
+                MidiEvent::NoteOff {
+                    channel: 2,
+                    key: 60,
+                    velocity: 0
+                }
+            ]
+        );
+    }
+}
+
+#[test]
+fn system_reset_survives_full_queue_recovery_and_precedes_new_notes() {
+    for filler in [
+        MidiEvent::ControlChange {
+            channel: 2,
+            controller: 7,
+            value: 20,
+        },
+        MidiEvent::NoteOn {
+            channel: 2,
+            key: 60,
+            velocity: 100,
+        },
+        MidiEvent::NoteOff {
+            channel: 2,
+            key: 60,
+            velocity: 0,
+        },
+    ] {
+        let (mut receiver, input) = receiver();
+        let mut queue = Queue::<MidiEvent, 128>::new();
+        for _ in 0..127 {
+            queue.enqueue(filler).unwrap();
+        }
+        let mut voices = VoiceManager::<8>::new(constants::SAMPLE_RATE);
+        let mut app = AppStateMachine::new();
+        voices.note_on(94, 100, 9);
+        app.set_waveform_from_midi(2, 2);
+        app.set_harmony_lead_from_midi(20);
+        app.set_harmony_backing_from_midi(100);
+        for event in send(&mut receiver, &input, [Ok(0xff)]) {
+            try_enqueue_midi_event(&mut queue, event).unwrap();
+        }
+        // Later critical overflow must retain the stronger System Reset;
+        // QueueOverflow alone does not restore waveform and harmony controls.
+        for step in 0..400 {
+            let event = if step % 2 == 0 {
+                MidiEvent::UartError
+            } else {
+                MidiEvent::NoteOff {
+                    channel: 2,
+                    key: 61,
+                    velocity: 0,
+                }
+            };
+            try_enqueue_midi_event(&mut queue, event).unwrap();
+        }
+        for event in send(&mut receiver, &input, [0x92, 69, 100].map(Ok)) {
+            try_enqueue_midi_event(&mut queue, event).unwrap();
+        }
+        let events: Vec<_> = queue.iter().copied().collect();
+        let reset = events
+            .iter()
+            .position(|&event| event == MidiEvent::SystemReset)
+            .unwrap();
+        assert!(reset < events.len() - 1);
+        apply(&mut voices, &mut app, events);
+        assert_eq!(voices.display_note(), Some(69));
+        assert_eq!(voices.get_mixed_sources().1, 0.0);
+        assert_eq!(app.snapshot().waveform, 0);
+        assert_eq!(app.snapshot().harmony_lead, 127);
+        assert_eq!(app.snapshot().harmony_backing, 64);
+    }
 }
 
 #[test]

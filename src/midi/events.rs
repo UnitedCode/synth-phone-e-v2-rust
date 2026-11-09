@@ -30,6 +30,8 @@ pub enum MidiEvent {
     QueueOverflow,
     /// UART framing/parity/overrun recovery, ordered before later input.
     UartError,
+    /// MIDI 1.0 System Reset (0xFF).
+    SystemReset,
 }
 
 impl MidiEvent {
@@ -44,7 +46,7 @@ impl MidiEvent {
             | Self::ControlChange { channel, .. }
             | Self::PitchBend { channel, .. }
             | Self::ProgramChange { channel, .. } => Some(channel),
-            Self::Other | Self::QueueOverflow | Self::UartError => None,
+            Self::Other | Self::QueueOverflow | Self::UartError | Self::SystemReset => None,
         }
     }
 
@@ -64,6 +66,7 @@ impl MidiEvent {
                 }
                 | Self::QueueOverflow
                 | Self::UartError
+                | Self::SystemReset
         )
     }
 
@@ -110,8 +113,9 @@ impl MidiQueueMonitor {
 
 /// Call with exclusive access, as both UART and keypad producers do under RTIC.
 /// On overflow, retain FIFO order and prefer releases over controls and new notes.
-/// If every queued event is a release, replace the backlog with an emergency reset
-/// followed by the incoming event. A bounded queue cannot retain unlimited releases.
+/// If every queued event is a release, recover with an emergency reset, retaining
+/// any pending System Reset, then append the incoming event. A bounded queue
+/// cannot retain unlimited releases.
 pub fn try_enqueue_midi_event(
     queue: &mut heapless::spsc::Queue<MidiEvent, 128>,
     event: MidiEvent,
@@ -143,8 +147,14 @@ pub fn try_enqueue_midi_event(
             }
         }
     } else if event.is_release() {
+        // A stream reset also restores UI performance controls. QueueOverflow
+        // only stops voices, so it must not replace a pending System Reset.
+        let system_reset_pending = queue.iter().any(|event| *event == MidiEvent::SystemReset);
         while queue.dequeue().is_some() {}
         let _ = queue.enqueue(MidiEvent::QueueOverflow);
+        if system_reset_pending && event != MidiEvent::SystemReset {
+            let _ = queue.enqueue(MidiEvent::SystemReset);
+        }
     } else {
         return Err(event);
     }

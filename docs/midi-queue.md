@@ -31,6 +31,18 @@ and pitch bend before later notes. Pending receive bytes are discarded with a
 can cut off held sounds because their releases may have been lost. Noise-only
 flags preserve the byte stream and running status.
 
+MIDI System Reset (`0xFF`) is a protected queue event. It stops MIDI voices,
+clears sustain/pitch bend and transient lead routing, restores the default
+triangle waveform and MIDI harmony levels (lead 127, backing 64), and redraws
+the display. The receiver also clears running status and partial messages;
+following messages are parsed normally without flushing the UART. Other real-time
+bytes remain transparent to the parser. Saved phone volume/menu settings are
+preserved. A pending System Reset survives later critical queue overflow.
+
+The [MIDI 1.0 specification, System Reset section](https://www.freqsound.com/SIRA/MIDI%20Specification.pdf)
+defines voice/controller reset and clearing running status. This phone has no
+MIDI sequencer or configurable Omni/Local modes to reset.
+
 `tools/audio-lab/tests/midi_queue.rs` exercises the firmware queue implementation
 with the real `heapless` queue, including all removal slots and ring positions,
 rejection without mutation, pedal/panic protection, and VoiceManager recovery.

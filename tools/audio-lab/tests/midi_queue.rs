@@ -52,7 +52,9 @@ fn drain(queue: &mut Queue<MidiEvent, 128>, voices: &mut VoiceManager<8>) {
                 controller: 64,
                 value,
             } => voices.set_sustain(channel, value >= 64),
-            MidiEvent::QueueOverflow | MidiEvent::UartError => voices.reset_midi_performance(),
+            MidiEvent::QueueOverflow | MidiEvent::UartError | MidiEvent::SystemReset => {
+                voices.reset_midi_performance()
+            }
             _ => {}
         }
     }
@@ -140,6 +142,7 @@ fn queued_sustain_and_panic_controls_survive_control_floods() {
         cc(123, 0),
         MidiEvent::QueueOverflow,
         MidiEvent::UartError,
+        MidiEvent::SystemReset,
     ] {
         let mut queue = full(
             [protected]

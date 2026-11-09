@@ -45,23 +45,17 @@ impl MidiReceiver {
             return Ok(None);
         }
         match self.rx.read() {
+            Ok(0xFF) => {
+                self.clear_message_state();
+                Ok(Some(MidiEvent::SystemReset))
+            }
+            // Other real-time messages are transparent to running status and
+            // partial messages. System Reset above is the exception.
+            Ok(0xF8..=0xFE) => Ok(Some(MidiEvent::Other)),
             Ok(byte) => {
                 match self.state {
                     MidiParserState::WaitingForStatus => {
-                        if byte >= 0xF8 {
-                            // Real-Time message (clock, active sense, reset): single byte,
-                            // must not alter running-status context — process and discard.
-                            return Ok(Some(MidiEvent::Other));
-                        }
                         if byte & 0x80 != 0 {
-                            // System real-time messages (0xF8–0xFF) are single-byte and
-                            // transparent — they must NOT update status_byte so they don't
-                            // corrupt the running-status register (e.g. MIDI Clock 0xF8
-                            // arriving between two drum notes).
-                            if byte >= 0xF8 {
-                                return Ok(Some(MidiEvent::Other));
-                            }
-
                             // This is a channel/system-common status byte
                             self.status_byte = byte;
                             self.data_count = 0;
@@ -100,16 +94,7 @@ impl MidiReceiver {
                     }
 
                     MidiParserState::CollectingData => {
-                        if byte >= 0xF8 {
-                            // Real-Time message mid-stream: discard without touching state.
-                            return Ok(Some(MidiEvent::Other));
-                        }
                         if byte & 0x80 != 0 {
-                            // System real-time bytes are transparent — ignore them without
-                            // aborting the message currently being collected.
-                            if byte >= 0xF8 {
-                                return Ok(Some(MidiEvent::Other));
-                            }
                             // New channel/system-common status byte while collecting data
                             self.status_byte = byte;
                             self.data_count = 0;
@@ -154,15 +139,19 @@ impl MidiReceiver {
                 warn!("MIDI UART error {:?}: reset queued", e);
                 // Releases may have been lost. Reset performance state in FIFO
                 // order, discard the damaged backlog, and require a fresh status.
-                self.state = MidiParserState::WaitingForStatus;
-                self.status_byte = 0;
-                self.data_count = 0;
-                self.expected_data_bytes = 0;
+                self.clear_message_state();
                 self.draining_after_error = true;
                 self.drain_pending_bytes();
                 Ok(Some(MidiEvent::UartError))
             }
         }
+    }
+
+    fn clear_message_state(&mut self) {
+        self.state = MidiParserState::WaitingForStatus;
+        self.status_byte = 0;
+        self.data_count = 0;
+        self.expected_data_bytes = 0;
     }
 
     fn drain_pending_bytes(&mut self) {

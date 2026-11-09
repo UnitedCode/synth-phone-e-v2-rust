@@ -165,8 +165,16 @@ pub fn audio_handler(
                                     crate::midi::MidiEvent::UartError => {
                                         voice_manager.reset_midi_performance();
                                     }
+                                    crate::midi::MidiEvent::SystemReset => {
+                                        voice_manager.reset_midi_performance();
+                                        shared.app_state_machine.lock(|msm| {
+                                            msm.reset_midi_performance();
+                                            wave_type = msm.snapshot().oscillator_waveform();
+                                        });
+                                        midi_display_dirty = true;
+                                    }
                                     crate::midi::MidiEvent::Other => {
-                                        // MIDI clock / active-sense / reset: discard.
+                                        // Unhandled MIDI messages: discard.
                                     }
                                 }
                             } else {
