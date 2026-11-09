@@ -19,7 +19,7 @@ use super::sprites::{
     draw_crush, draw_effects_bg, draw_formant, draw_key_controls, draw_octave, draw_percussion,
     draw_process_indicator, draw_processing_bg, draw_splash, draw_waveform,
 };
-use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
+use synthphone_e_vocal_dsp::audio::{get_key_name, get_mode_name};
 
 pub fn draw_splash_screen(display: &mut LcdDisplay, atlas: &ImageRawBE<BinaryColor>) {
     draw_splash(display, atlas);
@@ -29,7 +29,7 @@ pub fn draw_processing_screen(
     process: ProcessingProfile,
     key: i8,
     pitch_semitones: i8,
-    note: i8,
+    note_text: &str,
     volume: i8,
     percussion: i8,
     display: &mut LcdDisplay,
@@ -52,16 +52,8 @@ pub fn draw_processing_screen(
         ProcessingProfile::Percussion => "Percussion",
     };
 
-    // Create text buffers
-    let mut key_buffer: String<2> = String::new();
-    write!(&mut key_buffer, "{}", get_key_name(key)).expect("Failed converting key to string");
-
-    let mut mode_buffer: String<5> = String::new();
-    write!(&mut mode_buffer, "{}", get_mode_name(key)).expect("failed converting mode to string");
-
-    let mut note_buffer: String<2> = String::new();
-    write!(&mut note_buffer, "{}", get_note_name(note, get_key(key)))
-        .expect("Failed converting note to string");
+    let key_text = get_key_name(key);
+    let mode_text = get_mode_name(key);
 
     // Signed semitone offset needs up to 3 chars ("-12")
     let mut oct_buffer: String<3> = String::new();
@@ -71,8 +63,8 @@ pub fn draw_processing_screen(
     write!(&mut vol_buffer, "{volume}").expect("Failed converting volume to string");
 
     // Draw text
-    draw_text(display, &key_buffer, Point::new(26, 3), &inverted_style);
-    draw_text(display, &mode_buffer, Point::new(80, 3), &inverted_style);
+    draw_text(display, key_text, Point::new(26, 3), &inverted_style);
+    draw_text(display, mode_text, Point::new(80, 3), &inverted_style);
     if process == ProcessingProfile::Percussion {
         // The keypad plays drum-channel sounds here, so there is no note to
         // show; name the selected sound set instead.
@@ -83,7 +75,7 @@ pub fn draw_processing_screen(
         };
         draw_centered_text(display, set_name, Point::new(62, 15), inverted_style);
     } else {
-        draw_centered_text(display, &note_buffer, Point::new(62, 15), header_style);
+        draw_centered_text(display, note_text, Point::new(62, 15), header_style);
     }
     draw_text(display, &oct_buffer, Point::new(14, 28), &inverted_style);
     draw_centered_text(display, &vol_buffer, Point::new(120, 28), inverted_style);

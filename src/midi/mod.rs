@@ -1,6 +1,9 @@
+mod events;
 pub mod midi_voice;
 pub mod notes;
 pub mod voice_generator;
+
+pub use events::{get_midi_queue_status, try_enqueue_midi_event, MidiEvent, MidiQueueMonitor};
 
 use log::warn;
 use stm32h7xx_hal::{nb, prelude::*, serial::Rx, stm32};
@@ -12,6 +15,7 @@ pub struct MidiReceiver {
     data_bytes: [u8; 2],
     data_count: usize,
     expected_data_bytes: usize,
+    draining_after_error: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -29,30 +33,29 @@ impl MidiReceiver {
             data_bytes: [0, 0],
             data_count: 0,
             expected_data_bytes: 0,
+            draining_after_error: false,
         }
     }
 
     pub fn try_read(
         &mut self,
     ) -> Result<Option<MidiEvent>, nb::Error<stm32h7xx_hal::serial::Error>> {
+        if self.draining_after_error {
+            self.drain_pending_bytes();
+            return Ok(None);
+        }
         match self.rx.read() {
+            Ok(0xFF) => {
+                self.clear_message_state();
+                Ok(Some(MidiEvent::SystemReset))
+            }
+            // Other real-time messages are transparent to running status and
+            // partial messages. System Reset above is the exception.
+            Ok(0xF8..=0xFE) => Ok(Some(MidiEvent::Other)),
             Ok(byte) => {
                 match self.state {
                     MidiParserState::WaitingForStatus => {
-                        if byte >= 0xF8 {
-                            // Real-Time message (clock, active sense, reset): single byte,
-                            // must not alter running-status context — process and discard.
-                            return Ok(Some(MidiEvent::Other));
-                        }
                         if byte & 0x80 != 0 {
-                            // System real-time messages (0xF8–0xFF) are single-byte and
-                            // transparent — they must NOT update status_byte so they don't
-                            // corrupt the running-status register (e.g. MIDI Clock 0xF8
-                            // arriving between two drum notes).
-                            if byte >= 0xF8 {
-                                return Ok(Some(MidiEvent::Other));
-                            }
-
                             // This is a channel/system-common status byte
                             self.status_byte = byte;
                             self.data_count = 0;
@@ -91,16 +94,7 @@ impl MidiReceiver {
                     }
 
                     MidiParserState::CollectingData => {
-                        if byte >= 0xF8 {
-                            // Real-Time message mid-stream: discard without touching state.
-                            return Ok(Some(MidiEvent::Other));
-                        }
                         if byte & 0x80 != 0 {
-                            // System real-time bytes are transparent — ignore them without
-                            // aborting the message currently being collected.
-                            if byte >= 0xF8 {
-                                return Ok(Some(MidiEvent::Other));
-                            }
                             // New channel/system-common status byte while collecting data
                             self.status_byte = byte;
                             self.data_count = 0;
@@ -142,15 +136,31 @@ impl MidiReceiver {
                 Ok(None)
             }
             Err(nb::Error::Other(e)) => {
-                warn!("MIDI UART error {:?}: parser reset", e);
-                // UART hardware error (framing, parity, overrun) — typically caused by
-                // a MIDI device being disconnected.  Reset parser state so the next
-                // device can start fresh without misinterpreting stale context.
-                self.state = MidiParserState::WaitingForStatus;
-                self.status_byte = 0;
-                self.data_count = 0;
-                self.expected_data_bytes = 0;
-                Ok(None)
+                warn!("MIDI UART error {:?}: reset queued", e);
+                // Releases may have been lost. Reset performance state in FIFO
+                // order, discard the damaged backlog, and require a fresh status.
+                self.clear_message_state();
+                self.draining_after_error = true;
+                self.drain_pending_bytes();
+                Ok(Some(MidiEvent::UartError))
+            }
+        }
+    }
+
+    fn clear_message_state(&mut self) {
+        self.state = MidiParserState::WaitingForStatus;
+        self.status_byte = 0;
+        self.data_count = 0;
+        self.expected_data_bytes = 0;
+    }
+
+    fn drain_pending_bytes(&mut self) {
+        // Bound UART work even if faults repeat. Continue on the next read if
+        // this budget is exhausted; do not interpret backlog as fresh messages.
+        for _ in 0..32 {
+            if matches!(self.rx.read(), Err(nb::Error::WouldBlock)) {
+                self.draining_after_error = false;
+                break;
             }
         }
     }
@@ -214,112 +224,9 @@ impl MidiReceiver {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum MidiEvent {
-    NoteOn {
-        channel: u8,
-        key: u8,
-        velocity: u8,
-    },
-    NoteOff {
-        channel: u8,
-        key: u8,
-        velocity: u8,
-    },
-    ControlChange {
-        channel: u8,
-        controller: u8,
-        value: u8,
-    },
-    PitchBend {
-        channel: u8,
-        value: u16,
-    },
-    ProgramChange {
-        channel: u8,
-        program: u8,
-    },
-    Other,
-}
-
 // MIDI note utilities
 impl MidiEvent {
     pub fn note_to_frequency(note: u8) -> f32 {
         notes::frequency(note)
-    }
-
-    pub fn is_note_event(&self) -> bool {
-        matches!(self, MidiEvent::NoteOn { .. } | MidiEvent::NoteOff { .. })
-    }
-
-    pub fn get_channel(&self) -> Option<u8> {
-        match self {
-            MidiEvent::NoteOn { channel, .. }
-            | MidiEvent::NoteOff { channel, .. }
-            | MidiEvent::ControlChange { channel, .. }
-            | MidiEvent::PitchBend { channel, .. }
-            | MidiEvent::ProgramChange { channel, .. } => Some(*channel),
-            MidiEvent::Other => None,
-        }
-    }
-}
-
-// Helper function to check MIDI queue status
-pub fn get_midi_queue_status(
-    midi_events: &heapless::spsc::Queue<MidiEvent, 128>,
-) -> (usize, usize) {
-    let capacity = midi_events.capacity();
-    let len = midi_events.len();
-    (len, capacity)
-}
-
-// Function to handle queue overflow protection
-pub fn try_enqueue_midi_event(
-    midi_events: &mut heapless::spsc::Queue<MidiEvent, 128>,
-    event: MidiEvent,
-) -> Result<(), MidiEvent> {
-    match midi_events.enqueue(event) {
-        Ok(()) => Ok(()),
-        Err(event) => {
-            // Queue is full - try to make space by removing oldest non-critical events
-            // Keep note events but drop less critical ones like CC messages
-            let mut dropped_non_critical = false;
-
-            // Try to find and remove a non-critical event to make space
-            let mut temp_events = heapless::Vec::<MidiEvent, 16>::new();
-
-            // Dequeue up to 16 events looking for non-critical ones
-            for _ in 0..16 {
-                if let Some(old_event) = midi_events.dequeue() {
-                    match old_event {
-                        MidiEvent::ControlChange { .. } | MidiEvent::PitchBend { .. } => {
-                            // Drop this non-critical event and try to enqueue the new one
-                            dropped_non_critical = true;
-                            break;
-                        }
-                        _ => {
-                            // Keep critical events
-                            let _ = temp_events.push(old_event);
-                        }
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            // Re-enqueue the kept events
-            for temp_event in temp_events.iter() {
-                let _ = midi_events.enqueue(*temp_event);
-            }
-
-            if dropped_non_critical {
-                // Try to enqueue the new event now that we made space
-                midi_events.enqueue(event).map_err(|e| e)
-            } else {
-                // Couldn't make space, return error
-                warn!("MIDI queue full and couldn't drop non-critical events");
-                Err(event)
-            }
-        }
     }
 }

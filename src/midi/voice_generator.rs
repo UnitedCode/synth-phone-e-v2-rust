@@ -184,6 +184,7 @@ fn bend_factor(bend: f32) -> f32 {
 
 pub struct VoiceManager<const MAX_VOICES: usize> {
     voices: [HybridVoice; MAX_VOICES],
+    waveform: Waveform,
     pitch_bend: [f32; 16],
     sustain: [bool; 16],
     /// Frequencies from voices whose channel isn't voice-ctrl-only or sound-only — fed to vocal effects DSP.
@@ -193,6 +194,9 @@ pub struct VoiceManager<const MAX_VOICES: usize> {
     voice_ctrl_notes: [Option<u8>; MAX_VOICES],
     voice_ctrl_down: [bool; MAX_VOICES],
     voice_ctrl_channels: [u8; MAX_VOICES],
+    /// Relative recency of slots, retained across releases and slot reuse.
+    note_order: [usize; MAX_VOICES],
+    voice_ctrl_order: [usize; MAX_VOICES],
     lead_routing: bool,
 }
 
@@ -200,6 +204,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             voices: core::array::from_fn(|_| HybridVoice::new(sample_rate)),
+            waveform: Waveform::Triangle,
             pitch_bend: [0.0; 16],
             sustain: [false; 16],
             cached_frequencies: [0.0; MAX_VOICES],
@@ -207,14 +212,20 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             voice_ctrl_notes: [None; MAX_VOICES],
             voice_ctrl_down: [false; MAX_VOICES],
             voice_ctrl_channels: [0; MAX_VOICES],
+            note_order: [0; MAX_VOICES],
+            voice_ctrl_order: [0; MAX_VOICES],
             lead_routing: false,
         }
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {
+        if core::mem::discriminant(&self.waveform) == core::mem::discriminant(&waveform) {
+            return;
+        }
         for voice in &mut self.voices {
             voice.set_waveform(waveform);
         }
+        self.waveform = waveform;
     }
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
@@ -223,6 +234,11 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
         if velocity == 0 {
             self.note_off(note, channel);
+            return;
+        }
+        // Unmapped drum notes must not allocate or steal a voice: a reused
+        // drum engine could retain a held phone sound under an unreleasable key.
+        if channel == 9 && midi_note_to_drum_type(note).is_none() {
             return;
         }
         let frequency =
@@ -253,6 +269,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             self.voice_ctrl_channels[i] = channel;
             self.voice_ctrl_freqs[i] = frequency;
             self.voice_ctrl_down[i] = true;
+            self.mark_newest_note(i, true);
             return;
         }
 
@@ -275,6 +292,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
+                self.mark_newest_note(i, false);
                 return;
             }
         }
@@ -287,6 +305,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
+                self.mark_newest_note(i, false);
                 return;
             }
         }
@@ -299,6 +318,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
+                self.mark_newest_note(i, false);
                 return;
             }
         }
@@ -309,6 +329,49 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         if update_cache {
             self.update_frequency_cache(0, frequency);
         }
+        self.mark_newest_note(0, false);
+    }
+
+    fn mark_newest_note(&mut self, index: usize, voice_control: bool) {
+        let previous = if voice_control {
+            self.voice_ctrl_order[index]
+        } else {
+            self.note_order[index]
+        };
+        // Move this slot to the front of a relative ordering. Unlike a growing
+        // event counter, ranks cannot wrap during a long-running MIDI session.
+        for rank in self.note_order.iter_mut().chain(&mut self.voice_ctrl_order) {
+            if *rank > previous {
+                *rank -= 1;
+            }
+        }
+        if voice_control {
+            self.voice_ctrl_order[index] = usize::MAX;
+        } else {
+            self.note_order[index] = usize::MAX;
+        }
+    }
+
+    /// Newest active pitched MIDI note, including sustain and vocal-control
+    /// channels. Read actual voice slots so stolen/released notes cannot linger.
+    pub fn display_note(&self) -> Option<u8> {
+        let mut newest = 0;
+        let mut note = None;
+        for i in 0..MAX_VOICES {
+            if self.voices[i].channel != 9 && self.note_order[i] >= newest {
+                if let Some(key) = self.voices[i].note {
+                    newest = self.note_order[i];
+                    note = Some(key);
+                }
+            }
+            if self.voice_ctrl_order[i] >= newest {
+                if let Some(key) = self.voice_ctrl_notes[i] {
+                    newest = self.voice_ctrl_order[i];
+                    note = Some(key);
+                }
+            }
+        }
+        note
     }
 
     #[inline(always)]
@@ -382,6 +445,18 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
     pub fn get_mixed_sources(&mut self) -> (f32, f32) {
         self.get_mixed_sources_with_gains(false, 1.0, 1.0)
+    }
+
+    /// Render with the current UI waveform, including when no MIDI event arrives.
+    pub fn render_sources(
+        &mut self,
+        waveform: Waveform,
+        mute_melody_synth: bool,
+        melody_gain: f32,
+        drum_gain: f32,
+    ) -> (f32, f32) {
+        self.set_waveform(waveform);
+        self.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain)
     }
 
     pub fn get_mixed_sources_with_gains(
@@ -509,6 +584,14 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 }
             }
         }
+    }
+
+    /// Emergency recovery after lost MIDI data or queue saturation.
+    /// Clear pedal/bend state too, so the next phrase starts from a safe state.
+    pub fn reset_midi_performance(&mut self) {
+        self.all_notes_off(None);
+        self.sustain = [false; 16];
+        self.pitch_bend = [0.0; 16];
     }
 
     pub fn all_notes_off(&mut self, channel: Option<u8>) {

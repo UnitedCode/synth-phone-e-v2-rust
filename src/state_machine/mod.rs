@@ -362,6 +362,8 @@ pub struct AppStateMachine {
     pub note: i8,
     /// Most recently pressed pitched keypad key first; zero marks an empty slot.
     held_notes: [u8; 12],
+    /// Display-only MIDI pitch class; keypad `note` still drives its own DSP path.
+    midi_pitch_class: Option<u8>,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
@@ -377,6 +379,7 @@ pub struct AppStateMachineSnapshot {
     /// 0=low, 1=normal, 2=high — for display sprite selection only
     pub octave_preset: i8,
     pub note: i8,
+    pub midi_pitch_class: Option<u8>,
     pub volume: i8,
     pub voice_volume: i8,
     pub melody_volume: i8,
@@ -405,6 +408,31 @@ pub struct MenuContext {
     pub next_item: (&'static str, i8),
 }
 
+impl AppStateMachineSnapshot {
+    pub fn oscillator_waveform(&self) -> synthphone_e_vocal_dsp::audio::Waveform {
+        use synthphone_e_vocal_dsp::audio::Waveform;
+        match self.waveform {
+            0 => Waveform::Triangle,
+            1 => Waveform::Square,
+            2 => Waveform::Saw,
+            _ => Waveform::Sine,
+        }
+    }
+
+    /// MIDI pitches are absolute; selecting a keypad scale must not transpose
+    /// their labels. Keep the existing pitch-class-only OLED format.
+    pub fn display_note_name(&self) -> &'static str {
+        use synthphone_e_vocal_dsp::audio::{get_key, get_note_name};
+        const MIDI_NAMES: [&str; 12] = [
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        ];
+        match self.midi_pitch_class {
+            Some(class) => MIDI_NAMES.get(class as usize).copied().unwrap_or(""),
+            None => get_note_name(self.note, get_key(self.key)),
+        }
+    }
+}
+
 impl Default for AppStateMachine {
     fn default() -> Self {
         Self::new()
@@ -428,6 +456,7 @@ impl AppStateMachine {
             volume: 10,
             note: 0,
             held_notes: [0; 12],
+            midi_pitch_class: None,
             key_down_pressed: false,
             process_cycle_pressed: false,
             key_up_pressed: false,
@@ -507,6 +536,7 @@ impl AppStateMachine {
             pitch_semitones,
             octave_preset: self.current_octave_preset,
             note: self.note,
+            midi_pitch_class: self.midi_pitch_class,
             volume: self.volume,
             voice_volume: self.values.voice_volume,
             melody_volume: self.values.melody_volume,
@@ -717,20 +747,55 @@ impl AppStateMachine {
         self.values
     }
 
+    /// Called after the audio task applies its MIDI batch. Redraw only when the
+    /// MIDI pitch class changes, and never change the held keypad note.
+    pub fn set_midi_note_for_display(&mut self, note: Option<u8>) -> bool {
+        let pitch_class = note.filter(|&note| note < 128).map(|note| note % 12);
+        if self.midi_pitch_class == pitch_class {
+            return false;
+        }
+        self.midi_pitch_class = pitch_class;
+        true
+    }
+
+    /// Restore transient MIDI performance controls without erasing phone settings.
+    pub fn reset_midi_performance(&mut self) {
+        self.midi_pitch_class = None;
+        self.current_waveform = 0;
+        self.harmony_lead = 127;
+        self.harmony_backing = 64;
+    }
+
     /// Sets output volume from an incoming MIDI CC7 value (0-127), scaled to the
-    /// internal 0-10 range shared with the encoder-driven volume control.
+    /// encoder's 0-20 range: 0=mute, 64=unity (10), 127=maximum (20).
     pub fn set_volume_from_midi(&mut self, value: u8) {
-        self.volume = ((value as i16 * 10) / 127) as i8;
+        self.volume = ((value.min(127) as i16 * 20) / 127) as i8;
     }
 
     /// Sets waveform from an incoming MIDI Program Change value, wrapped onto
     /// the three waveforms (0=Triangle, 1=Square, 2=Saw). Drum-channel program
-    /// changes select drum kits, not waveforms, so those are ignored.
-    pub fn set_waveform_from_midi(&mut self, channel: u8, program: u8) {
+    /// changes select drum kits, not waveforms, so those are ignored. Returns
+    /// whether the caller should request a display redraw.
+    pub fn set_waveform_from_midi(&mut self, channel: u8, program: u8) -> bool {
         if channel == 9 {
-            return;
+            return false;
         }
         self.current_waveform = (program % 3) as i8;
+        true
+    }
+
+    /// Apply MIDI controls that affect the UI and report whether to redraw it.
+    pub fn apply_midi_control_change(&mut self, controller: u8, value: u8) -> bool {
+        match controller {
+            7 => self.set_volume_from_midi(value),
+            34..=42 | 44..=46 => self.set_menu_value_from_cc(controller, value),
+            43 => self.cycle_key_from_midi(value),
+            80 => self.set_octave_from_midi(value),
+            81 => self.set_formant_from_midi(value),
+            82 => self.set_crush_from_midi(value),
+            _ => return false,
+        }
+        true
     }
 
     /// Sets the octave preset from an incoming MIDI CC80 value: 0=Low,
