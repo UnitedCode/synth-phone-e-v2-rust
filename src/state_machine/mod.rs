@@ -409,6 +409,16 @@ pub struct MenuContext {
 }
 
 impl AppStateMachineSnapshot {
+    pub fn oscillator_waveform(&self) -> synthphone_e_vocal_dsp::audio::Waveform {
+        use synthphone_e_vocal_dsp::audio::Waveform;
+        match self.waveform {
+            0 => Waveform::Triangle,
+            1 => Waveform::Square,
+            2 => Waveform::Saw,
+            _ => Waveform::Sine,
+        }
+    }
+
     /// MIDI pitches are absolute; selecting a keypad scale must not transpose
     /// their labels. Keep the existing pitch-class-only OLED format.
     pub fn display_note_name(&self) -> &'static str {

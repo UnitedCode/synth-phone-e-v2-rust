@@ -184,6 +184,7 @@ fn bend_factor(bend: f32) -> f32 {
 
 pub struct VoiceManager<const MAX_VOICES: usize> {
     voices: [HybridVoice; MAX_VOICES],
+    waveform: Waveform,
     pitch_bend: [f32; 16],
     sustain: [bool; 16],
     /// Frequencies from voices whose channel isn't voice-ctrl-only or sound-only — fed to vocal effects DSP.
@@ -203,6 +204,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             voices: core::array::from_fn(|_| HybridVoice::new(sample_rate)),
+            waveform: Waveform::Triangle,
             pitch_bend: [0.0; 16],
             sustain: [false; 16],
             cached_frequencies: [0.0; MAX_VOICES],
@@ -217,9 +219,13 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
     }
 
     pub fn set_waveform(&mut self, waveform: Waveform) {
+        if core::mem::discriminant(&self.waveform) == core::mem::discriminant(&waveform) {
+            return;
+        }
         for voice in &mut self.voices {
             voice.set_waveform(waveform);
         }
+        self.waveform = waveform;
     }
 
     pub fn note_on(&mut self, note: u8, velocity: u8, channel: u8) {
@@ -439,6 +445,18 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
 
     pub fn get_mixed_sources(&mut self) -> (f32, f32) {
         self.get_mixed_sources_with_gains(false, 1.0, 1.0)
+    }
+
+    /// Render with the current UI waveform, including when no MIDI event arrives.
+    pub fn render_sources(
+        &mut self,
+        waveform: Waveform,
+        mute_melody_synth: bool,
+        melody_gain: f32,
+        drum_gain: f32,
+    ) -> (f32, f32) {
+        self.set_waveform(waveform);
+        self.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain)
     }
 
     pub fn get_mixed_sources_with_gains(

@@ -42,12 +42,7 @@ pub fn audio_handler(
     shared.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
         sr_factor = snapshot.sample_reduction;
-        wave_type = match snapshot.waveform {
-            0 => Waveform::Triangle,
-            1 => Waveform::Square,
-            2 => Waveform::Saw,
-            _ => Waveform::Sine,
-        };
+        wave_type = snapshot.oscillator_waveform();
         bit_depth = snapshot.bit_rate;
         let profile = match snapshot.current_state {
             AppState::Processing(p) | AppState::EffectsProfile(p) | AppState::Menu(_, p) => p,
@@ -101,7 +96,6 @@ pub fn audio_handler(
             shared.midi_events.lock(|events| {
                 if !events.is_empty() {
                     shared.voice_manager.lock(|voice_manager| {
-                        voice_manager.set_waveform(wave_type);
                         // Process up to 2 events per audio frame to maintain real-time performance
                         for _ in 0..2 {
                             if let Some(event) = events.dequeue() {
@@ -154,7 +148,13 @@ pub fn audio_handler(
                                     crate::midi::MidiEvent::ProgramChange { channel, program } => {
                                         midi_display_dirty |=
                                             shared.app_state_machine.lock(|msm| {
-                                                msm.set_waveform_from_midi(channel, program)
+                                                let redraw =
+                                                    msm.set_waveform_from_midi(channel, program);
+                                                if redraw {
+                                                    wave_type =
+                                                        msm.snapshot().oscillator_waveform();
+                                                }
+                                                redraw
                                             });
                                     }
                                     crate::midi::MidiEvent::QueueOverflow => {
@@ -177,9 +177,9 @@ pub fn audio_handler(
             });
 
             // ************** ADD MIDI OUTPUT **************
-            let (melody, drums) = shared.voice_manager.lock(|vm| {
-                vm.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain)
-            });
+            let (melody, drums) = shared
+                .voice_manager
+                .lock(|vm| vm.render_sources(wave_type, mute_melody_synth, melody_gain, drum_gain));
             out_sample =
                 output_mix::sum_sources(out_sample, melody, drums, wave_type) * master_gain;
 
@@ -416,12 +416,7 @@ pub fn handle_vocal_effects(
         note = snapshot.note;
         // -1/0/+1 octave → 0.5×/1×/2× on the keypad synth note only
         synth_octave_ratio = libm::exp2f(snapshot.synth_octave as f32);
-        wave_type = match snapshot.waveform {
-            0 => Waveform::Triangle,
-            1 => Waveform::Square,
-            2 => Waveform::Saw,
-            _ => Waveform::Sine,
-        };
+        wave_type = snapshot.oscillator_waveform();
         let values = asm.get_values();
         // value 5 → 0.5 / 2.0 to match the previous hardcoded defaults
         formant_male_ratio = values.formant_male as f32 * 0.1;
