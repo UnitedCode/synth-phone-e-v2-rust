@@ -362,6 +362,8 @@ pub struct AppStateMachine {
     pub note: i8,
     /// Most recently pressed pitched keypad key first; zero marks an empty slot.
     held_notes: [u8; 12],
+    /// Display-only MIDI pitch class; keypad `note` still drives its own DSP path.
+    midi_pitch_class: Option<u8>,
     pub key_down_pressed: bool,
     pub process_cycle_pressed: bool,
     pub key_up_pressed: bool,
@@ -377,6 +379,7 @@ pub struct AppStateMachineSnapshot {
     /// 0=low, 1=normal, 2=high — for display sprite selection only
     pub octave_preset: i8,
     pub note: i8,
+    pub midi_pitch_class: Option<u8>,
     pub volume: i8,
     pub voice_volume: i8,
     pub melody_volume: i8,
@@ -405,6 +408,21 @@ pub struct MenuContext {
     pub next_item: (&'static str, i8),
 }
 
+impl AppStateMachineSnapshot {
+    /// MIDI pitches are absolute; selecting a keypad scale must not transpose
+    /// their labels. Keep the existing pitch-class-only OLED format.
+    pub fn display_note_name(&self) -> &'static str {
+        use synthphone_e_vocal_dsp::audio::{get_key, get_note_name};
+        const MIDI_NAMES: [&str; 12] = [
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        ];
+        match self.midi_pitch_class {
+            Some(class) => MIDI_NAMES.get(class as usize).copied().unwrap_or(""),
+            None => get_note_name(self.note, get_key(self.key)),
+        }
+    }
+}
+
 impl Default for AppStateMachine {
     fn default() -> Self {
         Self::new()
@@ -428,6 +446,7 @@ impl AppStateMachine {
             volume: 10,
             note: 0,
             held_notes: [0; 12],
+            midi_pitch_class: None,
             key_down_pressed: false,
             process_cycle_pressed: false,
             key_up_pressed: false,
@@ -507,6 +526,7 @@ impl AppStateMachine {
             pitch_semitones,
             octave_preset: self.current_octave_preset,
             note: self.note,
+            midi_pitch_class: self.midi_pitch_class,
             volume: self.volume,
             voice_volume: self.values.voice_volume,
             melody_volume: self.values.melody_volume,
@@ -715,6 +735,17 @@ impl AppStateMachine {
     /// Get a snapshot of all current values
     pub fn get_values(&self) -> MenuValues {
         self.values
+    }
+
+    /// Called after the audio task applies its MIDI batch. Redraw only when the
+    /// MIDI pitch class changes, and never change the held keypad note.
+    pub fn set_midi_note_for_display(&mut self, note: Option<u8>) -> bool {
+        let pitch_class = note.filter(|&note| note < 128).map(|note| note % 12);
+        if self.midi_pitch_class == pitch_class {
+            return false;
+        }
+        self.midi_pitch_class = pitch_class;
+        true
     }
 
     /// Sets output volume from an incoming MIDI CC7 value (0-127), scaled to the

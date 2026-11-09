@@ -169,6 +169,9 @@ pub fn audio_handler(
                                 break;
                             }
                         }
+                        midi_display_dirty |= shared.app_state_machine.lock(|msm| {
+                            msm.set_midi_note_for_display(voice_manager.display_note())
+                        });
                     });
                 }
             });

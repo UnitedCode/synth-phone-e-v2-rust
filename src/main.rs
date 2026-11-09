@@ -480,7 +480,7 @@ mod rtic_app {
                             process,
                             snapshot.key,
                             snapshot.pitch_semitones,
-                            snapshot.note,
+                            snapshot.display_note_name(),
                             snapshot.volume,
                             snapshot.percussion,
                             ctx.local.display,

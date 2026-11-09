@@ -193,6 +193,9 @@ pub struct VoiceManager<const MAX_VOICES: usize> {
     voice_ctrl_notes: [Option<u8>; MAX_VOICES],
     voice_ctrl_down: [bool; MAX_VOICES],
     voice_ctrl_channels: [u8; MAX_VOICES],
+    /// Relative recency of slots, retained across releases and slot reuse.
+    note_order: [usize; MAX_VOICES],
+    voice_ctrl_order: [usize; MAX_VOICES],
     lead_routing: bool,
 }
 
@@ -207,6 +210,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             voice_ctrl_notes: [None; MAX_VOICES],
             voice_ctrl_down: [false; MAX_VOICES],
             voice_ctrl_channels: [0; MAX_VOICES],
+            note_order: [0; MAX_VOICES],
+            voice_ctrl_order: [0; MAX_VOICES],
             lead_routing: false,
         }
     }
@@ -253,6 +258,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
             self.voice_ctrl_channels[i] = channel;
             self.voice_ctrl_freqs[i] = frequency;
             self.voice_ctrl_down[i] = true;
+            self.mark_newest_note(i, true);
             return;
         }
 
@@ -275,6 +281,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
+                self.mark_newest_note(i, false);
                 return;
             }
         }
@@ -287,6 +294,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
+                self.mark_newest_note(i, false);
                 return;
             }
         }
@@ -299,6 +307,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
                 if update_cache {
                     self.update_frequency_cache(i, frequency);
                 }
+                self.mark_newest_note(i, false);
                 return;
             }
         }
@@ -309,6 +318,49 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         if update_cache {
             self.update_frequency_cache(0, frequency);
         }
+        self.mark_newest_note(0, false);
+    }
+
+    fn mark_newest_note(&mut self, index: usize, voice_control: bool) {
+        let previous = if voice_control {
+            self.voice_ctrl_order[index]
+        } else {
+            self.note_order[index]
+        };
+        // Move this slot to the front of a relative ordering. Unlike a growing
+        // event counter, ranks cannot wrap during a long-running MIDI session.
+        for rank in self.note_order.iter_mut().chain(&mut self.voice_ctrl_order) {
+            if *rank > previous {
+                *rank -= 1;
+            }
+        }
+        if voice_control {
+            self.voice_ctrl_order[index] = usize::MAX;
+        } else {
+            self.note_order[index] = usize::MAX;
+        }
+    }
+
+    /// Newest active pitched MIDI note, including sustain and vocal-control
+    /// channels. Read actual voice slots so stolen/released notes cannot linger.
+    pub fn display_note(&self) -> Option<u8> {
+        let mut newest = 0;
+        let mut note = None;
+        for i in 0..MAX_VOICES {
+            if self.voices[i].channel != 9 && self.note_order[i] >= newest {
+                if let Some(key) = self.voices[i].note {
+                    newest = self.note_order[i];
+                    note = Some(key);
+                }
+            }
+            if self.voice_ctrl_order[i] >= newest {
+                if let Some(key) = self.voice_ctrl_notes[i] {
+                    newest = self.voice_ctrl_order[i];
+                    note = Some(key);
+                }
+            }
+        }
+        note
     }
 
     #[inline(always)]

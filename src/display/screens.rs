@@ -19,7 +19,7 @@ use super::sprites::{
     draw_crush, draw_effects_bg, draw_formant, draw_key_controls, draw_octave, draw_percussion,
     draw_process_indicator, draw_processing_bg, draw_splash, draw_waveform,
 };
-use synthphone_e_vocal_dsp::audio::{get_key, get_key_name, get_mode_name, get_note_name};
+use synthphone_e_vocal_dsp::audio::{get_key_name, get_mode_name};
 
 pub fn draw_splash_screen(display: &mut LcdDisplay, atlas: &ImageRawBE<BinaryColor>) {
     draw_splash(display, atlas);
@@ -29,7 +29,7 @@ pub fn draw_processing_screen(
     process: ProcessingProfile,
     key: i8,
     pitch_semitones: i8,
-    note: i8,
+    note_text: &str,
     volume: i8,
     percussion: i8,
     display: &mut LcdDisplay,
@@ -54,7 +54,6 @@ pub fn draw_processing_screen(
 
     let key_text = get_key_name(key);
     let mode_text = get_mode_name(key);
-    let note_text = get_note_name(note, get_key(key));
 
     // Signed semitone offset needs up to 3 chars ("-12")
     let mut oct_buffer: String<3> = String::new();
