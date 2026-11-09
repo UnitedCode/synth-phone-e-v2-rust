@@ -725,12 +725,28 @@ impl AppStateMachine {
 
     /// Sets waveform from an incoming MIDI Program Change value, wrapped onto
     /// the three waveforms (0=Triangle, 1=Square, 2=Saw). Drum-channel program
-    /// changes select drum kits, not waveforms, so those are ignored.
-    pub fn set_waveform_from_midi(&mut self, channel: u8, program: u8) {
+    /// changes select drum kits, not waveforms, so those are ignored. Returns
+    /// whether the caller should request a display redraw.
+    pub fn set_waveform_from_midi(&mut self, channel: u8, program: u8) -> bool {
         if channel == 9 {
-            return;
+            return false;
         }
         self.current_waveform = (program % 3) as i8;
+        true
+    }
+
+    /// Apply MIDI controls that affect the UI and report whether to redraw it.
+    pub fn apply_midi_control_change(&mut self, controller: u8, value: u8) -> bool {
+        match controller {
+            7 => self.set_volume_from_midi(value),
+            34..=42 | 44..=46 => self.set_menu_value_from_cc(controller, value),
+            43 => self.cycle_key_from_midi(value),
+            80 => self.set_octave_from_midi(value),
+            81 => self.set_formant_from_midi(value),
+            82 => self.set_crush_from_midi(value),
+            _ => return false,
+        }
+        true
     }
 
     /// Sets the octave preset from an incoming MIDI CC80 value: 0=Low,

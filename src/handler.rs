@@ -67,6 +67,7 @@ pub fn audio_handler(
     });
 
     if audio.get_stereo(buffer) {
+        let mut midi_display_dirty = false;
         for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
             let sample = match is_hangup_button_pressed {
                 false => *right,
@@ -138,43 +139,11 @@ pub fn audio_handler(
                                                 msm.set_harmony_backing_from_midi(value);
                                             });
                                         }
-                                        7 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_volume_from_midi(value);
-                                            });
-                                        }
-                                        34..=42 | 44..=46 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_menu_value_from_cc(controller, value);
-                                            });
-                                        }
-                                        43 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.cycle_key_from_midi(value);
-                                            });
-                                            shared.display_needs_update.lock(|flag| *flag = true);
-                                            crate::rtic_app::app::display_update_task::spawn().ok();
-                                        }
-                                        80 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_octave_from_midi(value);
-                                            });
-                                            shared.display_needs_update.lock(|flag| *flag = true);
-                                            crate::rtic_app::app::display_update_task::spawn().ok();
-                                        }
-                                        81 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_formant_from_midi(value);
-                                            });
-                                            shared.display_needs_update.lock(|flag| *flag = true);
-                                            crate::rtic_app::app::display_update_task::spawn().ok();
-                                        }
-                                        82 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_crush_from_midi(value);
-                                            });
-                                            shared.display_needs_update.lock(|flag| *flag = true);
-                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        7 | 34..=46 | 80..=82 => {
+                                            midi_display_dirty |=
+                                                shared.app_state_machine.lock(|msm| {
+                                                    msm.apply_midi_control_change(controller, value)
+                                                });
                                         }
                                         _ => {}
                                     },
@@ -183,9 +152,10 @@ pub fn audio_handler(
                                         voice_manager.apply_channel_pitch_bend(channel, bend_ratio);
                                     }
                                     crate::midi::MidiEvent::ProgramChange { channel, program } => {
-                                        shared.app_state_machine.lock(|msm| {
-                                            msm.set_waveform_from_midi(channel, program);
-                                        });
+                                        midi_display_dirty |=
+                                            shared.app_state_machine.lock(|msm| {
+                                                msm.set_waveform_from_midi(channel, program)
+                                            });
                                     }
                                     crate::midi::MidiEvent::Other => {
                                         // MIDI clock / active-sense / reset: discard.
@@ -237,6 +207,12 @@ pub fn audio_handler(
             if audio.push_stereo((out_sample, out_sample)).is_err() {
                 warn!("Failed to write audio data");
             }
+        }
+
+        // Coalesce the block's MIDI changes into one low-priority redraw.
+        if midi_display_dirty {
+            shared.display_needs_update.lock(|flag| *flag = true);
+            crate::rtic_app::app::display_update_task::spawn().ok();
         }
 
         // Monitor MIDI queue status periodically using hop_counter
