@@ -3,7 +3,7 @@ use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use app_lib::output_mix;
-use app_lib::vocal_frame::{config_for_speed, process_frame};
+use app_lib::vocal_frame::{config_for_menu, process_frame};
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -386,6 +386,7 @@ pub fn handle_vocal_effects(
     let mut key = 0i8;
     let mut pitch_ratio = 1.0f32;
     let mut autotune_speed = 5;
+    let mut magnitude = 5;
     let mut harmony_lead = 1.0;
     let mut harmony_backing = 64;
     let mut wave_type = Waveform::Sine;
@@ -401,6 +402,7 @@ pub fn handle_vocal_effects(
         }
         formant = snapshot.formant;
         autotune_speed = snapshot.autotune_speed;
+        magnitude = snapshot.magnitude;
         harmony_lead = snapshot.harmony_lead as f32 / 127.0;
         harmony_backing = snapshot.harmony_backing;
         synth_gain = output_mix::synth_gain(snapshot.melody_volume);
@@ -521,7 +523,7 @@ pub fn handle_vocal_effects(
         octave_ratio: pitch_ratio,
         mode,
     };
-    let mut config = config_for_speed(autotune_speed);
+    let mut config = config_for_menu(autotune_speed, magnitude);
     config.harmony_lead_gain = harmony_lead;
     let mut input_buffer = [0.0; FFT_SIZE];
     let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);
