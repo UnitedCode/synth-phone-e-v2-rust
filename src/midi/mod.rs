@@ -3,7 +3,7 @@ pub mod midi_voice;
 pub mod notes;
 pub mod voice_generator;
 
-pub use events::{get_midi_queue_status, try_enqueue_midi_event, MidiEvent};
+pub use events::{get_midi_queue_status, try_enqueue_midi_event, MidiEvent, MidiQueueMonitor};
 
 use log::warn;
 use stm32h7xx_hal::{nb, prelude::*, serial::Rx, stm32};

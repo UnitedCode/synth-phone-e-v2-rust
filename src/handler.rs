@@ -1,4 +1,4 @@
-use crate::midi::get_midi_queue_status;
+use crate::midi::{get_midi_queue_status, MidiQueueMonitor};
 use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
@@ -20,6 +20,7 @@ pub fn audio_handler(
     buffer: &mut audio::AudioBuffer,
     hangup_button: &mut hid::Switch<Daisy1<Input>>,
     hop_counter: &mut u32,
+    midi_queue_monitor: &mut MidiQueueMonitor,
     sr_hold_counter: &mut i32,
     sr_held_value: &mut f32,
     shared: &mut crate::rtic_app::app::update_handler::SharedResources,
@@ -222,16 +223,12 @@ pub fn audio_handler(
             crate::rtic_app::app::display_update_task::spawn().ok();
         }
 
-        // Monitor MIDI queue status periodically using hop_counter
-        if *hop_counter % 4800 == 0 {
-            // Check every ~100ms at 48kHz
-            shared.midi_events.lock(|events| {
-                let (len, capacity) = get_midi_queue_status(events);
-                if len > capacity * 3 / 4 {
-                    // Warn if queue is >75% full
-                    warn!("MIDI queue high: {}/{}", len, capacity);
-                }
-            });
+        if let Some((len, capacity)) = midi_queue_monitor.on_audio_block(|| {
+            shared
+                .midi_events
+                .lock(|events| get_midi_queue_status(events))
+        }) {
+            warn!("MIDI queue high: {}/{}", len, capacity);
         }
     } else {
         warn!("Error reading data!");

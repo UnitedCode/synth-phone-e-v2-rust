@@ -19,6 +19,11 @@ The overflow path uses no allocation or temporary event array. It examines at
 most the fixed queue capacity per scan and rotates the complete queue once
 when removing an event. Producers hold the existing RTIC queue lock throughout.
 
+Queue occupancy is checked every 4,800 processed audio samples (roughly 100 ms),
+independently of FFT hop resets. Occupancy above 75% produces at most one warning
+per interval. This periodic snapshot can miss shorter peaks; overflow recovery
+still runs for each enqueue attempt.
+
 `tools/audio-lab/tests/midi_queue.rs` exercises the firmware queue implementation
 with the real `heapless` queue, including all removal slots and ring positions,
 rejection without mutation, pedal/panic protection, and VoiceManager recovery.

@@ -77,6 +77,34 @@ pub fn get_midi_queue_status(queue: &heapless::spsc::Queue<MidiEvent, 128>) -> (
     (queue.len(), queue.capacity())
 }
 
+/// Sample-clocked queue diagnostics, independent of the FFT hop counter.
+#[derive(Default)]
+pub struct MidiQueueMonitor {
+    elapsed_samples: usize,
+}
+
+impl MidiQueueMonitor {
+    pub const fn new() -> Self {
+        Self { elapsed_samples: 0 }
+    }
+
+    /// Call once per completed audio block. Read occupancy only at the roughly
+    /// 100 ms deadline and report queues above 75%, at most once per interval.
+    pub fn on_audio_block(
+        &mut self,
+        queue_status: impl FnOnce() -> (usize, usize),
+    ) -> Option<(usize, usize)> {
+        const INTERVAL_SAMPLES: usize = 4_800;
+        self.elapsed_samples += crate::constants::BLOCK_SIZE;
+        if self.elapsed_samples < INTERVAL_SAMPLES {
+            return None;
+        }
+        self.elapsed_samples %= INTERVAL_SAMPLES;
+        let (len, capacity) = queue_status();
+        (len > capacity * 3 / 4).then_some((len, capacity))
+    }
+}
+
 /// Call with exclusive access, as both UART and keypad producers do under RTIC.
 /// On overflow, retain FIFO order and prefer releases over controls and new notes.
 /// If every queued event is a release, replace the backlog with an emergency reset

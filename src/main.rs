@@ -40,7 +40,8 @@ mod rtic_app {
         use crate::{
             constants::{BLOCK_SIZE, BUFFER_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE},
             midi::{
-                try_enqueue_midi_event, voice_generator::VoiceManager, MidiEvent, MidiReceiver,
+                try_enqueue_midi_event, voice_generator::VoiceManager, MidiEvent, MidiQueueMonitor,
+                MidiReceiver,
             },
             percussion::HeldKeys,
             state_machine::{AppState, AppStateMachine, MenuState},
@@ -126,6 +127,7 @@ mod rtic_app {
             encoder_button: hid::Switch<Daisy2<Input>>,
             hangup_button: hid::Switch<Daisy1<Input>>,
             hop_counter: u32,
+            midi_queue_monitor: MidiQueueMonitor,
             sr_hold_counter: i32,
             sr_held_value: f32,
             last_input_phases: [f32; FFT_SIZE],
@@ -362,6 +364,7 @@ mod rtic_app {
                     encoder_button,
                     hangup_button,
                     hop_counter: 0,
+                    midi_queue_monitor: MidiQueueMonitor::new(),
                     sr_hold_counter: 0,
                     sr_held_value: 0.0,
                     vocal_state: crate::vocal_storage::take()
@@ -422,6 +425,7 @@ mod rtic_app {
                 buffer,
                 hangup_button,
                 hop_counter,
+                midi_queue_monitor,
                 sr_hold_counter,
                 sr_held_value,
             ],
@@ -442,6 +446,7 @@ mod rtic_app {
                 ctx.local.buffer,
                 ctx.local.hangup_button,
                 ctx.local.hop_counter,
+                ctx.local.midi_queue_monitor,
                 ctx.local.sr_hold_counter,
                 ctx.local.sr_held_value,
                 &mut ctx.shared,
