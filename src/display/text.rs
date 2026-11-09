@@ -2,7 +2,7 @@ use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
     mono_font::{
-        ascii::{FONT_10X20, FONT_5X7, FONT_6X13, FONT_6X9},
+        ascii::{FONT_5X7, FONT_6X13, FONT_6X9},
         MonoTextStyle, MonoTextStyleBuilder,
     },
     pixelcolor::BinaryColor,
@@ -38,7 +38,7 @@ pub fn small_text() -> MonoTextStyle<'static, BinaryColor> {
 
 pub fn header_text() -> MonoTextStyle<'static, BinaryColor> {
     MonoTextStyleBuilder::new()
-        .font(&FONT_10X20)
+        .font(&super::note_font::NOTE_FONT)
         .text_color(BinaryColor::Off)
         .background_color(BinaryColor::On)
         .build()

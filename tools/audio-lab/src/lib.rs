@@ -8,6 +8,8 @@ pub mod emulator;
 pub mod keypad;
 #[path = "../../../src/midi/notes.rs"]
 pub mod midi_notes;
+#[path = "../../../src/display/note_font.rs"]
+pub mod note_font;
 #[path = "../../../src/percussion.rs"]
 pub mod percussion;
 pub mod replay;
