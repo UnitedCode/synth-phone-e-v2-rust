@@ -142,7 +142,7 @@ fn emergency_queue_reset_clears_the_display_and_restores_the_keypad() {
     voices.note_off(61, 3);
     sync(&mut app, &voices);
     assert_eq!(app.snapshot().display_note_name(), "C#");
-    voices.reset_after_midi_overflow();
+    voices.reset_midi_performance();
     assert!(sync(&mut app, &voices));
     assert_eq!(app.snapshot().display_note_name(), "A");
     assert_eq!(app.snapshot().note, 6);

@@ -24,6 +24,13 @@ independently of FFT hop resets. Occupancy above 75% produces at most one warnin
 per interval. This periodic snapshot can miss shorter peaks; overflow recovery
 still runs for each enqueue attempt.
 
+UART framing, parity and overrun errors enqueue a protected recovery marker.
+The audio task stops MIDI voices (including held phone sounds) and clears sustain
+and pitch bend before later notes. Pending receive bytes are discarded with a
+32-read budget per call, then parsing waits for a fresh status byte. Recovery
+can cut off held sounds because their releases may have been lost. Noise-only
+flags preserve the byte stream and running status.
+
 `tools/audio-lab/tests/midi_queue.rs` exercises the firmware queue implementation
 with the real `heapless` queue, including all removal slots and ring positions,
 rejection without mutation, pedal/panic protection, and VoiceManager recovery.

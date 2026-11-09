@@ -586,9 +586,9 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
     }
 
-    /// Emergency recovery when the event queue cannot retain another release.
+    /// Emergency recovery after lost MIDI data or queue saturation.
     /// Clear pedal/bend state too, so the next phrase starts from a safe state.
-    pub fn reset_after_midi_overflow(&mut self) {
+    pub fn reset_midi_performance(&mut self) {
         self.all_notes_off(None);
         self.sustain = [false; 16];
         self.pitch_bend = [0.0; 16];

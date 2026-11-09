@@ -159,8 +159,11 @@ pub fn audio_handler(
                                             });
                                     }
                                     crate::midi::MidiEvent::QueueOverflow => {
-                                        voice_manager.reset_after_midi_overflow();
+                                        voice_manager.reset_midi_performance();
                                         warn!("MIDI queue overflow: notes, sustain and bend reset");
+                                    }
+                                    crate::midi::MidiEvent::UartError => {
+                                        voice_manager.reset_midi_performance();
                                     }
                                     crate::midi::MidiEvent::Other => {
                                         // MIDI clock / active-sense / reset: discard.

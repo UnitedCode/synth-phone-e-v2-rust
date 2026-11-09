@@ -15,6 +15,7 @@ pub struct MidiReceiver {
     data_bytes: [u8; 2],
     data_count: usize,
     expected_data_bytes: usize,
+    draining_after_error: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -32,12 +33,17 @@ impl MidiReceiver {
             data_bytes: [0, 0],
             data_count: 0,
             expected_data_bytes: 0,
+            draining_after_error: false,
         }
     }
 
     pub fn try_read(
         &mut self,
     ) -> Result<Option<MidiEvent>, nb::Error<stm32h7xx_hal::serial::Error>> {
+        if self.draining_after_error {
+            self.drain_pending_bytes();
+            return Ok(None);
+        }
         match self.rx.read() {
             Ok(byte) => {
                 match self.state {
@@ -145,15 +151,27 @@ impl MidiReceiver {
                 Ok(None)
             }
             Err(nb::Error::Other(e)) => {
-                warn!("MIDI UART error {:?}: parser reset", e);
-                // UART hardware error (framing, parity, overrun) — typically caused by
-                // a MIDI device being disconnected.  Reset parser state so the next
-                // device can start fresh without misinterpreting stale context.
+                warn!("MIDI UART error {:?}: reset queued", e);
+                // Releases may have been lost. Reset performance state in FIFO
+                // order, discard the damaged backlog, and require a fresh status.
                 self.state = MidiParserState::WaitingForStatus;
                 self.status_byte = 0;
                 self.data_count = 0;
                 self.expected_data_bytes = 0;
-                Ok(None)
+                self.draining_after_error = true;
+                self.drain_pending_bytes();
+                Ok(Some(MidiEvent::UartError))
+            }
+        }
+    }
+
+    fn drain_pending_bytes(&mut self) {
+        // Bound UART work even if faults repeat. Continue on the next read if
+        // this budget is exhausted; do not interpret backlog as fresh messages.
+        for _ in 0..32 {
+            if matches!(self.rx.read(), Err(nb::Error::WouldBlock)) {
+                self.draining_after_error = false;
+                break;
             }
         }
     }

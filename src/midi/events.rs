@@ -28,6 +28,8 @@ pub enum MidiEvent {
     Other,
     /// Internal recovery marker, never produced by the MIDI parser.
     QueueOverflow,
+    /// UART framing/parity/overrun recovery, ordered before later input.
+    UartError,
 }
 
 impl MidiEvent {
@@ -42,7 +44,7 @@ impl MidiEvent {
             | Self::ControlChange { channel, .. }
             | Self::PitchBend { channel, .. }
             | Self::ProgramChange { channel, .. } => Some(channel),
-            Self::Other | Self::QueueOverflow => None,
+            Self::Other | Self::QueueOverflow | Self::UartError => None,
         }
     }
 
@@ -61,6 +63,7 @@ impl MidiEvent {
                     ..
                 }
                 | Self::QueueOverflow
+                | Self::UartError
         )
     }
 
