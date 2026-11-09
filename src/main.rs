@@ -101,7 +101,6 @@ mod rtic_app {
             out_ring: RingBuffer<BUFFER_SIZE>,
             in_pointer_cached: u32,
             app_state_machine: AppStateMachine,
-            old_matrix_state: [[bool; 3]; 4],
             display_needs_update: bool,
             midi_events: heapless::spsc::Queue<MidiEvent, 128>,
             voice_manager: VoiceManager<8>,
@@ -140,6 +139,7 @@ mod rtic_app {
             midi_receiver: MidiReceiver,
             sprite_atlas: ImageRawBE<'static, BinaryColor>,
             held_keys: HeldKeys,
+            keypad_debounce: app_lib::keypad::KeypadDebouncer,
             save_debounce: crate::settings_storage::SaveDebounce,
         }
 
@@ -339,7 +339,6 @@ mod rtic_app {
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
                     in_pointer_cached: 0,
                     app_state_machine: AppStateMachine::new(),
-                    old_matrix_state: [[false; 3]; 4],
                     display_needs_update: true,
                     midi_events: heapless::spsc::Queue::new(),
                     voice_manager: VoiceManager::new(SAMPLE_RATE),
@@ -379,6 +378,9 @@ mod rtic_app {
                     midi_receiver,
                     sprite_atlas,
                     held_keys: HeldKeys::new(),
+                    keypad_debounce: app_lib::keypad::KeypadDebouncer::new(
+                        ccdr.clocks.c_ck().raw(),
+                    ),
                     save_debounce: crate::settings_storage::SaveDebounce::new(
                         ccdr.clocks.c_ck().raw().saturating_mul(2),
                     ),
@@ -535,12 +537,12 @@ mod rtic_app {
                 row_4_pin,
                 encoder_button,
                 held_keys,
+                keypad_debounce,
                 save_debounce,
                 last_settings: Option<crate::settings_storage::SavedSettings> = None,
             ],
             shared = [
                 app_state_machine,
-                old_matrix_state,
                 display_needs_update,
                 midi_events,
                 settings_ready,

@@ -239,7 +239,7 @@ pub fn interface_handler(
 
     let mut update_state: bool = false;
 
-    let new_matrix_state = scan_button_matrix(
+    let raw_matrix_state = scan_button_matrix(
         local.col_1_pin,
         local.col_2_pin,
         local.col_3_pin,
@@ -249,16 +249,12 @@ pub fn interface_handler(
         local.row_4_pin,
     );
 
-    for row in 0..4 {
-        for col in 0..3 {
-            let was_pressed = shared.old_matrix_state.lock(|oms| oms[row][col]);
-            let is_pressed = new_matrix_state[row][col];
-
-            if is_pressed != was_pressed {
-                shared.old_matrix_state.lock(|oms| {
-                    oms[row][col] = is_pressed;
-                });
-
+    let changes = local
+        .keypad_debounce
+        .update(raw_matrix_state, cortex_m::peripheral::DWT::cycle_count());
+    for (row, columns) in changes.into_iter().enumerate() {
+        for (col, change) in columns.into_iter().enumerate() {
+            if let Some(is_pressed) = change {
                 let actual_col = 2 - col;
                 let key_num = row * 3 + actual_col + 1;
 
