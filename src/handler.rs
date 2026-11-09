@@ -230,7 +230,7 @@ pub fn audio_handler(
 
         // Coalesce the block's MIDI changes into one low-priority redraw.
         if midi_display_dirty {
-            shared.display_needs_update.lock(|flag| *flag = true);
+            shared.display_updates.lock(|updates| updates.request());
             crate::rtic_app::app::display_update_task::spawn().ok();
         }
 
@@ -367,7 +367,7 @@ pub fn interface_handler(
 
     if update_state {
         // Set the flag
-        shared.display_needs_update.lock(|flag| *flag = true);
+        shared.display_updates.lock(|updates| updates.request());
 
         // Spawn the display task to run
         crate::rtic_app::app::display_update_task::spawn().ok();

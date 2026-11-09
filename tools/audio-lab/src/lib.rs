@@ -3,6 +3,8 @@ use std::time::Instant;
 use synthphone_e_vocal_dsp::{dsp::normalize_sample, MusicalSettings, VocalEffectsConfig};
 #[path = "../../../src/audio/mod.rs"]
 pub mod audio;
+#[path = "../../../src/display_updates.rs"]
+pub mod display_updates;
 pub mod emulator;
 #[path = "../../../src/keypad.rs"]
 pub mod keypad;

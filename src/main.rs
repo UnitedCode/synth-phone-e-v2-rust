@@ -102,7 +102,7 @@ mod rtic_app {
             out_ring: RingBuffer<BUFFER_SIZE>,
             in_pointer_cached: u32,
             app_state_machine: AppStateMachine,
-            display_needs_update: bool,
+            display_updates: app_lib::display_updates::DisplayUpdates,
             midi_events: heapless::spsc::Queue<MidiEvent, 128>,
             voice_manager: VoiceManager<8>,
             settings_ready: bool,
@@ -341,7 +341,9 @@ mod rtic_app {
                     out_ring: RingBuffer::with_offset((FFT_SIZE + (2 * HOP_SIZE)) as u32),
                     in_pointer_cached: 0,
                     app_state_machine: AppStateMachine::new(),
-                    display_needs_update: true,
+                    display_updates: app_lib::display_updates::DisplayUpdates::new(
+                        ccdr.clocks.c_ck().raw(),
+                    ),
                     midi_events: heapless::spsc::Queue::new(),
                     voice_manager: VoiceManager::new(SAMPLE_RATE),
                     settings_ready: false,
@@ -400,7 +402,7 @@ mod rtic_app {
         }
 
         #[task(
-            shared = [app_state_machine, display_needs_update],
+            shared = [app_state_machine, display_updates],
             priority = 1
         )]
         fn startup_complete_task(mut ctx: startup_complete_task::Context) {
@@ -412,9 +414,7 @@ mod rtic_app {
                 state_machine.handle_event(AppEvent::SplashComplete);
             });
 
-            ctx.shared.display_needs_update.lock(|flag| {
-                *flag = true;
-            });
+            ctx.shared.display_updates.lock(|updates| updates.request());
 
             display_update_task::spawn().ok();
         }
@@ -436,7 +436,7 @@ mod rtic_app {
                 app_state_machine,
                 midi_events,
                 voice_manager,
-                display_needs_update
+                display_updates
             ],
             priority = 8)
         ]
@@ -455,20 +455,19 @@ mod rtic_app {
 
         #[task(
             local = [display, sprite_atlas],
-            shared = [display_needs_update, app_state_machine],
+            shared = [display_updates, app_state_machine],
             priority = 2
         )]
         fn display_update_task(mut ctx: display_update_task::Context) {
-            // Check if update is needed
-            let needs_update = ctx.shared.display_needs_update.lock(|flag| {
-                let update = *flag;
-                if update {
-                    *flag = false; // Clear the flag
-                }
-                update
-            });
+            let needs_update = ctx
+                .shared
+                .display_updates
+                .lock(|updates| updates.begin(cortex_m::peripheral::DWT::cycle_count()));
 
             if needs_update {
+                // The driver clears its dirty region before I/O. Force a full
+                // frame so retries also repair partially written OLED contents.
+                ctx.local.display.clear();
                 // Get the current state snapshot
                 let snapshot = ctx.shared.app_state_machine.lock(|msm| msm.snapshot());
 
@@ -523,8 +522,11 @@ mod rtic_app {
                     }
                 }
 
-                // NOW we can do the blocking flush in low priority
-                ctx.local.display.flush().ok();
+                // Bus I/O stays in this low-priority task, outside shared locks.
+                let successful = ctx.local.display.flush().is_ok();
+                ctx.shared.display_updates.lock(|updates| {
+                    updates.complete(cortex_m::peripheral::DWT::cycle_count(), successful);
+                });
             }
         }
 
@@ -548,7 +550,7 @@ mod rtic_app {
             ],
             shared = [
                 app_state_machine,
-                display_needs_update,
+                display_updates,
                 midi_events,
                 settings_ready,
                 settings_save_failed,
@@ -596,9 +598,19 @@ mod rtic_app {
                     ctx.local.save_debounce.changed(now);
                 }
             }
+
+            // Wake pending retries even when no button or MIDI event occurs.
+            // This task only schedules; rendering and I2C stay at priority 2.
+            if ctx
+                .shared
+                .display_updates
+                .lock(|updates| updates.ready(cortex_m::peripheral::DWT::cycle_count()))
+            {
+                display_update_task::spawn().ok();
+            }
         }
 
-        #[task(priority = 1, local = [flash], shared = [app_state_machine, settings_ready, settings_save_failed, display_needs_update])]
+        #[task(priority = 1, local = [flash], shared = [app_state_machine, settings_ready, settings_save_failed, display_updates])]
         fn settings_flash_task(
             mut ctx: settings_flash_task::Context,
             settings: Option<crate::settings_storage::SavedSettings>,
@@ -619,7 +631,7 @@ mod rtic_app {
                     ctx.shared
                         .app_state_machine
                         .lock(|state| state.apply_saved_settings(saved));
-                    ctx.shared.display_needs_update.lock(|flag| *flag = true);
+                    ctx.shared.display_updates.lock(|updates| updates.request());
                     display_update_task::spawn().ok();
                     info!("restored saved settings");
                 }

@@ -1,6 +1,7 @@
 #![no_std]
 pub mod audio;
 pub mod constants;
+pub mod display_updates;
 pub mod keypad;
 pub mod output_mix;
 pub mod percussion;

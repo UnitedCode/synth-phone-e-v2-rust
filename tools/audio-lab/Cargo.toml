@@ -16,6 +16,10 @@ embedded-graphics = "=0.7.1"
 heapless = "=0.8.0"
 midly = { version = "0.5.3", default-features = false, features = ["alloc"] }
 
+[dev-dependencies]
+ssd1306 = "=0.7.1"
+display-interface = "=0.4.1"
+
 [[example]]
 name = "midi_reference"
 test = true
