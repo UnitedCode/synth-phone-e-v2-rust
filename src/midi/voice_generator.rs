@@ -511,6 +511,14 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
     }
 
+    /// Emergency recovery when the event queue cannot retain another release.
+    /// Clear pedal/bend state too, so the next phrase starts from a safe state.
+    pub fn reset_after_midi_overflow(&mut self) {
+        self.all_notes_off(None);
+        self.sustain = [false; 16];
+        self.pitch_bend = [0.0; 16];
+    }
+
     pub fn all_notes_off(&mut self, channel: Option<u8>) {
         if channel.is_some_and(is_voice_ctrl) {
             for i in 0..MAX_VOICES {

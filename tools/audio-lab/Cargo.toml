@@ -13,6 +13,7 @@ hound = "3.5"
 libm = "0.2.15"
 log = "=0.4.28"
 embedded-graphics = "=0.7.1"
+heapless = "=0.8.0"
 midly = { version = "0.5.3", default-features = false, features = ["alloc"] }
 
 [[example]]

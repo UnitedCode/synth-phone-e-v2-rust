@@ -1,6 +1,9 @@
+mod events;
 pub mod midi_voice;
 pub mod notes;
 pub mod voice_generator;
+
+pub use events::{get_midi_queue_status, try_enqueue_midi_event, MidiEvent};
 
 use log::warn;
 use stm32h7xx_hal::{nb, prelude::*, serial::Rx, stm32};
@@ -214,112 +217,9 @@ impl MidiReceiver {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum MidiEvent {
-    NoteOn {
-        channel: u8,
-        key: u8,
-        velocity: u8,
-    },
-    NoteOff {
-        channel: u8,
-        key: u8,
-        velocity: u8,
-    },
-    ControlChange {
-        channel: u8,
-        controller: u8,
-        value: u8,
-    },
-    PitchBend {
-        channel: u8,
-        value: u16,
-    },
-    ProgramChange {
-        channel: u8,
-        program: u8,
-    },
-    Other,
-}
-
 // MIDI note utilities
 impl MidiEvent {
     pub fn note_to_frequency(note: u8) -> f32 {
         notes::frequency(note)
-    }
-
-    pub fn is_note_event(&self) -> bool {
-        matches!(self, MidiEvent::NoteOn { .. } | MidiEvent::NoteOff { .. })
-    }
-
-    pub fn get_channel(&self) -> Option<u8> {
-        match self {
-            MidiEvent::NoteOn { channel, .. }
-            | MidiEvent::NoteOff { channel, .. }
-            | MidiEvent::ControlChange { channel, .. }
-            | MidiEvent::PitchBend { channel, .. }
-            | MidiEvent::ProgramChange { channel, .. } => Some(*channel),
-            MidiEvent::Other => None,
-        }
-    }
-}
-
-// Helper function to check MIDI queue status
-pub fn get_midi_queue_status(
-    midi_events: &heapless::spsc::Queue<MidiEvent, 128>,
-) -> (usize, usize) {
-    let capacity = midi_events.capacity();
-    let len = midi_events.len();
-    (len, capacity)
-}
-
-// Function to handle queue overflow protection
-pub fn try_enqueue_midi_event(
-    midi_events: &mut heapless::spsc::Queue<MidiEvent, 128>,
-    event: MidiEvent,
-) -> Result<(), MidiEvent> {
-    match midi_events.enqueue(event) {
-        Ok(()) => Ok(()),
-        Err(event) => {
-            // Queue is full - try to make space by removing oldest non-critical events
-            // Keep note events but drop less critical ones like CC messages
-            let mut dropped_non_critical = false;
-
-            // Try to find and remove a non-critical event to make space
-            let mut temp_events = heapless::Vec::<MidiEvent, 16>::new();
-
-            // Dequeue up to 16 events looking for non-critical ones
-            for _ in 0..16 {
-                if let Some(old_event) = midi_events.dequeue() {
-                    match old_event {
-                        MidiEvent::ControlChange { .. } | MidiEvent::PitchBend { .. } => {
-                            // Drop this non-critical event and try to enqueue the new one
-                            dropped_non_critical = true;
-                            break;
-                        }
-                        _ => {
-                            // Keep critical events
-                            let _ = temp_events.push(old_event);
-                        }
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            // Re-enqueue the kept events
-            for temp_event in temp_events.iter() {
-                let _ = midi_events.enqueue(*temp_event);
-            }
-
-            if dropped_non_critical {
-                // Try to enqueue the new event now that we made space
-                midi_events.enqueue(event).map_err(|e| e)
-            } else {
-                // Couldn't make space, return error
-                warn!("MIDI queue full and couldn't drop non-critical events");
-                Err(event)
-            }
-        }
     }
 }

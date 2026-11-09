@@ -157,6 +157,10 @@ pub fn audio_handler(
                                                 msm.set_waveform_from_midi(channel, program)
                                             });
                                     }
+                                    crate::midi::MidiEvent::QueueOverflow => {
+                                        voice_manager.reset_after_midi_overflow();
+                                        warn!("MIDI queue overflow: notes, sustain and bend reset");
+                                    }
                                     crate::midi::MidiEvent::Other => {
                                         // MIDI clock / active-sense / reset: discard.
                                     }

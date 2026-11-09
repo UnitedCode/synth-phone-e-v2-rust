@@ -6,6 +6,8 @@ pub mod audio;
 pub mod emulator;
 #[path = "../../../src/keypad.rs"]
 pub mod keypad;
+#[path = "../../../src/midi/events.rs"]
+pub mod midi_events;
 #[path = "../../../src/midi/notes.rs"]
 pub mod midi_notes;
 #[path = "../../../src/display/note_font.rs"]
