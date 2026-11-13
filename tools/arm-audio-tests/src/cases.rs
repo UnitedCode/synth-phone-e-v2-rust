@@ -2,7 +2,7 @@
 use crate::constants::SAMPLE_RATE;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
-pub const COUNT: usize = 22;
+pub const COUNT: usize = 23;
 pub const INPUT_SAMPLES: usize = 24_000;
 pub const MAGIC: &[u8; 8] = b"SAEARM01";
 pub const NAMES: [&str; COUNT] = [
@@ -28,6 +28,7 @@ pub const NAMES: [&str; COUNT] = [
     "harmony-vowel-register",
     "harmony-bass-73",
     "harmony-fast-slide",
+    "harmony-high-range",
 ];
 
 pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
@@ -36,7 +37,8 @@ pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
         15 => 5,
         _ => 10,
     };
-    let mut config = crate::vocal_frame::config_for_controls(10, amount);
+    let range = if case == 22 { 2 } else { 0 };
+    let mut config = crate::vocal_frame::config_for_voice_controls(10, amount, range);
     if case >= 9 {
         config.harmony_lead_gain = 0.0;
     }
@@ -49,7 +51,7 @@ pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
 pub fn settings(case: usize) -> MusicalSettings {
     let mode = match case {
         4 | 13 => ProcessingMode::Dry,
-        5 | 9..=12 | 17..=21 => ProcessingMode::Harmony,
+        5 | 9..=12 | 17..=22 => ProcessingMode::Harmony,
         6 | 14..=16 => ProcessingMode::Vocode,
         _ => ProcessingMode::PitchControl,
     };
@@ -68,7 +70,7 @@ pub fn settings(case: usize) -> MusicalSettings {
             [
                 130.81278, 164.81378, 195.99771, 220.0, 261.62555, 329.62756, 391.99542, 440.0,
             ]
-        } else if case == 21 {
+        } else if case == 21 || case == 22 {
             [350.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         } else if matches!(case, 9 | 17..=20) {
             [220.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -111,6 +113,13 @@ pub fn input(case: usize, index: usize) -> f32 {
         return 0.15 * libm::sinf(phase)
             + 0.06 * libm::sinf(2.0 * phase)
             + 0.03 * libm::sinf(3.0 * phase);
+    }
+    if case == 22 {
+        let phase = core::f32::consts::TAU * 220.0 * index as f32 / SAMPLE_RATE;
+        return 0.15 * libm::sinf(phase)
+            + 0.04 * libm::sinf(2.0 * phase)
+            + 0.02 * libm::sinf(3.0 * phase)
+            + 0.025 * libm::sinf(phase / 3.0);
     }
     if case == 17 {
         return 0.15 * libm::sinf(core::f32::consts::TAU * 90.0 * index as f32 / SAMPLE_RATE);

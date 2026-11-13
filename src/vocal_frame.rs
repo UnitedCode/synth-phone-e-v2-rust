@@ -27,8 +27,22 @@ pub fn config_for_speed(speed: i8) -> VocalEffectsConfig {
 
 /// User controls shared by the hardware handler and offline replays.
 pub fn config_for_controls(speed: i8, vocoder_amount: i8) -> VocalEffectsConfig {
+    config_for_voice_controls(speed, vocoder_amount, 0)
+}
+
+/// Voice range restricts source-pitch analysis, never the audible input.
+pub fn config_for_voice_controls(
+    speed: i8,
+    vocoder_amount: i8,
+    voice_range: i8,
+) -> VocalEffectsConfig {
     let mut config = config_for_speed(speed);
     config.vocoder_mix = vocoder_amount.clamp(0, 10) as f32 * 0.1;
+    config.min_frequency = match voice_range {
+        1 => 100.0,
+        2 => 150.0,
+        _ => 50.0,
+    };
     config
 }
 

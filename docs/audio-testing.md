@@ -153,7 +153,8 @@ It is included in automatic settings saves.
 
 The item is appended to the persisted menu order. Existing checksummed v2
 records with 21 values restore all original settings and use 5 for the new
-amount; current records store 22 values. The QSPI record codec is shared with
+amount; that control extended records to 22 values. Voice Range now appends a
+23rd value while retaining both old prefixes. The QSPI record codec is shared with
 host tests, including a frozen legacy record and a corruption check.
 
 DSP defaults to fully wet for API compatibility and existing full-effect
@@ -534,7 +535,7 @@ announced harmony fixes. Firmware and its DSP pin remain unchanged.
 
 ### Continuity correction: measured and partially accepted
 
-The current pin is `dd5d4cd9ebfc176bbb6a964951b18da45a3d84cc`. A known fully
+The continuity correction started at `dd5d4cd9ebfc176bbb6a964951b18da45a3d84cc`. A known fully
 voiced source slides from 200 to 300 Hz in 80 ms while MIDI holds 350 Hz.
 The former shifter's worst output error is 33.13 cents; the new output stays
 within 0.37 cents in independent rolling-window pitch measurements. The
@@ -588,8 +589,43 @@ leaving the unrestricted mixed-source reproduction explicitly unresolved.
 On the actual bad interval, the 150 Hz floor yields no accepted coarse period
 in all 57 windows; spectral continuation may still supply the kernel's voice.
 The matched `range150-before.mp3` / `range150-after.mp3` pair records this
-combined continuity/range trial; it is awaiting a listening verdict and must
-not be described as a robust new register detector.
+combined continuity/range trial; the user reports **further improvement**.
+It must not be described as a robust new register detector.
+
+### Selectable range on the experimental phone firmware
+
+The final DSP pin is `c0546a747e472d6f93bead51c89392d1b58511af`. The encoder
+menu now exposes **Voice Range**: **All** = 50 Hz (default), **Mid** = 100 Hz,
+and **Hi** = 150 Hz. Custom CC50 values 0/64/127 select the same choices.
+The shared configuration helper applies the setting to Harmony, Pitch Ctrl
+and Synth+Tune; the audible input is not high-pass filtered. Hi is the range
+the user preferred in the real-vocal trial. This records improvement, not
+a claim that every audible artifact is eliminated.
+
+Voice Range is appended as saved menu value 23. Frozen 21- and 22-value v2
+records retain their existing settings and default to All. Tests exercise
+encoder editing, MIDI selection, save/decode/restore, and the actual shared
+DSP configuration. A streaming test caught a stale-cache bug when changing
+the range live: an excluded 100 Hz source continued being harmonized after
+selecting Hi. Cached/phase-refined pitches now respect the configured floor
+with a small estimator tolerance, and that test passes.
+
+The added control initially exceeded flash by 160 bytes. A 65-entry
+curvature-corrected quarter-wave table keeps the existing <5e-6 trig error
+bound and bounded runtime; the final Git-pinned firmware fits with **104 bytes
+spare**. Validation: 60 DSP tests plus 12 doctests, 165 host tests, three
+independent-reference tests, strict host Clippy, and 23 Cortex-M7 parity cases
+including the high-range fixture. Lost-frame injection remains detected.
+The two explicitly ignored reproductions remain unresolved limitations.
+
+`final-hi-pinned/` records the final 30-second render with source floor 150 Hz,
+normal MIDI releases and strict rest silence. `hide-seek-before.mp3` and
+`hide-seek-after-hi.mp3` are constant-gain level-matched mono 44.1 kHz,
+192 kbps MP3s, 722,904 bytes each. Before is the retained earlier harmony
+render; after combines continuity tracking with Hi range. Both use MIDI-only
+harmonies (original lead gain zero). The voice and MIDI remain the same real
+Si Veo a Tu Mamá / Hide and Seek fixture. No board has been flashed; physical
+timing and live microphone listening remain unverified.
 
 ## Replay recordings
 

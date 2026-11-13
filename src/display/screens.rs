@@ -214,16 +214,20 @@ pub fn draw_menu_screen(
 
         // Draw option value
         let mut option_value_buffer: String<3> = String::new();
-        write!(&mut option_value_buffer, "{}", option.1)
-            .expect("Failed converting option value to string");
+        let option_value = if option.0 == "Voice Range" {
+            match option.1 {
+                1 => "Mid",
+                2 => "Hi",
+                _ => "All",
+            }
+        } else {
+            write!(&mut option_value_buffer, "{}", option.1)
+                .expect("Failed converting option value to string");
+            option_value_buffer.as_str()
+        };
 
-        Text::with_baseline(
-            &option_value_buffer,
-            Point::new(110, y),
-            style,
-            Baseline::Middle,
-        )
-        .draw(display)
-        .expect("Failed to draw option value");
+        Text::with_baseline(option_value, Point::new(110, y), style, Baseline::Middle)
+            .draw(display)
+            .expect("Failed to draw option value");
     }
 }

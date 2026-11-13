@@ -76,10 +76,9 @@ impl SavedSettings {
     /// Decode a QSPI record. Menu ranges are clamped when applying settings.
     pub fn decode_record(bytes: &[u8; RECORD_SIZE]) -> Option<(u32, Self)> {
         let count = bytes[5] as usize;
-        // Vocode Amount was appended after the original 21 v2 menu entries.
-        // Load that known prefix and leave the new item at its default.
-        if bytes[..4] != MAGIC || bytes[4] != VERSION || (count != MENU_VALUE_COUNT && count != 21)
-        {
+        // New controls are appended after the original 21 v2 entries. Load
+        // known old prefixes and keep newly added controls at their defaults.
+        if bytes[..4] != MAGIC || bytes[4] != VERSION || !(21..=MENU_VALUE_COUNT).contains(&count) {
             return None;
         }
         let expected = u32::from_le_bytes(bytes[CRC_OFFSET..].try_into().ok()?);

@@ -3,7 +3,7 @@ use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use app_lib::output_mix;
-use app_lib::vocal_frame::{config_for_controls, process_frame};
+use app_lib::vocal_frame::{config_for_voice_controls, process_frame};
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -148,7 +148,7 @@ pub fn audio_handler(
                                                 msm.set_menu_value_from_cc(controller, value);
                                             });
                                         }
-                                        49 => {
+                                        49..=50 => {
                                             shared.app_state_machine.lock(|msm| {
                                                 msm.set_menu_value_from_cc(controller, value);
                                             });
@@ -418,6 +418,7 @@ pub fn handle_vocal_effects(
     let mut pitch_ratio = 1.0f32;
     let mut autotune_speed = 5;
     let mut vocoder_amount = 5;
+    let mut voice_range = 0;
     let mut harmony_lead = 1.0;
     let mut harmony_backing = 64;
     let mut wave_type = Waveform::Sine;
@@ -434,6 +435,7 @@ pub fn handle_vocal_effects(
         formant = snapshot.formant;
         autotune_speed = snapshot.autotune_speed;
         vocoder_amount = snapshot.vocoder_amount;
+        voice_range = snapshot.voice_range;
         harmony_lead = snapshot.harmony_lead as f32 / 127.0;
         harmony_backing = snapshot.harmony_backing;
         synth_gain = output_mix::synth_gain(snapshot.melody_volume);
@@ -547,7 +549,7 @@ pub fn handle_vocal_effects(
         octave_ratio: pitch_ratio,
         mode,
     };
-    let mut config = config_for_controls(autotune_speed, vocoder_amount);
+    let mut config = config_for_voice_controls(autotune_speed, vocoder_amount, voice_range);
     config.harmony_lead_gain = harmony_lead;
     let mut input_buffer = [0.0; FFT_SIZE];
     let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);

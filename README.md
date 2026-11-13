@@ -51,6 +51,11 @@ voice, **5** is a 50/50 blend (default), and **10** is the full effect.
 Double-press the encoder to open the menu. The setting saves automatically;
 MIDI **CC49** also controls it (0–127 maps to 0–10).
 
+For Harmony, Pitch Ctrl and Synth+Tune, **Voice Range** selects the tracker’s
+lowest source pitch: **All** = 50 Hz (default), **Mid** = 100 Hz, **Hi** = 150 Hz.
+Try **Hi** for the tested vocal; use **All** for low voices. It saves automatically.
+MIDI **CC50** values **0 / 64 / 127** select All / Mid / Hi.
+
 ## Check changes without hardware
 
 These commands use a POSIX shell (macOS/Linux). The explicit host target is

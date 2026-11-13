@@ -40,6 +40,14 @@ a held lead when possible. Shared lead/backing unisons sound once and retain
 their independent release state while their control slots remain allocated.
 Sustain and pitch bend stay scoped to each MIDI channel.
 
+**Voice Range** in the encoder menu sets the minimum source pitch used by
+Harmony, Pitch Ctrl and Synth+Tune: **All** (50 Hz, default), **Mid** (100 Hz),
+or **Hi** (150 Hz). The Hide and Seek vocal audition improved further with Hi
+and the continuity fix; this is a listening result for that sample, not a
+guarantee for every singer. Choose All for bass voices. Custom **CC50** values
+0, 64 and 127 select All, Mid and Hi. This setting is saved; older 21/22-value
+presets load their existing values and default to All.
+
 Pitch bend affects only its message channel, including notes played while bent.
 The implemented wheel range is fixed at two semitones either side of center;
 RPN bend-sensitivity negotiation is not implemented. Sound-only notes and drums
