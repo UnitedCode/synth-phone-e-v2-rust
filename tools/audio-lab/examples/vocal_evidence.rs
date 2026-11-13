@@ -1,4 +1,4 @@
-//! Generate auditable A/B files from the unchanged production DSP.
+//! Generate auditable A/B files from the firmware's selected DSP revision.
 use audio_lab::{metrics, vocal_evidence::*, wav};
 use std::{error::Error, fs, path::Path};
 use synthphone_e_vocal_dsp::ProcessingMode;
@@ -26,8 +26,8 @@ fn write_pair(directory: &Path, name: &str, a: &[f32], b: &[f32]) -> Result<()> 
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 1 {
-        return Err("usage: vocal_evidence NEW_OUTPUT_DIRECTORY".into());
+    if !(1..=2).contains(&args.len()) {
+        return Err("usage: vocal_evidence NEW_OUTPUT_DIRECTORY [BASELINE_DIRECTORY]".into());
     }
     let directory = Path::new(&args[0]);
     fs::create_dir(directory)?;
@@ -83,9 +83,28 @@ fn main() -> Result<()> {
         "carrier-level,output_change_db_for_minus_6db_carrier,{db:.9},diagnostic_only\n"
     ));
     fs::write(directory.join("measurements.csv"), &report)?;
+    if let Some(baseline) = args.get(1) {
+        let baseline = Path::new(baseline);
+        for (name, before, after) in [
+            (
+                "vocoder-before-after",
+                "vocoder-grid-a.wav",
+                "vocoder-grid-a.wav",
+            ),
+            ("unvoiced-before-after", "unvoiced-b.wav", "unvoiced-b.wav"),
+        ] {
+            let a = wav::read(&baseline.join(before))?;
+            let b = wav::read(&directory.join(after))?;
+            if a.sample_rate != RATE || b.sample_rate != RATE {
+                return Err("baseline comparison requires matching 48 kHz files".into());
+            }
+            write_pair(directory, name, &a.samples, &b.samples)?;
+        }
+    }
     fs::write(directory.join("provenance.txt"), format!(
-        "Synthetic vowel/noise fixtures; host replay of production DSP.\nsample_rate_hz={RATE}\nfixture_seconds={SECONDS}\nDSP dependency: {}\nA/Bs share one gain (never independently normalized).\nVocoder grid B is a known-pitch synthetic reference, not a proposed fix.\nNo hardware, real-vocal intelligibility or listening acceptance is claimed.\n",
-        include_str!("../../../Cargo.toml").lines().find(|s| s.starts_with("synthphone-e-vocal-dsp =")).ok_or("missing firmware DSP pin")?
+        "Synthetic vowel/noise fixtures; host replay of selected firmware DSP.\nsample_rate_hz={RATE}\nfixture_seconds={SECONDS}\nDSP dependency: {}\nA/Bs share one gain (never independently normalized).\nVocoder grid B is a known-pitch synthetic reference.\nBacking uses real VoiceManager gains and the shared device carrier builder.\nOptional before/after comparisons use archived listening WAVs with their original shared gain.\nbaseline_directory={}\nNo hardware, real-vocal intelligibility or listening acceptance is claimed.\n",
+        include_str!("../../../Cargo.toml").lines().find(|s| s.starts_with("synthphone-e-vocal-dsp =")).ok_or("missing firmware DSP pin")?,
+        args.get(1).map(|s| s.to_string_lossy()).unwrap_or_default()
     ))?;
     println!("{report}");
     Ok(())

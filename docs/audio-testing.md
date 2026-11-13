@@ -62,31 +62,32 @@ independently confirmed DSP defects.
 
 ## Reproduce vocal issue evidence
 
-The 2026-11-13 audit adds four **opt-in, currently failing** acceptance tests.
-They assert desired behavior, rather than asserting that a bug stays present.
-The default suite runs four positive/negative controls and lists the defect
-checks as ignored. Run them explicitly to reproduce the failures:
+The original 2026-11-13 audit on `main` (`6b715db`) reproduced four defects.
+On **`clankers-experiments`**, those four checks now run in the normal suite,
+alongside four fixture controls and four carrier/formant/phrase regressions. They
+assert the desired behavior with the original acceptance thresholds.
 
 ```sh
 LAB_HOST=$(rustc -vV | sed -n 's/^host: //p')
 export CARGO_TARGET_DIR="$PWD/target"
 export CARGO_INCREMENTAL=0
-cargo test --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --test vocal_issues -- --include-ignored
+cargo test --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --test vocal_issues
 cargo run --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --example vocal_evidence -- audio-lab-results/vocal-evidence-NEW
 ```
 
-The first command exits unsuccessfully until these defects are fixed. The
-second requires a new output directory and writes WAVs, `measurements.csv`
-and `provenance.txt`. It uses the unchanged firmware DSP pin through the same
+The second command requires a new output directory and writes WAVs,
+`measurements.csv` and `provenance.txt`. It uses the selected firmware DSP pin through the same
 streaming entry point and overlap-add replay. All fixtures use exactly 48 kHz
 for both processing and WAV headers, independent of the modeled device clock.
 
 Each `*-ab.wav` plays A, a one-third-second gap, then B. Each segment is about
 1.24 seconds including the DSP tail. A/B share one gain; neither segment is
 independently normalized. These are synthetic vowels and broadband noise,
-not human speech, physical-board captures or output from a repaired DSP.
+not human speech or physical-board captures. Append the original evidence
+directory as an optional second argument to also produce `*-before-after-ab.wav`
+files (archived original output first, experimental output second).
 
-| File prefix | A | B | Expected behavior / observation |
+| File prefix | A | B | Expected behavior / original audit observation |
 | --- | --- | --- | --- |
 | `vocoder-grid` | Current vocoder: 200 Hz vowel, 440 Hz carrier | Known 440 Hz vowel reference with the same formant model | At least 90% of steady energy should follow carrier harmonics below 10 kHz; 5/12 source/target pairs fail, worst 66.87% retained |
 | `unvoiced` | Pitch correction strength 0 | Current default strength 0.99 | Rejected unvoiced input should change by less than 1% relative RMS; measured 118.13% |
@@ -103,15 +104,43 @@ independently checked with the public period detector: over 99% of windows
 are rejected, while a known vowel is accepted. The 1%/5%/90% thresholds are
 engineering acceptance criteria, not a claim about perceptual thresholds.
 
-Backing tests supply the real `VoiceManager` frequencies and gain arrays to
-the DSP boundary; they do not emulate MIDI interrupts. The production carrier
-generation also omits these gains. The pitch reference demonstrates the
+Backing tests now supply real `VoiceManager` frequencies and gain arrays through
+the same carrier builder as the device, then into DSP; they do not emulate MIDI
+interrupts. Gains must be applied before individual carrier notes are mixed,
+because the DSP cannot recover those separate notes from one combined signal.
+The original DSP-only backing test demonstrated the missing response but did
+not enforce this ownership boundary. The updated test failed with unweighted
+carrier generation before the gain multiplication was added.
+The pitch reference demonstrates the
 requested harmonic grid, not the exact timbre a repaired vocoder must produce.
 This evidence does not establish real-vocal intelligibility or hardware timing.
 
 The report also records scalar carrier attenuation. Its cancellation is
 **diagnostic only**: carrier-level normalization can be intentional in a
-vocoder, and is not counted as an independent defect.
+vocoder, and is not counted as an independent defect. This experimental branch
+uses fixed envelope calibration so that carrier faders remain linear; the
+regression verifies 1/8 gain produces 1/8 RMS, and zero gain produces silence.
+
+The experiment passes rejected unvoiced frames without pitch or formant
+shifting and resets correction between phrases. Vocoding uses two spectral
+moving averages to transfer the broad vocal envelope onto the original carrier,
+with male/female settings warping that envelope. No bin-by-bin carrier
+normalization is applied. Firmware, lab and ARM guest pin experimental DSP
+`c29ac158fc04d19395d8cb43e0ea92d644fabaee`. Neither repository's `main` is changed.
+The experimental render passes all 12 carrier cases with at least **99.94%**
+of steady energy on the carrier grid. Rejected noise has zero difference
+between correction strength 0 and 0.99; formant and backing controls now
+produce different audio. Both formant modes retain the carrier pitch, and
+a noise gap releases the previous phrase's correction.
+
+Local verification on 2026-11-13: the host audio-lab suite and strict Clippy
+pass; all 720 steady pitch cases pass the unchanged 20-cent limit. All 14
+QEMU Cortex-M7 PCM cases match host output within 0.0001 peak error, and the
+injected lost frame is detected. The production ARM release builds within
+128 KiB flash (under 1 KiB remains after alignment); existing firmware compiler
+warnings remain. QEMU executes the DSP test guest, not the complete device.
+No board was flashed; real vocals, listening acceptance and physical timing
+remain unverified.
 
 ## Replay recordings
 

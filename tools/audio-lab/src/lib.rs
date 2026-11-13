@@ -31,6 +31,8 @@ pub mod vocal_evidence;
 // Compile the same entry point and constants as the device, without its HAL.
 #[path = "../../../src/constants.rs"]
 pub mod constants;
+#[path = "../../../src/vocal_carrier.rs"]
+pub mod vocal_carrier;
 #[path = "../../../src/vocal_frame.rs"]
 pub mod vocal_frame;
 use constants::{BLOCK_SIZE, FFT_SIZE, HOP_SIZE, SAMPLE_RATE};

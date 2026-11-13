@@ -471,23 +471,16 @@ pub fn handle_vocal_effects(
 
     if mode == ProcessingMode::Vocode || mode == ProcessingMode::Dry || is_tuned {
         if mode == ProcessingMode::Vocode {
-            let active_count = midi_frequencies.iter().filter(|&&f| f > 0.0).count();
-            if active_count > 0 {
-                let scale = 1.0 / active_count as f32;
-                for (i, &freq) in midi_frequencies.iter().enumerate() {
-                    if freq > 0.0 {
-                        carrier_oscs[i].set_waveform(wave_type);
-                        carrier_oscs[i].set_freq(freq);
-                    }
-                }
-                for _ in 0..HOP_SIZE {
-                    let mut sample = 0.0f32;
-                    for (i, &freq) in midi_frequencies.iter().enumerate() {
-                        if freq > 0.0 {
-                            sample += carrier_oscs[i].next_value();
-                        }
-                    }
-                    carrier_buffer.push(sample * scale);
+            let mut hop = [0.0; HOP_SIZE];
+            if app_lib::vocal_carrier::render_midi_hop(
+                carrier_oscs,
+                &midi_frequencies,
+                &midi_gains,
+                wave_type,
+                &mut hop,
+            ) {
+                for sample in hop {
+                    carrier_buffer.push(sample);
                 }
             } else {
                 // No MIDI notes held — fall back to keypad-driven pitch

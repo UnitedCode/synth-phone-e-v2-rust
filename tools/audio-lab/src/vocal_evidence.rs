@@ -1,5 +1,5 @@
 //! Reproducible listening fixtures and independent measurements for vocal audits.
-//! Uses the production DSP pin via `render`; no proposed DSP fix is substituted.
+//! Uses the selected firmware DSP pin via `render`, including experiments.
 use crate::{metrics, render, vocal_frame, Render};
 use std::f64::consts::TAU;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode, VocalEffectsConfig};
@@ -162,8 +162,29 @@ pub fn formant_pair(mode: ProcessingMode) -> Pair {
     }
 }
 
-/// Tests DSP behavior when supplied real VoiceManager group gains, as the
-/// production handler does. This is the DSP boundary, not an IRQ/MIDI emulator.
+/// The device's carrier builder, with one continuous oscillator bank per render.
+pub fn midi_carrier(settings: &MusicalSettings, seconds: f64) -> Vec<f32> {
+    use synthphone_e_vocal_dsp::audio::{Oscillator, Waveform};
+    let mut oscillators =
+        core::array::from_fn(|_| Oscillator::new(440.0, RATE as f32, Waveform::Saw));
+    let length = (seconds * RATE as f64) as usize;
+    let mut output = Vec::with_capacity(length);
+    while output.len() < length {
+        let mut hop = [0.0; crate::constants::HOP_SIZE];
+        crate::vocal_carrier::render_midi_hop(
+            &mut oscillators,
+            &settings.midi_frequencies,
+            &settings.midi_gains,
+            Waveform::Saw,
+            &mut hop,
+        );
+        output.extend_from_slice(&hop[..hop.len().min(length - output.len())]);
+    }
+    output
+}
+
+/// Exercises real VoiceManager gains and the shared device carrier builder,
+/// then the DSP boundary. This does not emulate MIDI interrupts.
 pub fn backing_pair(mode: ProcessingMode) -> Pair {
     let input = vowel(200.0, SECONDS, 1.0);
     let mut manager = crate::voice_generator::VoiceManager::<8>::new(RATE as f32);
@@ -180,17 +201,17 @@ pub fn backing_pair(mode: ProcessingMode) -> Pair {
         midi_gains: manager.get_harmony_voices(0).1,
         ..settings
     };
-    let frequencies: Vec<_> = frequencies
-        .iter()
-        .filter(|&&f| f > 0.0)
-        .map(|&f| f as f64)
-        .collect();
-    let carrier = carrier(&frequencies, SECONDS);
     let mut config = config();
     config.harmony_lead_gain = 0.0;
     Pair {
-        a: render(&input, &carrier, &config, &settings).raw,
-        b: render(&input, &carrier, &config, &muted).raw,
+        a: render(
+            &input,
+            &midi_carrier(&settings, SECONDS),
+            &config,
+            &settings,
+        )
+        .raw,
+        b: render(&input, &midi_carrier(&muted, SECONDS), &config, &muted).raw,
         input,
     }
 }
