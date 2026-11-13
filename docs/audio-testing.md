@@ -142,6 +142,36 @@ warnings remain. QEMU executes the DSP test guest, not the complete device.
 No board was flashed; real vocals, listening acceptance and physical timing
 remain unverified.
 
+## Before/after with real vocals
+
+`vocal_recording` renders an existing **mono** WAV through the selected DSP
+revision, producing pitch correction, a 220 Hz saw-carrier vocoder and male
+formant vocoder files. It uses the file's clock and records settings and PCM
+statistics in `render.txt`; it does not generate or replace the vocal.
+
+```sh
+cargo run --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --example vocal_recording -- INPUT_MONO.wav NEW_OUTPUT_DIRECTORY
+```
+
+Settings are identical across revisions: fast correction at 99% strength in
+C major, no octave shift, and the device's final vocal trim/ceiling. The key
+is a test setting, not an automatic estimate of the recording's intended key.
+To compare an older DSP, run the same example with a Cargo `patch` override
+pointing to that revision's existing checkout, then restore the normal lockfile
+before running the experimental revision. Record both exact DSP commit IDs.
+Keep unmatched outputs; use the existing `harmony_capture match` command for
+constant whole-file playback gains, with no compression or extra effects.
+
+The local 2026-11-13 comparison uses the previously authorized separated
+`head-on-a-plate-stems/vocals.wav`, source seconds 30..40, left channel only,
+with 0.35 input gain. Its 44,100 Hz clock is preserved. Baseline `4cf708a`
+and experimental `c29ac15` use the same input and carrier. The final A/B files
+play baseline, 0.6 seconds of silence, then experimental, with loudness matched
+for listening; raw levels and provenance remain alongside them under the
+ignored `audio-lab-results/real-vocal-ab-2026-11-13/` directory. Audio and source
+recordings stay out of Git. These are host renders, not physical-board captures
+or an automatic musical-quality grade.
+
 ## Replay recordings
 
 ```sh
