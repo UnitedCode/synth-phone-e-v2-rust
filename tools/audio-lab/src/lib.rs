@@ -26,6 +26,7 @@ pub mod voice_generator;
 pub use audio::drum_synth;
 pub mod levels;
 pub mod recording_levels;
+pub mod vocal_evidence;
 
 // Compile the same entry point and constants as the device, without its HAL.
 #[path = "../../../src/constants.rs"]

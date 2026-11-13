@@ -60,6 +60,59 @@ remaining limits. The historical baseline below used an older estimator and an
 incorrect target mapping for six minor keys; its failure count is not a count of
 independently confirmed DSP defects.
 
+## Reproduce vocal issue evidence
+
+The 2026-11-13 audit adds four **opt-in, currently failing** acceptance tests.
+They assert desired behavior, rather than asserting that a bug stays present.
+The default suite runs four positive/negative controls and lists the defect
+checks as ignored. Run them explicitly to reproduce the failures:
+
+```sh
+LAB_HOST=$(rustc -vV | sed -n 's/^host: //p')
+export CARGO_TARGET_DIR="$PWD/target"
+export CARGO_INCREMENTAL=0
+cargo test --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --test vocal_issues -- --include-ignored
+cargo run --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --example vocal_evidence -- audio-lab-results/vocal-evidence-NEW
+```
+
+The first command exits unsuccessfully until these defects are fixed. The
+second requires a new output directory and writes WAVs, `measurements.csv`
+and `provenance.txt`. It uses the unchanged firmware DSP pin through the same
+streaming entry point and overlap-add replay. All fixtures use exactly 48 kHz
+for both processing and WAV headers, independent of the modeled device clock.
+
+Each `*-ab.wav` plays A, a one-third-second gap, then B. Each segment is about
+1.24 seconds including the DSP tail. A/B share one gain; neither segment is
+independently normalized. These are synthetic vowels and broadband noise,
+not human speech, physical-board captures or output from a repaired DSP.
+
+| File prefix | A | B | Expected behavior / observation |
+| --- | --- | --- | --- |
+| `vocoder-grid` | Current vocoder: 200 Hz vowel, 440 Hz carrier | Known 440 Hz vowel reference with the same formant model | At least 90% of steady energy should follow carrier harmonics below 10 kHz; 5/12 source/target pairs fail, worst 66.87% retained |
+| `unvoiced` | Pitch correction strength 0 | Current default strength 0.99 | Rejected unvoiced input should change by less than 1% relative RMS; measured 118.13% |
+| `vocoder-formant` | Formant off | Male formant, ratio 0.5 | A meaningful formant adjustment should change output; measured exactly zero difference |
+| `vocoder-backing` | MIDI lead and backing enabled | Backing group muted in the supplied MIDI gains | Group mute should change output; measured exactly zero difference |
+| `pitch-formant-positive-control` | Pitch mode, formant off | Pitch mode, male formant | The same comparison detects a working formant control |
+| `harmony-backing-positive-control` | Harmony, both groups enabled | Harmony, backing group muted | The same comparison detects a working group fader |
+
+The carrier-grid measurement is a sinusoidal projection, not the DSP pitch
+detector. Known carrier-pitch fixtures retain over 98% energy and a wrong-pitch
+negative control is rejected. A 0.8-second measurement window contains integer
+cycles for every tested carrier (110/220/330/440 Hz). The noise fixture is
+independently checked with the public period detector: over 99% of windows
+are rejected, while a known vowel is accepted. The 1%/5%/90% thresholds are
+engineering acceptance criteria, not a claim about perceptual thresholds.
+
+Backing tests supply the real `VoiceManager` frequencies and gain arrays to
+the DSP boundary; they do not emulate MIDI interrupts. The production carrier
+generation also omits these gains. The pitch reference demonstrates the
+requested harmonic grid, not the exact timbre a repaired vocoder must produce.
+This evidence does not establish real-vocal intelligibility or hardware timing.
+
+The report also records scalar carrier attenuation. Its cancellation is
+**diagnostic only**: carrier-level normalization can be intentional in a
+vocoder, and is not counted as an independent defect.
+
 ## Replay recordings
 
 ```sh
