@@ -34,6 +34,7 @@ struct Options {
     mode: Option<ProcessingMode>,
     harmony_lead: f32,
     gate_midi: bool,
+    voiced_only: bool,
 }
 
 fn options(args: &[String]) -> Result<Options> {
@@ -46,6 +47,7 @@ fn options(args: &[String]) -> Result<Options> {
         match flag.as_str() {
             "--legato" => options.legato = true,
             "--gate-midi" => options.gate_midi = true,
+            "--voiced-only" => options.voiced_only = true,
             "--harmony-lead" => {
                 options.harmony_lead = args.next().ok_or("missing harmony lead gain")?.parse()?;
                 if !options.harmony_lead.is_finite() || !(0.0..=1.0).contains(&options.harmony_lead)
@@ -58,7 +60,8 @@ fn options(args: &[String]) -> Result<Options> {
                     Some("vocoder") => ProcessingMode::Vocode,
                     Some("pitch") => ProcessingMode::PitchControl,
                     Some("harmony") => ProcessingMode::Harmony,
-                    _ => return Err("--mode requires vocoder, pitch or harmony".into()),
+                    Some("dry") => ProcessingMode::Dry,
+                    _ => return Err("--mode requires vocoder, pitch, harmony or dry".into()),
                 });
             }
             "--window" => {
@@ -74,6 +77,9 @@ fn options(args: &[String]) -> Result<Options> {
     }
     if options.gate_midi && options.legato {
         return Err("--gate-midi requires normal note releases; omit --legato".into());
+    }
+    if options.voiced_only && options.mode != Some(ProcessingMode::Harmony) {
+        return Err("--voiced-only is a Harmony diagnostic; use --mode harmony".into());
     }
     Ok(options)
 }
@@ -252,7 +258,7 @@ fn pcm16(path: &Path, samples: impl IntoIterator<Item = f32>, rate: u32, gain: f
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 4 {
-        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato | --gate-midi] [--mode vocoder|pitch|harmony] [--harmony-lead 0..1]".into());
+        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato | --gate-midi] [--mode vocoder|pitch|harmony|dry] [--harmony-lead 0..1] [--voiced-only]".into());
     }
     let options = options(&args[4..])?;
     let source = wav::read(Path::new(&args[1]))?;
@@ -319,6 +325,7 @@ fn main() -> Result<()> {
         mode: match settings.mode {
             ProcessingMode::PitchControl => baseline_vocal_dsp::ProcessingMode::PitchControl,
             ProcessingMode::Harmony => baseline_vocal_dsp::ProcessingMode::Harmony,
+            ProcessingMode::Dry => baseline_vocal_dsp::ProcessingMode::Dry,
             _ => baseline_vocal_dsp::ProcessingMode::Vocode,
         },
         ..Default::default()
@@ -333,6 +340,8 @@ fn main() -> Result<()> {
     let mut next = 0;
     let mut midi_active = false;
     let mut gate = Vec::with_capacity(total);
+    let mut pitch_history = [0.0; 2048];
+    let mut pitch_trace = String::from("input_end_seconds,pitch_hz,muted_unvoiced\n");
     for block in (0..total).step_by(BLOCK_SIZE) {
         for i in block..block + BLOCK_SIZE {
             while next < midi.events.len() && midi.events[next].sample <= i {
@@ -388,13 +397,46 @@ fn main() -> Result<()> {
                     )
                 },
             );
-            after.finish_block(&carrier, &config, &settings, None);
+            let input_end = (block + BLOCK_SIZE) as f64 / f64::from(rate);
+            after.finish_block_with_kernel(
+                &carrier,
+                None,
+                |input, carrier, input_phases, output_phases, envelope, inv_envelope, state| {
+                    pitch_history.copy_within(HOP_SIZE.., 0);
+                    pitch_history[2048 - HOP_SIZE..].copy_from_slice(&input[FFT_SIZE - HOP_SIZE..]);
+                    let pitch = synthphone_e_vocal_dsp::dsp::frequency_analysis::find_pitch_harmony(
+                        &pitch_history,
+                        &config,
+                    );
+                    let mute = options.voiced_only && pitch <= 0.0;
+                    pitch_trace.push_str(&format!("{input_end},{pitch},{}\n", u8::from(mute)));
+                    let output = vocal_frame::process_frame(
+                        input,
+                        carrier,
+                        input_phases,
+                        output_phases,
+                        envelope,
+                        inv_envelope,
+                        state,
+                        &config,
+                        &settings,
+                    );
+                    // Keep the production state advancing. Only omit its
+                    // unvoiced synthesis frame in this offline diagnostic.
+                    if mute {
+                        [0.0; FFT_SIZE]
+                    } else {
+                        output
+                    }
+                },
+            );
         }
     }
     old.drain(..window_start);
     new.drain(..window_start);
     carrier_audio.drain(..window_start);
     gate.drain(..window_start);
+    fs::write(out.join("harmony-pitch-routing.csv"), pitch_trace)?;
     if options.gate_midi {
         audio_lab::midi_gate::apply(&mut old, &gate, rate)?;
         audio_lab::midi_gate::apply(&mut new, &gate, rate)?;
@@ -452,6 +494,10 @@ fn main() -> Result<()> {
     ));
     if options.legato {
         report.push_str("Audition modification: note releases/rests are held through the next attack; no SMF or device policy change.\n");
+    }
+    report.push_str(&format!("voiced_only_diagnostic={}\n", options.voiced_only));
+    if options.voiced_only {
+        report.push_str("Diagnostic modification: current Harmony frames rejected by the period tracker are muted before overlap-add. Frozen baseline remains unchanged. This removes consonants too; it is not a firmware fix.\n");
     }
     report.push_str("Quiet-gap check: 10ms RMS windows below 0.001 (-60 dBFS), excluding 2048 startup samples and the DSP tail. Legato auditions reject gaps over 0.2 seconds. This measures audio coverage, not semantic singing recognition.\n");
     report.push_str(&format!(

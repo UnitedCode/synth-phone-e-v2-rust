@@ -612,3 +612,124 @@ fn changing_vowel_balance_does_not_create_inharmonic_harmony() {
         );
     }
 }
+
+#[test]
+fn bass_vocal_below_80_hz_stays_on_the_held_midi_note() {
+    let rate = 44_100.0;
+    let input: Vec<_> = (0..(rate * 2.0) as usize)
+        .map(|i| {
+            let phase = std::f64::consts::TAU * 73.6 * i as f64 / rate;
+            (0.03 * phase.sin()
+                + 0.06 * (2.0 * phase).sin()
+                + 0.2 * (3.0 * phase).sin()
+                + 0.08 * (4.0 * phase).sin()
+                + 0.035 * (5.0 * phase).sin()) as f32
+        })
+        .collect();
+    let source = audio_lab::estimate_pitch_at_rate(&input[10_000..18_192], rate).unwrap();
+    assert!(audio_lab::cents(source, 73.6).abs() < 5.0);
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = rate as f32;
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 220.0;
+    let output = render(&input, &[], &config, &settings);
+    let analysis = &output.raw[22_050..66_150];
+    let projection = |samples: &[f32], hz: f64| {
+        let (step_s, step_c) = (std::f64::consts::TAU * hz / rate).sin_cos();
+        let (mut s, mut c, mut re, mut im) = (0.0, 1.0, 0.0, 0.0);
+        for &x in samples {
+            re += f64::from(x) * c;
+            im += f64::from(x) * s;
+            (s, c) = (s * step_c + c * step_s, c * step_c - s * step_s);
+        }
+        2.0 * (re * re + im * im).sqrt() / samples.len() as f64
+    };
+    let fraction = |samples: &[f32]| {
+        let energy =
+            samples.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>() / samples.len() as f64;
+        (1..=20)
+            .map(|h| projection(samples, 220.0 * h as f64).powi(2) * 0.5)
+            .sum::<f64>()
+            / energy
+    };
+    // A dominant upper partial can make a monophonic autocorrelation oracle
+    // choose a subharmonic. Independently measure the full requested grid and
+    // require the target fundamental itself, with the unshifted input as a
+    // negative control for this measurement.
+    assert!(fraction(&input[22_050..66_150]) < 0.2);
+    let on_target = fraction(analysis);
+    eprintln!(
+        "73.6 Hz bass -> 220 Hz: {:.3}% on target harmonic grid",
+        on_target * 100.0
+    );
+    assert!(
+        on_target > 0.95,
+        "bass target retained only {:.2}% on its harmonic grid",
+        on_target * 100.0
+    );
+    assert!(projection(analysis, 220.0) > 0.01);
+}
+
+#[test]
+#[ignore = "Known unresolved low-voice overlap distortion; run explicitly to reproduce (docs/audio-testing.md)"]
+fn overlapping_upper_harmonics_do_not_wobble_a_low_voices_target() {
+    let rate = 44_100.0;
+    let input: Vec<_> = (0..(rate * 3.0) as usize)
+        .map(|i| {
+            let t = i as f64 / rate;
+            let phase = std::f64::consts::TAU * 75.0 * t;
+            let blend = 0.5 + 0.45 * (std::f64::consts::TAU * 2.0 * t).sin();
+            (0.03 * phase.sin()
+                + 0.06 * (2.0 * phase).sin()
+                + 0.2 * (3.0 * phase).sin()
+                + 0.08 * (4.0 * phase).sin()
+                + 0.035 * (5.0 * phase).sin()
+                + 0.25 * blend * (9.0 * phase).sin()
+                + 0.25 * (1.0 - blend) * (10.0 * phase).sin()) as f32
+        })
+        .collect();
+    let mut config = vocal_frame::default_config();
+    config.sample_rate = rate as f32;
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 350.0;
+    let output = render(&input, &[], &config, &settings);
+    for (name, samples, fundamental) in [
+        ("source control", &input[22_050..110_250], 75.0),
+        ("held harmony", &output.raw[22_050..110_250], 350.0),
+    ] {
+        let energy = samples.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>();
+        let mut captured = 0.0;
+        // Allow the source's legitimate 2 Hz amplitude-modulation sidebands.
+        for h in 1..=20 {
+            for side in -5..=5 {
+                let hz = fundamental * h as f64 + side as f64 * 2.0;
+                let (step_s, step_c) = (std::f64::consts::TAU * hz / rate).sin_cos();
+                let (mut s, mut c, mut re, mut im) = (0.0, 1.0, 0.0, 0.0);
+                for &x in samples {
+                    re += f64::from(x) * c;
+                    im += f64::from(x) * s;
+                    (s, c) = (s * step_c + c * step_s, c * step_c - s * step_s);
+                }
+                captured += 2.0 * (re * re + im * im) / samples.len() as f64;
+            }
+        }
+        let outside = (1.0 - captured / energy).max(0.0);
+        eprintln!(
+            "overlapping harmonics {name}: {:.3}% outside target bands",
+            outside * 100.0
+        );
+        assert!(
+            outside < 0.05,
+            "{name} created {:.3}% off-grid energy",
+            outside * 100.0
+        );
+    }
+}

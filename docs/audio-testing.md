@@ -328,7 +328,7 @@ the ignored `audio-lab-results/hbfs-midi-vocoder-2026-11-13/` directory.
 
 ### Vowel-dependent warbling and a strictly MIDI-gated audition
 
-The current experimental DSP pin is
+The earlier vowel-tracking experimental DSP pin was
 `47cd58cfe7bb3c910c3996b7989399b6b671cd8c`. A new public-stream fixture
 keeps the singer at 150 Hz while changing odd/even harmonic balance at 2 Hz,
 with a held 220 Hz MIDI target. The previous tracker alternated registers;
@@ -379,6 +379,61 @@ peak-height calculation in `47cd58c` restores a successful pinned release
 build, with its final flash load ending at `0x0801FF94` (**108 bytes spare**).
 The phone has not been flashed; physical timing and listening acceptance
 remain unverified.
+
+### Remaining roughness around 24 seconds
+
+The current experimental pin is `bc67e84c48952a718823d032554617ab1e5be874`.
+Its bass-range correction removes an unintended hard-coded 80 Hz period-search
+floor: the configured lower bound can now reach 50 Hz. The public streaming
+test uses a known 73.6 Hz rich vocal with a held 220 Hz target and an independent
+Fourier measurement, including the unshifted source as a negative control.
+Target-grid energy increases from 4.280% at `47cd58c` to 97.292%. The DSP unit
+test also covers bass pitches at both recording and device sample clocks, and
+the ARM replay adds `harmony-bass-73` as case 21.
+
+For the actual recording's input interval 23.82..24.15 seconds, the former pin
+rejects 49 of 57 windows and identifies the remaining windows near 109 Hz.
+The bass fix identifies all 57 near 73.26..73.72 Hz. **This does not resolve
+the listening complaint**: the user still hears roughness with both one F4
+voice and the complete MIDI chord, while the dry source does not share it.
+The matched four-second MP3s remain in the ignored
+`audio-lab-results/harmony-24s-2026-11-13/` directory, about 98 KB each.
+
+A narrower, pitch-dependent formant-envelope trial passed a synthetic vowel
+resonance check but also failed the user's listening test. It was backed out;
+its patch and renders are retained locally. A separate trace now appends
+`phase_refined_hz` and `peak_harmonic`: in the same interval, the strongest-bin
+refinement ranges from 71.68 to 75.25 Hz despite the steadier period estimate.
+This is a possible contributor, not a proven perceptual diagnosis.
+
+The explicitly ignored regression
+`overlapping_upper_harmonics_do_not_wobble_a_low_voices_target` records another
+unresolved limitation. Its known 75 Hz source crossfades harmonic 9 and 10 at
+2 Hz, while MIDI holds 350 Hz. Independent projection permits the legitimate
+modulation sidebands: the source control has effectively zero off-grid energy,
+but current Harmony has 5.647%, exceeding the 5% bound. Skipping the refinement
+in this low register still leaves 5.159%, so that trial was also rejected.
+Run this known-failing reproduction explicitly:
+
+```sh
+cargo test --offline --locked --manifest-path tools/audio-lab/Cargo.toml \
+  --target "$LAB_HOST" --test harmony overlapping_upper -- --ignored --nocapture
+```
+
+For further listening isolation, `midi_vocoder --mode harmony --voiced-only`
+keeps the production DSP state advancing but omits synthesis frames whose
+2048-sample period estimate is absent. This host-only diagnostic removes
+consonants too; it is not a device fix. The frozen baseline is unaffected.
+`harmony-pitch-routing.csv` records input-frame end times, pitch and whether
+a frame was muted; those times precede the buffered audible output. Keep
+`--gate-midi` enabled for the requested exact silence during MIDI rests.
+`--mode dry` provides a source control through the same replay path.
+
+The validated bass pin has 60 DSP tests, 157 passing host tests plus the one
+explicitly ignored unresolved reproduction, and 21 bit-exact Cortex-M7 guest
+cases with missing-frame fault detection. The Git-pinned release fits with
+100 bytes of flash remaining. Work stays on `clankers-experiments`; main and
+the physical phone are unchanged, and the harmony quality issue remains open.
 
 ## Replay recordings
 

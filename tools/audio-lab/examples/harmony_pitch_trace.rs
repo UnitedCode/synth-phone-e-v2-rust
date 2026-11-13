@@ -16,7 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sample_rate: config.sample_rate,
             ..Default::default()
         };
-        println!("seconds,coarse_after_hz,resolved_before_hz,independent_hz,odd_to_even_energy");
+        println!("seconds,coarse_after_hz,resolved_before_hz,independent_hz,odd_to_even_energy,phase_refined_hz,peak_harmonic");
+        let mut phases = [0.0; FFT_SIZE];
         let mut previous = 0.0;
         let mut unvoiced = 0;
         let (mut absent, mut jumps, mut last) = ([0; 2], [0; 2], [0.0_f32; 2]);
@@ -33,8 +34,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *sample *= window;
             }
             let fft = Fft1024::forward_fft(&mut frame);
-            let magnitudes: [f32; 512] =
-                core::array::from_fn(|i| (fft[i].re * fft[i].re + fft[i].im * fft[i].im).sqrt());
+            let (mut magnitudes, mut frequencies) = ([0.0; 512], [0.0; 512]);
+            frequency_analysis::perform_phase_vocoder_analysis::<1024, 512>(
+                fft,
+                &mut phases,
+                &mut magnitudes,
+                &mut frequencies,
+                HOP_SIZE,
+            );
+            let peak = (1..512)
+                .max_by(|&a, &b| magnitudes[a].total_cmp(&magnitudes[b]))
+                .unwrap();
+            let measured = frequencies[peak] * config.sample_rate / 1024.0;
+            let harmonic = if coarse > 0.0 {
+                (measured / coarse).round().max(1.0)
+            } else {
+                0.0
+            };
+            let candidate = measured / harmonic;
+            let refined = if coarse > 0.0 && (candidate / coarse - 1.0).abs() < 0.03 {
+                candidate
+            } else {
+                coarse
+            };
             let resolved = baseline_vocal_dsp::dsp::frequency_analysis::resolve_harmony_octave_1024(
                 old_coarse,
                 &magnitudes,
@@ -72,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             println!(
-                "{},{coarse},{resolved},{},{}",
+                "{},{coarse},{resolved},{},{},{refined},{harmonic}",
                 (start + 8192) as f64 / f64::from(config.sample_rate),
                 if frames % 8 == 0 {
                     audio_lab::estimate_pitch_at_rate(history, f64::from(config.sample_rate))
