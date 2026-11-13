@@ -225,6 +225,27 @@ matched ten-second previews, complete original/updated performances, MIDI-only
 carrier preview and a provenance report are written to the chosen directory.
 The before/after preview plays original, 0.6 seconds of silence, then updated.
 
+The same renderer supports `--mode pitch` and `--mode harmony` (default:
+`vocoder`). Both revisions use their complete streaming entry points with
+independent state and identical settings, MIDI targets, replay timing and input.
+Pitch uses 99% correction and speed 10; Harmony renders MIDI voices only with
+`harmony_lead_gain = 0`. The report records the mode/config and the RMS of the
+sample-by-sample before/after difference, including exact equality when zero.
+
+For the local Hide and Seek audition, the source SMF is
+`Downloads/other/hide-and-seek-imogen-heap.mid`. The existing `midi_reference`
+notes-only merge retains all distinct held pitches (maximum eight); its
+`--select-vocal-midi ... 0 127 1` reduction supplies the highest held pitch for
+the autotune target. Both use MIDI seconds 0..30 with audition-only legato,
+paired with Si Veo a Tu Mamá vocal seconds 100..130, left channel, gain 0.35,
+native 44,100 Hz. This is a different-song vocal performance, not aligned
+Hide and Seek lyrics. No vocal looping, splicing or resampling is used.
+The baseline/experimental Harmony WAVs are byte-identical because that engine
+was unchanged by this experiment. Autotune differs; neither difference size
+nor equality establishes subjective musical quality. Four 96 kbps mono MP3s
+are exported with common pre-encode RMS 0.07 under
+`audio-lab-results/hide-seek-pitch-harmony-2026-11-13/` for sharing.
+
 For a continuous singing audition, add `--window MIDI_START DURATION --legato`.
 The supplied vocal begins at the selected MIDI window and must cover that
 duration. Legato holds the last note/chord through releases until the next

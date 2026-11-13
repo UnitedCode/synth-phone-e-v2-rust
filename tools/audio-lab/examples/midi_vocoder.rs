@@ -1,4 +1,4 @@
-//! Real-recording MIDI vocoder audition, including the frozen original DSP.
+//! Real-recording MIDI vocal-effects audition, including the frozen original DSP.
 use audio_lab::{
     constants::{BLOCK_SIZE, FFT_SIZE, HOP_SIZE},
     metrics, output_mix,
@@ -31,6 +31,7 @@ struct Options {
     preview_start: f64,
     window: Option<(f64, f64)>,
     legato: bool,
+    mode: Option<ProcessingMode>,
 }
 
 fn options(args: &[String]) -> Result<Options> {
@@ -42,6 +43,14 @@ fn options(args: &[String]) -> Result<Options> {
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--legato" => options.legato = true,
+            "--mode" => {
+                options.mode = Some(match args.next().map(String::as_str) {
+                    Some("vocoder") => ProcessingMode::Vocode,
+                    Some("pitch") => ProcessingMode::PitchControl,
+                    Some("harmony") => ProcessingMode::Harmony,
+                    _ => return Err("--mode requires vocoder, pitch or harmony".into()),
+                });
+            }
             "--window" => {
                 let start = args
                     .next()
@@ -230,7 +239,7 @@ fn pcm16(path: &Path, samples: impl IntoIterator<Item = f32>, rate: u32, gain: f
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 4 {
-        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato]".into());
+        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato] [--mode vocoder|pitch|harmony]".into());
     }
     let options = options(&args[4..])?;
     let source = wav::read(Path::new(&args[1]))?;
@@ -281,18 +290,27 @@ fn main() -> Result<()> {
         core::array::from_fn(|_| Oscillator::new(440.0, rate as f32, Waveform::Saw));
     let mut config = vocal_frame::config_for_controls(10, 10);
     config.sample_rate = rate as f32;
-    let settings = MusicalSettings {
-        mode: ProcessingMode::Vocode,
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: options.mode.unwrap_or(ProcessingMode::Vocode),
         ..Default::default()
     };
     let baseline_config = baseline_vocal_dsp::VocalEffectsConfig {
         sample_rate: rate as f32,
+        transition_speed: config.transition_speed,
+        pitch_correction_strength: config.pitch_correction_strength,
+        harmony_lead_gain: config.harmony_lead_gain,
         ..Default::default()
     };
-    let baseline_settings = baseline_vocal_dsp::MusicalSettings {
-        mode: baseline_vocal_dsp::ProcessingMode::Vocode,
+    let mut baseline_settings = baseline_vocal_dsp::MusicalSettings {
+        mode: match settings.mode {
+            ProcessingMode::PitchControl => baseline_vocal_dsp::ProcessingMode::PitchControl,
+            ProcessingMode::Harmony => baseline_vocal_dsp::ProcessingMode::Harmony,
+            _ => baseline_vocal_dsp::ProcessingMode::Vocode,
+        },
         ..Default::default()
     };
+    let mut baseline_state = baseline_vocal_dsp::VocalStreamState::new();
     let total = (window_end + FFT_SIZE * 2).div_ceil(BLOCK_SIZE) * BLOCK_SIZE;
     let (mut old, mut new, mut carrier_audio) = (
         Vec::with_capacity(total),
@@ -321,6 +339,10 @@ fn main() -> Result<()> {
         }
         if after.pending() {
             let (frequencies, gains) = manager.get_harmony_voices(64);
+            settings.midi_frequencies = frequencies;
+            settings.midi_gains = gains;
+            baseline_settings.midi_frequencies = frequencies;
+            baseline_settings.midi_gains = gains;
             let mut carrier = [0.0; HOP_SIZE];
             vocal_carrier::render_midi_hop(
                 &mut oscillators,
@@ -335,16 +357,15 @@ fn main() -> Result<()> {
             before.finish_block_with_kernel(
                 &carrier,
                 None,
-                |input, carrier, input_phases, output_phases, _, _, _| {
-                    baseline_vocal_dsp::effects::process_vocode_generic::<
-                        1024,
-                        512,
-                        baseline_vocal_dsp::dsp::Fft1024,
-                    >(
+                |input, carrier, input_phases, output_phases, envelope, inv_envelope, _| {
+                    baseline_vocal_dsp::process_vocal_effects_1024_stream(
                         input,
-                        carrier,
+                        Some(carrier),
                         input_phases,
                         output_phases,
+                        envelope,
+                        inv_envelope,
+                        &mut baseline_state,
                         &baseline_config,
                         &baseline_settings,
                     )
@@ -356,7 +377,7 @@ fn main() -> Result<()> {
     old.drain(..window_start);
     new.drain(..window_start);
     carrier_audio.drain(..window_start);
-    // These blends combine the two vocoder algorithms, with NO original voice.
+    // These blends combine the two effect revisions, with no added dry voice.
     let blends: Vec<_> = [0.8_f32, 0.9]
         .into_iter()
         .map(|mix| {
@@ -385,7 +406,8 @@ fn main() -> Result<()> {
     }
     let mut report = format!("midi={}\nvocal={}\n{}sample_rate={rate}\npreview_start={preview_start}\npreview_end={}\ncommon_playback_rms={common_rms}\n", args[0], args[1], midi.report, end as f64 / rate as f64);
     report.push_str(&format!(
-        "midi_window_start={}\nwindow_duration={}\nlegato_audition={}\n",
+        "mode={:?}\nconfig={config:?}\nmidi_window_start={}\nwindow_duration={}\nlegato_audition={}\n",
+        settings.mode,
         window_start as f64 / rate as f64,
         duration as f64 / rate as f64,
         options.legato
@@ -405,7 +427,16 @@ fn main() -> Result<()> {
             .ok_or("missing DSP pin")?;
         report.push_str(&format!("dependency: {dependency}\n"));
     }
-    report.push_str("Original and updated kernels use identical MIDI carriers, input and buffering.\nNo dry-voice blend; 80/20 and 90/10 blend NEW/OLD vocoder output.\nThe real vocal is a different song; this is not Daft Punk's voice or lyrics.\nHost DSP replay, not a physical-board capture or a verified melody transcription.\n");
+    report.push_str("Original and updated kernels use identical MIDI targets/carriers, input, configuration and buffering.\nNo added dry-voice blend; Harmony uses MIDI voices only.\n80/20 and 90/10 blend NEW/OLD effect output.\nThe source vocal is independent of the MIDI; this does not reproduce the MIDI song's singer or lyrics.\nHost DSP replay, not a physical-board capture or a verified melody transcription.\n");
+    let difference_rms = (versions[0]
+        .1
+        .iter()
+        .zip(&versions[1].1)
+        .map(|(&a, &b)| (f64::from(a) - f64::from(b)).powi(2))
+        .sum::<f64>()
+        / versions[0].1.len() as f64)
+        .sqrt();
+    report.push_str(&format!("before_after_difference_rms={difference_rms}\n"));
     let mut gains = Vec::new();
     for (name, audio) in &versions {
         let m = metrics(&audio[start..end]);
@@ -467,7 +498,7 @@ fn main() -> Result<()> {
     )?;
     fs::write(out.join("provenance.txt"), &report)?;
     println!(
-        "{}\nWrote MIDI vocoder audition and matched previews to {}",
+        "{}\nWrote MIDI vocal-effects audition and matched previews to {}",
         midi.report,
         out.display()
     );
