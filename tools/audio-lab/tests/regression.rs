@@ -43,6 +43,12 @@ fn lab_uses_the_firmware_dsp_pin_and_locked_dependencies() {
     };
     let firmware_packages = identities(include_str!("../../../Cargo.lock"));
     for package in identities(include_str!("../Cargo.lock")) {
+        let baseline = "name = \"synthphone-e-vocal-dsp\"\nversion = \"0.1.1\"\nsource = \"git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=4cf708acb2c1744707a316c9fc37bf15b46d8f3e#4cf708acb2c1744707a316c9fc37bf15b46d8f3e\"";
+        if package == baseline {
+            assert!(lab.lines().any(|s| s.starts_with("baseline-vocal-dsp =")
+                && s.contains("rev = \"4cf708acb2c1744707a316c9fc37bf15b46d8f3e\"")));
+            continue;
+        }
         if package.starts_with("name = \"audio-lab\"") || package.starts_with("name = \"hound\"") {
             continue;
         }
@@ -186,4 +192,30 @@ fn metrics_expose_nan_clipping_and_dropouts() {
     assert_eq!(m.non_finite, 1);
     assert_eq!(m.over_full_scale, 1);
     assert_eq!(m.silent_hops, 1);
+}
+
+#[test]
+fn comparison_kernels_preserve_the_device_hop_and_overlap_timing() {
+    let mut replay = audio_lab::replay::Replay::new();
+    let mut output = Vec::new();
+    for _ in 0..700 {
+        output.push(replay.sample(0.0));
+        output.push(replay.sample(0.0));
+        replay.finish_block_with_kernel(&[0.0; HOP_SIZE], None, |_, _, _, _, _, _, _| {
+            [1.0; FFT_SIZE]
+        });
+    }
+    // The first job follows sample 257 and completes after the 2-sample DMA
+    // block; subsequent jobs overlap at 256-sample intervals.
+    assert!(output[..258].iter().all(|&x| x == 0.0));
+    for (sample, expected) in [
+        (258, 1.0),
+        (513, 1.0),
+        (514, 2.0),
+        (770, 3.0),
+        (1026, 4.0),
+        (1282, 4.0),
+    ] {
+        assert_eq!(output[sample], expected, "wrong overlap at sample {sample}");
+    }
 }

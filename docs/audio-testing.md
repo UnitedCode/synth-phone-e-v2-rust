@@ -205,6 +205,49 @@ ignored `audio-lab-results/real-vocal-ab-2026-11-13/` directory. Audio and sourc
 recordings stay out of Git. These are host renders, not physical-board captures
 or an automatic musical-quality grade.
 
+## MIDI-driven vocoder scenario
+
+`midi_vocoder` plays one selected SMF track through the device's VoiceManager
+and saw-carrier builder, then applies the same real microphone recording to
+the original and current vocoder kernels. It preserves note/rest timing,
+sustain and pitch bend, and honors the global tempo map. Percussion is excluded;
+select one melodic track with up to eight simultaneous held notes.
+
+```sh
+cargo run --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --example midi_vocoder -- SONG.mid VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX PREVIEW_START_SECONDS
+```
+
+Track indices are zero-based; preview start defaults to zero. The real mono
+WAV must cover the complete MIDI duration (up to 600 seconds); it is not
+automatically looped, stretched or replaced with synthetic vocals. The file's
+sample rate configures both DSPs and carrier oscillators. Unmatched float WAVs,
+matched ten-second previews, complete original/updated performances, MIDI-only
+carrier preview and a provenance report are written to the chosen directory.
+The before/after preview plays original, 0.6 seconds of silence, then updated.
+
+The original DSP is a frozen **host-only dev dependency** at `4cf708a`, with an
+exact exception in the dependency-parity test. Firmware and the ARM guest
+retain only the current DSP. Both kernels use the same replay buffers and hop
+timing; an independent constant-frame test checks the first job and overlap
+positions, and the 17 ARM parity cases still pass.
+
+The 2026-11-13 local scenario uses the supplied “Harder, Better, Faster,
+Stronger” MIDI's **track 2, Pop Synth**, 351 notes with up to three held at once.
+The selected melody is not a verified vocal transcription. Its full timeline
+is 218.91 seconds; previews use MIDI seconds 19.2..29.2. The previously used
+separated Head On A Plate vocal starts at its source second 10.8, left channel,
+0.35 gain and native 44,100 Hz clock. Consequently the preview's voice is the
+same original 30..40-second passage used earlier. No voice looping is needed.
+This is not Daft Punk's voice, lyrics or a full General MIDI backing arrangement.
+
+All comparisons here are fully vocoded: **no natural voice is mixed in**. The
+additional `new80-old20` and `new90-old10` WAVs blend the *two algorithms* before
+the final output trim, as listening previews. They do not change the device's
+existing dry/wet Vocode Amount control. Preview versions are matched by constant
+whole-file gain; full original/updated files share a common gain. The source
+MIDI, recordings, generated audio and detailed provenance remain local under
+the ignored `audio-lab-results/hbfs-midi-vocoder-2026-11-13/` directory.
+
 ## Replay recordings
 
 ```sh

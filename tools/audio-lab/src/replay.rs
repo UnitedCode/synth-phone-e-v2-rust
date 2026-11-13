@@ -80,6 +80,41 @@ impl Replay {
         settings: &MusicalSettings,
         omit_hop: Option<usize>,
     ) {
+        self.finish_block_with_kernel(
+            carrier,
+            omit_hop,
+            |input, carrier, input_phases, output_phases, envelope, inv_envelope, state| {
+                vocal_frame::process_frame(
+                    input,
+                    carrier,
+                    input_phases,
+                    output_phases,
+                    envelope,
+                    inv_envelope,
+                    state,
+                    config,
+                    settings,
+                )
+            },
+        );
+    }
+
+    /// Use the same buffering/timing with a frozen comparison kernel. The
+    /// regular firmware replay above still uses the pinned production entry.
+    pub fn finish_block_with_kernel(
+        &mut self,
+        carrier: &[f32; HOP_SIZE],
+        omit_hop: Option<usize>,
+        process: impl FnOnce(
+            &mut [f32; FFT_SIZE],
+            &mut [f32; FFT_SIZE],
+            &mut [f32; FFT_SIZE],
+            &mut [f32; FFT_SIZE],
+            &mut [f32; FFT_SIZE / 2],
+            &mut [f32; FFT_SIZE / 2],
+            &mut vocal_frame::VocalStreamState,
+        ) -> [f32; FFT_SIZE],
+    ) {
         let Some(write_index) = self.pending.take() else {
             return;
         };
@@ -91,7 +126,7 @@ impl Replay {
         self.input.block_from(write_index, &mut frame);
         self.carrier
             .block_from(self.carrier.write_index(), &mut carrier_frame);
-        let synthesis = vocal_frame::process_frame(
+        let synthesis = process(
             &mut frame,
             &mut carrier_frame,
             &mut self.input_phases,
@@ -99,8 +134,6 @@ impl Replay {
             &mut self.envelope,
             &mut self.inv_envelope,
             &mut self.vocal_state,
-            config,
-            settings,
         );
         if omit_hop != Some(self.hops) {
             self.output.write_overlapped_samples(&synthesis);

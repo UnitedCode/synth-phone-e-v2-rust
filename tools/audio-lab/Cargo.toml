@@ -14,6 +14,14 @@ libm = "0.2.15"
 log = "=0.4.28"
 midly = { version = "0.5.3", default-features = false, features = ["alloc"] }
 
+[dev-dependencies]
+# Frozen pre-experiment algorithm for listening comparisons, never firmware.
+baseline-vocal-dsp = { package = "synthphone-e-vocal-dsp", git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "4cf708acb2c1744707a316c9fc37bf15b46d8f3e" }
+
+[[example]]
+name = "midi_vocoder"
+test = true
+
 [[example]]
 name = "midi_reference"
 test = true
