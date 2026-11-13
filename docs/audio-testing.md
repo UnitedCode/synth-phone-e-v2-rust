@@ -437,7 +437,7 @@ the physical phone are unchanged, and the harmony quality issue remains open.
 
 ### Continuous longer-window and independent-reference trials
 
-The current pin is `ddb95713b353942e37bf9431518fca713bb8cfeb`. Harmony's
+The longer-window trial pin was `ddb95713b353942e37bf9431518fca713bb8cfeb`. Harmony's
 kernel now supports a generic FFT window; the production entry point still
 selects 1024 samples. The existing 1024-point recording render compares
 byte-for-byte identical with `bc67e84`. No longer window is enabled on the phone.
@@ -493,6 +493,103 @@ tests plus the explicitly ignored 1024-point overlap reproduction, the separate
 WORLD known-note test, strict host Clippy and 21 Cortex-M7 parity cases with
 lost-frame detection. The Git-pinned firmware fits with **84 bytes spare**.
 These desktop trials have not been flashed or accepted as a harmony fix.
+
+### Tracking substitution, waveform shifting, and fixed-carrier controls
+
+The user clarified that the independent WORLD reference still **wavers or
+warbles**, rather than merely sounding different in tone. A subsequent local
+trial fed WORLD's source-F0 contour through the ordinary 1024-point harmony
+shifter, on the same single held F4 note. The user heard about the same wavering.
+That trial's external-pitch API and host option were backed out; patches,
+CSV and matched `register-before.mp3`/`register-after.mp3` remain in the local
+results directory. The 73-versus-220 Hz disagreement alone is not a sufficient
+explanation or fix for this complaint.
+
+The independent Rust reference tool now accepts `--psola` to compare
+pitch-synchronous waveform overlap-add with the FFT shifter. It correlates
+adjacent waveform cycles using DIO/StoneMask's period guide, places Hann-tapered
+grains at the requested MIDI periods, and preserves unvoiced input through a
+10 ms routing fade. It is an allocating desktop prototype, not an embedded
+backend or a production option. The same MIDI-rest mask remains mandatory for
+these listening controls. Its synthetic 220 Hz source has 5 Hz vibrato at
+60 cents depth: held targets at 174.614 and 350 Hz stay within 0.916 and
+0.866 cents, respectively, using an independent output pitch measurement.
+Another test requires exact unvoiced preservation and silence without MIDI.
+All three reference-tool tests and strict Clippy pass.
+
+The real waveform trial also fails the user's listening test. Its matched
+single-note MP3 is `psola-after.mp3`; the source, default harmony and waveform
+spectrograms are retained as `source-spectrum.png`, `current-spectrum.png`
+and `psola-spectrum.png`. Passing the synthetic pitch check does not establish
+natural tone or resolved modulation in this stem recording.
+
+The next controls use the existing MIDI carrier alone and the same carrier
+through the fully wet current vocoder. They do not use source-pitch tracking
+or waveform pitch shifting. `--gate-midi` now also masks the exported carrier
+audio, and the renderer checks exact rest silence in all three streams.
+The level-matched mono 44.1 kHz MP3s `carrier-control.mp3` and
+`vocoder-control.mp3` compare whether the reported wavering follows the vocal
+envelope even with a fixed MIDI carrier. They are diagnostic controls, not
+announced harmony fixes. Firmware and its DSP pin remain unchanged.
+
+### Continuity correction: measured and partially accepted
+
+The current pin is `dd5d4cd9ebfc176bbb6a964951b18da45a3d84cc`. A known fully
+voiced source slides from 200 to 300 Hz in 80 ms while MIDI holds 350 Hz.
+The former shifter's worst output error is 33.13 cents; the new output stays
+within 0.37 cents in independent rolling-window pitch measurements. The
+period window can lag or reject rapid movement, so Harmony now uses the last
+instantaneous register to interpret current spectral phase. A valid complete
+period still identifies large register changes. Brief rejected periods can
+be recovered only when a strong tonal peak carries over 4% of spectral power,
+and cached register information expires after 48 unvoiced hops. Noise is not
+automatically treated as a remembered voice. A voice-to-noise test requires
+the noise output to match Dry even while that register cache is still alive.
+
+The user's verdict on the same real four-second full-chord passage is **some
+improvement, still wavering**. Keep this correction, but do not call the
+perceptual problem resolved. `continuity-before.mp3` and `continuity-after.mp3`
+are matched by constant RMS gain, retain the exact MIDI-rest mask, and are
+about 98 KB each. `continuity-pinned/` records the final Git-pinned render.
+The coarse-period CSV does not include the kernel's final phase-based
+recovery: its gate column is now called `period_rejection_mute` to make that
+distinction explicit.
+
+The first firmware build exceeded flash by 32 bytes. Reducing the quarter-wave
+table from 257 to 129 entries with a leading curvature correction retains the
+existing <5e-6 sine/cosine error bound and bounded runtime. The final Git-pinned
+release fits with **196 bytes spare**. All 60 DSP tests and 12 doctests, 162
+host tests and 22 Cortex-M7 parity cases pass; lost-frame injection is caught.
+The separate reference tool has three passing tests. The two explicitly
+ignored lab reproductions remain documented limitations, not passing checks.
+
+A later analysis-only rumble filter corrected a constructed 220 Hz dominant
+voice plus quiet 73.33 Hz component, but a global filter regressed bass and
+changing-vowel tests. A conditional retry passed those controls while leaving
+the actual recording's bad interval in the low register. Both versions were
+rejected and backed out. The mixed-source test is explicitly ignored: the
+whole waveform really can repeat at 73.33 Hz, while the application intends
+to follow the dominant 220 Hz voice. This needs a source-selection decision,
+not an assertion that the mixture has only one physical fundamental.
+
+The user described the vocal-filtered fixed-carrier control as pretty close
+to the MIDI. Its full-chord follow-up is `vocoder-chords-22-26.mp3` and the
+30-second `vocoder-chords-30s.mp3` (under 1 MB). These use the existing Vocode
+profile with no added natural voice; they do not replace Harmony or establish
+that its remaining wavering is fixed. All work stays on the experimental
+branch; no phone has been flashed and main remains unchanged.
+
+An additional host option, `--source-floor HZ` (50..500, Harmony/PitchControl
+only), forwards the existing `config.min_frequency` to both comparison
+kernels. It is a per-audition range restriction, not an audible high-pass
+filter or a firmware-default change. A positive control shows that a 150 Hz
+floor resolves the constructed dominant-voice fixture near 220 Hz while
+leaving the unrestricted mixed-source reproduction explicitly unresolved.
+On the actual bad interval, the 150 Hz floor yields no accepted coarse period
+in all 57 windows; spectral continuation may still supply the kernel's voice.
+The matched `range150-before.mp3` / `range150-after.mp3` pair records this
+combined continuity/range trial; it is awaiting a listening verdict and must
+not be described as a robust new register detector.
 
 ## Replay recordings
 

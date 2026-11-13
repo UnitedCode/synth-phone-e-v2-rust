@@ -2,6 +2,7 @@
 use audio_lab::{midi_gate, wav};
 use std::{error::Error, fs, path::Path};
 use world_rs::{cheaptrick, d4c, dio, stonemask, synthesis};
+mod psola;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Clone)]
@@ -122,9 +123,10 @@ impl Model {
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 6 {
-        return Err("usage: harmony-reference INPUT_MONO.wav TARGETS.csv MIDI_GATE.csv START_SECONDS DURATION_SECONDS NEW_OUTPUT_DIR".into());
+    if !(6..=7).contains(&args.len()) || args.get(6).is_some_and(|flag| flag != "--psola") {
+        return Err("usage: harmony-reference INPUT_MONO.wav TARGETS.csv MIDI_GATE.csv START_SECONDS DURATION_SECONDS NEW_OUTPUT_DIR [--psola]".into());
     }
+    let waveform = args.len() == 7;
     let source = wav::read(Path::new(&args[0]))?;
     let frames = targets(&fs::read_to_string(&args[1])?)?;
     let start: f64 = args[3].parse()?;
@@ -177,7 +179,7 @@ fn main() -> Result<()> {
             .iter()
             .zip(&model.f0)
             .map(|(&time, &pitch)| {
-                if pitch > 0.0 {
+                if pitch > 0.0 || waveform {
                     at(&frames, start + time).map_or(0.0, |t| t.frequencies[voice])
                 } else {
                     0.0
@@ -187,7 +189,11 @@ fn main() -> Result<()> {
         if f0.iter().all(|&f| f == 0.0) {
             continue;
         }
-        let output = model.synthesize(&f0)?;
+        let output = if waveform {
+            psola::shift(input, rate, &model.f0, &f0, 5.0)
+        } else {
+            model.synthesize(&f0)?
+        };
         for (i, (&sample, sum)) in output.iter().zip(&mut mix).enumerate() {
             if let Some(frame) = at(&frames, start + i as f64 / f64::from(rate)) {
                 let count = frame.frequencies.iter().filter(|&&f| f > 0.0).count();
@@ -209,7 +215,7 @@ fn main() -> Result<()> {
         trace.push_str(&format!("{},{pitch}\n", start + time));
     }
     fs::write(out.join("world-f0.csv"), trace)?;
-    fs::write(out.join("provenance.txt"), format!("world-rs=0.1.0\ninput={}\ntargets={}\ngate={}\nstart={start}\nduration={duration}\nrate={rate}\nDIO floor=50 ceiling=600 Hz followed by StoneMask\nCheapTrick floor=50 Hz fft={}\nD4C defaults; synthesis frame period=5ms\nOriginal-pitch resynthesis is an analysis control. MIDI output replaces voiced F0 with the exported targets and retains unvoiced synthesis.\nOffline desktop reference with independent pitch analysis, not phone firmware or a listening-quality verdict. No source loops, splices, resampling or voiced-only muting.\n", args[0], args[1], args[2], model.fft))?;
+    fs::write(out.join("provenance.txt"), format!("world-rs=0.1.0\nwaveform_psola={waveform}\ninput={}\ntargets={}\ngate={}\nstart={start}\nduration={duration}\nrate={rate}\nDIO floor=50 ceiling=600 Hz followed by StoneMask\nCheapTrick floor=50 Hz fft={}\nD4C defaults; frame period=5ms\nOriginal-pitch WORLD resynthesis is an analysis control. MIDI output uses the exported targets; --psola substitutes waveform epoch overlap-add for WORLD synthesis, retaining unvoiced input through a 10ms routing fade.\nOffline desktop reference with independent pitch analysis, not phone firmware or a listening-quality verdict. No source loops, splices, resampling or voiced-only muting.\n", args[0], args[1], args[2], model.fft))?;
     Ok(())
 }
 

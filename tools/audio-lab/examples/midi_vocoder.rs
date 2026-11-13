@@ -36,6 +36,7 @@ struct Options {
     gate_midi: bool,
     voiced_only: bool,
     long_harmony_window: bool,
+    source_floor: Option<f32>,
 }
 
 fn options(args: &[String]) -> Result<Options> {
@@ -50,6 +51,13 @@ fn options(args: &[String]) -> Result<Options> {
             "--gate-midi" => options.gate_midi = true,
             "--voiced-only" => options.voiced_only = true,
             "--long-harmony-window" => options.long_harmony_window = true,
+            "--source-floor" => {
+                let floor: f32 = args.next().ok_or("missing source floor in Hz")?.parse()?;
+                if !floor.is_finite() || !(50.0..=500.0).contains(&floor) {
+                    return Err("source floor must be 50..500 Hz".into());
+                }
+                options.source_floor = Some(floor);
+            }
             "--harmony-lead" => {
                 options.harmony_lead = args.next().ok_or("missing harmony lead gain")?.parse()?;
                 if !options.harmony_lead.is_finite() || !(0.0..=1.0).contains(&options.harmony_lead)
@@ -87,6 +95,14 @@ fn options(args: &[String]) -> Result<Options> {
         && (options.mode != Some(ProcessingMode::Harmony) || options.voiced_only)
     {
         return Err("--long-harmony-window requires --mode harmony without --voiced-only".into());
+    }
+    if options.source_floor.is_some()
+        && !matches!(
+            options.mode,
+            Some(ProcessingMode::Harmony | ProcessingMode::PitchControl)
+        )
+    {
+        return Err("source floor applies to --mode harmony or pitch".into());
     }
     Ok(options)
 }
@@ -265,7 +281,7 @@ fn pcm16(path: &Path, samples: impl IntoIterator<Item = f32>, rate: u32, gain: f
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 4 {
-        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato | --gate-midi] [--mode vocoder|pitch|harmony|dry] [--harmony-lead 0..1] [--voiced-only | --long-harmony-window]".into());
+        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato | --gate-midi] [--mode vocoder|pitch|harmony|dry] [--harmony-lead 0..1] [--source-floor 50..500] [--voiced-only | --long-harmony-window]".into());
     }
     let options = options(&args[4..])?;
     let source = wav::read(Path::new(&args[1]))?;
@@ -317,6 +333,9 @@ fn main() -> Result<()> {
     let mut config = vocal_frame::config_for_controls(10, 10);
     config.sample_rate = rate as f32;
     config.harmony_lead_gain = options.harmony_lead;
+    if let Some(floor) = options.source_floor {
+        config.min_frequency = floor;
+    }
     let mut settings = MusicalSettings {
         mode: options.mode.unwrap_or(ProcessingMode::Vocode),
         ..Default::default()
@@ -326,6 +345,7 @@ fn main() -> Result<()> {
         transition_speed: config.transition_speed,
         pitch_correction_strength: config.pitch_correction_strength,
         harmony_lead_gain: config.harmony_lead_gain,
+        min_frequency: config.min_frequency,
         ..Default::default()
     };
     let mut baseline_settings = baseline_vocal_dsp::MusicalSettings {
@@ -348,7 +368,7 @@ fn main() -> Result<()> {
     let mut midi_active = false;
     let mut gate = Vec::with_capacity(total);
     let mut pitch_history = [0.0; 2048];
-    let mut pitch_trace = String::from("input_end_seconds,pitch_hz,muted_unvoiced\n");
+    let mut pitch_trace = String::from("input_end_seconds,pitch_hz,period_rejection_mute\n");
     let mut long_harmony = audio_lab::harmony_window::LongHarmony::default();
     let mut target_trace = String::from("input_end_seconds");
     for voice in 0..8 {
@@ -470,7 +490,8 @@ fn main() -> Result<()> {
     if options.gate_midi {
         audio_lab::midi_gate::apply(&mut old, &gate, rate)?;
         audio_lab::midi_gate::apply(&mut new, &gate, rate)?;
-        for audio in [&old, &new] {
+        audio_lab::midi_gate::apply(&mut carrier_audio, &gate, rate)?;
+        for audio in [&old, &new, &carrier_audio] {
             if audio.iter().zip(&gate).any(|(&x, &on)| !on && x != 0.0) {
                 return Err("MIDI gate leaked audio into a rest".into());
             }
@@ -526,6 +547,9 @@ fn main() -> Result<()> {
         report.push_str("Audition modification: note releases/rests are held through the next attack; no SMF or device policy change.\n");
     }
     report.push_str(&format!("voiced_only_diagnostic={}\n", options.voiced_only));
+    if options.source_floor.is_some() {
+        report.push_str("Explicit source-pitch range: estimates below the recorded config.min_frequency are excluded; audible input is not high-pass filtered. This is an audition configuration, not a new firmware default.\n");
+    }
     report.push_str(&format!(
         "long_harmony_window={}\n",
         options.long_harmony_window
@@ -534,7 +558,7 @@ fn main() -> Result<()> {
         report.push_str("Host-only trial: 2048-point Harmony analysis, original 256-sample cadence, original 2048-sample period tracker, same physical envelope bandwidth. Its extra 1024-sample delay is compensated offline before MIDI-rest gating. Original unpitched fallback remains audible. Firmware still uses 1024 points.\n");
     }
     if options.voiced_only {
-        report.push_str("Diagnostic modification: current Harmony frames rejected by the period tracker are muted before overlap-add. Frozen baseline remains unchanged. This removes consonants too; it is not a firmware fix.\n");
+        report.push_str("Diagnostic modification: frames rejected by the coarse period tracker are muted before overlap-add. Current Harmony can recover some of these from spectral phase, so this mask is not the kernel's final voicing decision. Frozen baseline remains unchanged. This removes consonants too; it is not a firmware fix.\n");
     }
     report.push_str("Quiet-gap check: 10ms RMS windows below 0.001 (-60 dBFS), excluding 2048 startup samples and the DSP tail. Legato auditions reject gaps over 0.2 seconds. This measures audio coverage, not semantic singing recognition.\n");
     report.push_str(&format!(

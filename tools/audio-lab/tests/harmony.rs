@@ -554,6 +554,115 @@ fn wide_sung_vibrato_does_not_make_a_held_harmony_warble() {
 }
 
 #[test]
+fn a_fast_voiced_slide_keeps_harmony_on_its_held_target() {
+    let mut phase = 0.0_f64;
+    let input: Vec<_> = (0..SAMPLE_RATE as usize)
+        .map(|i| {
+            let time = i as f64 / f64::from(SAMPLE_RATE);
+            let progress = ((time - 0.4) / 0.08).clamp(0.0, 1.0);
+            let source = 200.0 * 1.5_f64.powf(progress);
+            phase += std::f64::consts::TAU * source / f64::from(SAMPLE_RATE);
+            (0.15 * phase.sin() + 0.06 * (2.0 * phase).sin() + 0.03 * (3.0 * phase).sin()) as f32
+        })
+        .collect();
+    let mut config = vocal_frame::default_config();
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 350.0;
+    let output = render(&input, &[], &config, &settings);
+    let mut worst = 0.0_f64;
+    for start in ((SAMPLE_RATE * 0.35) as usize..(SAMPLE_RATE * 0.6) as usize).step_by(256) {
+        let end = start + (SAMPLE_RATE * 0.12) as usize;
+        let pitch = audio_lab::estimate_pitch(&output.raw[start..end])
+            .expect("voiced glide must retain a periodic harmony");
+        worst = worst.max(audio_lab::cents(pitch, 350.0).abs());
+    }
+    eprintln!("fast voiced slide worst target error: {worst:.2} cents");
+    assert!(
+        worst < 20.0,
+        "held harmony follows the source slide by {worst:.2} cents"
+    );
+}
+
+#[test]
+fn noise_after_singing_is_not_locked_to_the_previous_pitch() {
+    let mut input = tone(220.0, 0.3, &[(1, 0.15), (2, 0.05)]);
+    input.extend(audio_lab::vocal_evidence::noise(0.6));
+    let mut config = vocal_frame::default_config();
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 350.0;
+    let harmony = render(&input, &[], &config, &settings);
+    settings.mode = ProcessingMode::Dry;
+    let dry = render(&input, &[], &config, &settings);
+    let range = (SAMPLE_RATE * 0.42) as usize..(SAMPLE_RATE * 0.52) as usize;
+    let peak_error = harmony.raw[range.clone()]
+        .iter()
+        .zip(&dry.raw[range])
+        .map(|(&a, &b)| (a - b).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        peak_error < 1e-5,
+        "unvoiced noise retained a remembered pitch: {peak_error}"
+    );
+}
+
+#[test]
+#[ignore = "Mixed-pitch dominant-vocal ambiguity remains unresolved; not single-source ground truth (docs/audio-testing.md)"]
+fn quiet_low_frequency_leakage_does_not_replace_the_dominant_vocal_register() {
+    dominant_vocal_with_leakage(None);
+}
+
+#[test]
+fn an_explicit_vocal_range_can_exclude_low_background_periods() {
+    dominant_vocal_with_leakage(Some(150.0));
+}
+
+fn dominant_vocal_with_leakage(floor: Option<f32>) {
+    let input: Vec<_> = (0..SAMPLE_RATE as usize)
+        .map(|i| {
+            let phase = std::f64::consts::TAU * 220.0 * i as f64 / f64::from(SAMPLE_RATE);
+            (0.15 * phase.sin()
+                + 0.04 * (2.0 * phase).sin()
+                + 0.02 * (3.0 * phase).sin()
+                + 0.025 * (phase / 3.0).sin()) as f32
+        })
+        .collect();
+    // The intended vocal is 220 Hz; the quieter 73.33 Hz component models
+    // leaked backing/rumble rather than changing the singer's note.
+    let mut config = vocal_frame::default_config();
+    config.harmony_lead_gain = 0.0;
+    if let Some(floor) = floor {
+        config.min_frequency = floor;
+    }
+    let pitch = synthphone_e_vocal_dsp::dsp::frequency_analysis::find_pitch_harmony(
+        &input[16_000..18_048],
+        &config,
+    );
+    eprintln!("dominant 220 Hz vocal plus low leakage: detected {pitch} Hz");
+    assert!(
+        audio_lab::cents(f64::from(pitch), 220.0).abs() < 10.0,
+        "low leakage replaced vocal register: {pitch}"
+    );
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 350.0;
+    let output = render(&input, &[], &config, &settings);
+    assert!(
+        component(steady(&output.raw), 350.0) > 0.02,
+        "requested fundamental missing after leakage changed the register"
+    );
+}
+
+#[test]
 fn changing_vowel_balance_does_not_create_inharmonic_harmony() {
     let input: Vec<_> = (0..(SAMPLE_RATE * 3.0) as usize)
         .map(|i| {
