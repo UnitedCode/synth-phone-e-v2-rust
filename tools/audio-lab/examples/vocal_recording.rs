@@ -8,13 +8,23 @@ use synthphone_e_vocal_dsp::{
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 2 {
-        return Err("usage: vocal_recording INPUT_MONO.wav NEW_OUTPUT_DIRECTORY".into());
+    if !(2..=3).contains(&args.len()) {
+        return Err(
+            "usage: vocal_recording INPUT_MONO.wav NEW_OUTPUT_DIRECTORY [AMOUNT_0_TO_10]".into(),
+        );
+    }
+    let amount: i8 = args
+        .get(2)
+        .map(|s| s.to_string_lossy().parse())
+        .transpose()?
+        .unwrap_or(5);
+    if !(0..=10).contains(&amount) {
+        return Err("amount must be 0..10".into());
     }
     let input = wav::read(Path::new(&args[0]))?;
     let directory = Path::new(&args[1]);
     fs::create_dir(directory)?;
-    let mut config = vocal_frame::config_for_speed(10);
+    let mut config = vocal_frame::config_for_controls(10, amount);
     config.sample_rate = input.sample_rate as f32;
     config.max_frequency = config.max_frequency.min(config.sample_rate * 0.5);
     // A rich, unit-peak saw matches the device's carrier oscillator. A sparse

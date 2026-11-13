@@ -7,7 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
-synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "c29ac158fc04d19395d8cb43e0ea92d644fabaee"}
+synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "6cfec92ec95e92119654184949e7b9433acb750e"}
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.5"
 cortex-m-semihosting = "0.5.0"

@@ -46,6 +46,11 @@ with [Embed.toml](Embed.toml).
 For Harmony, start with chords on **MIDI channel 1**. See the
 [MIDI harmony guide](docs/harmony-midi.md) for lead/backing channels and controls.
 
+In Vocode, adjust **Vocode Amount** in the encoder menu: **0** is your natural
+voice, **5** is a 50/50 blend (default), and **10** is the full effect.
+Double-press the encoder to open the menu. The setting saves automatically;
+MIDI **CC49** also controls it (0–127 maps to 0–10).
+
 ## Check changes without hardware
 
 These commands use a POSIX shell (macOS/Linux). The explicit host target is

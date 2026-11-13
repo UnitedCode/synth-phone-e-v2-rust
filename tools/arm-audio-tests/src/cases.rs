@@ -2,7 +2,7 @@
 use crate::constants::SAMPLE_RATE;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
-pub const COUNT: usize = 14;
+pub const COUNT: usize = 17;
 pub const INPUT_SAMPLES: usize = 24_000;
 pub const MAGIC: &[u8; 8] = b"SAEARM01";
 pub const NAMES: [&str; COUNT] = [
@@ -20,10 +20,18 @@ pub const NAMES: [&str; COUNT] = [
     "harmony-noise-eight",
     "harmony-weighted-lead",
     "dry-female-237",
+    "vocode-dry",
+    "vocode-half",
+    "vocode-full",
 ];
 
 pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
-    let mut config = crate::vocal_frame::config_for_speed(10);
+    let amount = match case {
+        14 => 0,
+        15 => 5,
+        _ => 10,
+    };
+    let mut config = crate::vocal_frame::config_for_controls(10, amount);
     if case >= 9 {
         config.harmony_lead_gain = 0.0;
     }
@@ -34,7 +42,7 @@ pub fn settings(case: usize) -> MusicalSettings {
     let mode = match case {
         4 | 13 => ProcessingMode::Dry,
         5 | 9 | 10 | 11 | 12 => ProcessingMode::Harmony,
-        6 => ProcessingMode::Vocode,
+        6 | 14..=16 => ProcessingMode::Vocode,
         _ => ProcessingMode::PitchControl,
     };
     MusicalSettings {
@@ -110,7 +118,7 @@ pub fn input(case: usize, index: usize) -> f32 {
 }
 
 pub fn carrier(case: usize, index: usize) -> f32 {
-    if case != 6 || index >= INPUT_SAMPLES {
+    if !matches!(case, 6 | 14..=16) || index >= INPUT_SAMPLES {
         return 0.0;
     }
     let phase = core::f32::consts::TAU * 220.0 * index as f32 / SAMPLE_RATE;

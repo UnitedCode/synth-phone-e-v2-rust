@@ -112,6 +112,8 @@ menu_items! {
     ModeTuned      => { field: mode_tuned,       name: "Tuned On",    min: 0, max: 1 },
     ModeHarmony    => { field: mode_harmony,     name: "Harmony On",  min: 0, max: 1 },
     ModePercussion => { field: mode_percussion,  name: "Percuss On",  min: 0, max: 1 },
+    // Append persisted items: saved v2 records use the existing order.
+    VocodeAmount => { field: vocoder_amount, name: "Vocode Amount", min: 0, max: 10 },
 }
 
 /// Storage for all adjustable menu values
@@ -142,6 +144,7 @@ pub struct MenuValues {
     pub mode_tuned: i8,
     pub mode_harmony: i8,
     pub mode_percussion: i8,
+    pub vocoder_amount: i8,
 }
 
 impl Default for MenuValues {
@@ -170,6 +173,7 @@ impl Default for MenuValues {
             mode_tuned: 1,
             mode_harmony: 1,
             mode_percussion: 1,
+            vocoder_amount: 5,
         }
     }
 }
@@ -386,6 +390,7 @@ pub struct AppStateMachineSnapshot {
     pub bit_rate: i8,
     pub formant: i8,
     pub autotune_speed: i8,
+    pub vocoder_amount: i8,
     pub magnitude: i8,
     pub pad_matrix: i8,
     pub synth_octave: i8,
@@ -516,6 +521,7 @@ impl AppStateMachine {
             bit_rate,
             formant: self.current_formant,
             autotune_speed: self.values.autotune_speed,
+            vocoder_amount: self.values.vocoder_amount,
             magnitude: self.values.magnitude,
             pad_matrix: self.values.pad_matrix,
             synth_octave: self.values.synth_octave,
@@ -779,7 +785,7 @@ impl AppStateMachine {
 
     /// Sets one of the fine-tune menu values (pitch presets, bit rate,
     /// sample rate, formant ratios, magnitude) from an incoming MIDI CC on
-    /// 34-42 and 44-46, scaling the 0-127 CC value proportionally into that item's
+    /// 34-42, 44-46 and 49, scaling the 0-127 CC value proportionally into that item's
     /// range.
     pub fn set_menu_value_from_cc(&mut self, controller: u8, value: u8) {
         let item = match controller {
@@ -795,6 +801,7 @@ impl AppStateMachine {
             44 => MenuItem::VoiceVolume,
             45 => MenuItem::MelodyVolume,
             46 => MenuItem::AutotuneSpeed,
+            49 => MenuItem::VocodeAmount,
             _ => return,
         };
         let (min, max) = MenuValues::range(item);

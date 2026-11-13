@@ -142,6 +142,35 @@ warnings remain. QEMU executes the DSP test guest, not the complete device.
 No board was flashed; real vocals, listening acceptance and physical timing
 remain unverified.
 
+### Adjustable vocoder amount on the experimental branch
+
+**Vocode Amount** ranges from 0 (original voice) to 10 (full vocoder), default 5.
+It is a linear dry/wet blend with identical analysis/synthesis windows and
+overlap-add delay on both paths. The natural component remains audible without
+held notes below 10; the fully wet setting still needs a carrier. The setting
+only affects Vocode. MIDI CC49 maps 0–127 to 0–10 and requests a display refresh.
+It is included in automatic settings saves.
+
+The item is appended to the persisted menu order. Existing checksummed v2
+records with 21 values restore all original settings and use 5 for the new
+amount; current records store 22 values. The QSPI record codec is shared with
+host tests, including a frozen legacy record and a corruption check.
+
+DSP defaults to fully wet for API compatibility and existing full-effect
+tests. The device's menu and `config_for_controls` supply the user's amount.
+The ARM guest adds dry/half/full vocoder cases to verify mixing on Cortex-M7.
+The selected DSP pin is `6cfec92ec95e92119654184949e7b9433acb750e`.
+Validation: 146 host tests pass, including the new control/persistence checks;
+DSP mix tests cover the dry endpoint and aligned midpoint. All 17 Cortex-M7
+guest cases match host PCM, including dry/half/full amount, and the embedded
+firmware fits its original 128 KiB flash region. Hardware flashing and physical
+listening remain unverified.
+
+Real-vocal examples at amounts 2, 5 and 10 are retained under
+`audio-lab-results/vocoder-amount-2026-11-13/`. Listening copies use constant
+whole-file gain to a common RMS of 0.1. The unmatched amount-10 WAV is
+byte-identical to the preceding fully wet `c29ac15` vocal render.
+
 ## Before/after with real vocals
 
 `vocal_recording` renders an existing **mono** WAV through the selected DSP
@@ -150,15 +179,19 @@ formant vocoder files. It uses the file's clock and records settings and PCM
 statistics in `render.txt`; it does not generate or replace the vocal.
 
 ```sh
-cargo run --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --example vocal_recording -- INPUT_MONO.wav NEW_OUTPUT_DIRECTORY
+cargo run --offline --release --locked --manifest-path tools/audio-lab/Cargo.toml --target "$LAB_HOST" --example vocal_recording -- INPUT_MONO.wav NEW_OUTPUT_DIRECTORY 5
 ```
 
 Settings are identical across revisions: fast correction at 99% strength in
-C major, no octave shift, and the device's final vocal trim/ceiling. The key
+C major, no octave shift, and the device's final vocal trim/ceiling. The optional
+last argument sets vocoder amount 0–10 (default 5); use 10 for the original
+fully wet comparison. The key
 is a test setting, not an automatic estimate of the recording's intended key.
 To compare an older DSP, run the same example with a Cargo `patch` override
 pointing to that revision's existing checkout, then restore the normal lockfile
 before running the experimental revision. Record both exact DSP commit IDs.
+Baselines predating `vocoder_mix` need the compatible frozen replay tool at
+firmware `393ceeaa54589ce929e2675a3236527e336ae03a`; the original A/B below used it.
 Keep unmatched outputs; use the existing `harmony_capture match` command for
 constant whole-file playback gains, with no compression or extra effects.
 

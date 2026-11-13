@@ -25,6 +25,13 @@ pub fn config_for_speed(speed: i8) -> VocalEffectsConfig {
     config
 }
 
+/// User controls shared by the hardware handler and offline replays.
+pub fn config_for_controls(speed: i8, vocoder_amount: i8) -> VocalEffectsConfig {
+    let mut config = config_for_speed(speed);
+    config.vocoder_mix = vocoder_amount.clamp(0, 10) as f32 * 0.1;
+    config
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn process_frame(
     input: &mut [f32; 1024],
