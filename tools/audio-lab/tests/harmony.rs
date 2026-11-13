@@ -437,3 +437,82 @@ fn backing_pcm_level_stays_constant_when_the_midi_lead_rests() {
         );
     }
 }
+
+#[test]
+fn held_harmony_stays_in_tune_when_the_singer_changes_register() {
+    let sources = [90.0, 130.0, 200.0, 300.0, 440.0, 590.0];
+    let segment = (SAMPLE_RATE * 0.45) as usize;
+    let mut phase = 0.0_f64;
+    let mut input = Vec::new();
+    for source in sources {
+        input.extend((0..segment).map(|_| {
+            phase += std::f64::consts::TAU * source / f64::from(SAMPLE_RATE);
+            (0.15 * phase.sin()) as f32
+        }));
+    }
+    let mut config = vocal_frame::default_config();
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 220.0;
+    let output = render(&input, &[], &config, &settings);
+    let mut failures = Vec::new();
+    for (i, source) in sources.into_iter().enumerate() {
+        let start = i * segment + (SAMPLE_RATE * 0.22) as usize;
+        let end = i * segment + (SAMPLE_RATE * 0.4) as usize;
+        let actual = audio_lab::estimate_pitch(&output.raw[start..end]);
+        let spur_ratio =
+            component(&output.raw[start..end], 350.0) / component(&output.raw[start..end], 220.0);
+        if source == 90.0 {
+            eprintln!(
+                "90 Hz source -> 220 Hz: measured {actual:?}, 350 Hz spur ratio {spur_ratio}"
+            );
+        }
+        if actual.is_none_or(|hz| audio_lab::cents(hz, 220.0).abs() > 20.0)
+            || (source == 90.0 && spur_ratio > 0.03)
+        {
+            eprintln!("source {source}: unwanted 350 Hz amplitude / target = {spur_ratio}");
+            failures.push((source, actual));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "held 220 Hz harmony lost tuning: {failures:?}"
+    );
+}
+
+#[test]
+fn unvoiced_consonants_include_the_lead_in_voice_power_normalization() {
+    let input = audio_lab::vocal_evidence::noise(0.6);
+    let mut config = vocal_frame::default_config();
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 220.0;
+    let reference = render(&input, &[], &config, &settings);
+    let region = (SAMPLE_RATE * 0.2) as usize..(SAMPLE_RATE * 0.5) as usize;
+    let reference_rms = audio_lab::metrics(&reference.raw[region.clone()]).rms;
+    for lead in [0.0_f32, 0.5, 1.0] {
+        config.harmony_lead_gain = lead;
+        for count in [1, 2, 4] {
+            settings.midi_frequencies = [0.0; 8];
+            for i in 0..count {
+                settings.midi_frequencies[i] = 220.0 + i as f32 * 35.0;
+            }
+            let result = render(&input, &[], &config, &settings);
+            let ratio = audio_lab::metrics(&result.raw[region.clone()]).rms / reference_rms;
+            // Independent voices add power, then the mixer averages their
+            // amplitudes. The original lead participates in both terms.
+            let expected =
+                (f64::from(lead).powi(2) + count as f64).sqrt() / (f64::from(lead) + count as f64);
+            assert!(
+                (ratio - expected).abs() < 0.015,
+                "lead {lead}, {count} harmonies: unvoiced gain {ratio}, expected {expected}"
+            );
+        }
+    }
+}

@@ -159,7 +159,7 @@ host tests, including a frozen legacy record and a corruption check.
 DSP defaults to fully wet for API compatibility and existing full-effect
 tests. The device's menu and `config_for_controls` supply the user's amount.
 The ARM guest adds dry/half/full vocoder cases to verify mixing on Cortex-M7.
-The selected DSP pin is `6cfec92ec95e92119654184949e7b9433acb750e`.
+The initial amount-control DSP pin was `6cfec92ec95e92119654184949e7b9433acb750e`.
 Validation: 146 host tests pass, including the new control/persistence checks;
 DSP mix tests cover the dry endpoint and aligned midpoint. All 17 Cortex-M7
 guest cases match host PCM, including dry/half/full amount, and the embedded
@@ -229,7 +229,8 @@ The same renderer supports `--mode pitch` and `--mode harmony` (default:
 `vocoder`). Both revisions use their complete streaming entry points with
 independent state and identical settings, MIDI targets, replay timing and input.
 Pitch uses 99% correction and speed 10; Harmony renders MIDI voices only with
-`harmony_lead_gain = 0`. The report records the mode/config and the RMS of the
+`harmony_lead_gain = 0` by default; `--harmony-lead 0..1` includes the original
+voice identically in both revisions. The report records the mode/config and the RMS of the
 sample-by-sample before/after difference, including exact equality when zero.
 
 For the local Hide and Seek audition, the source SMF is
@@ -240,11 +241,48 @@ the autotune target. Both use MIDI seconds 0..30 with audition-only legato,
 paired with Si Veo a Tu Mamá vocal seconds 100..130, left channel, gain 0.35,
 native 44,100 Hz. This is a different-song vocal performance, not aligned
 Hide and Seek lyrics. No vocal looping, splicing or resampling is used.
-The baseline/experimental Harmony WAVs are byte-identical because that engine
-was unchanged by this experiment. Autotune differs; neither difference size
+The initial `4cf708a`/`6cfec92` Harmony WAVs are byte-identical because that engine
+was unchanged at that point. Autotune differs; neither difference size
 nor equality establishes subjective musical quality. Four 96 kbps mono MP3s
 are exported with common pre-encode RMS 0.07 under
 `audio-lab-results/hide-seek-pitch-harmony-2026-11-13/` for sharing.
+
+### Harmony pitch audit and regression proof
+
+The current DSP pin, shared by firmware, host lab and ARM guest, is
+`67205e8a64103018a7972a5c485a1dc91a905761` on `clankers-experiments`.
+Two public streaming audio tests first reproduced defects on the previous pin:
+
+- A continuous 90 Hz singer targeting 220 Hz generated an unwanted 350 Hz
+  partial at about 15% of the target's amplitude. FFT bin centres split one
+  low vocal harmonic into separately shifted groups. Harmony now uses bounded
+  phase-derived frequencies for harmonic ownership. The regression steps the
+  singer through 90, 130, 200, 300, 440 and 590 Hz while holding 220 Hz, requiring
+  tuning within 20 cents. The low-note output measures 219.99966 Hz, with the
+  unwanted 350 Hz amplitude reduced to 0.00357% of the target (limit 3%).
+- Unvoiced normalization's unity-gain shortcut omitted the original lead. With
+  lead gain 0.5 and one harmony, the old output had gain 1 instead of the
+  independent-voice power scale 0.74536. The shortcut now applies only when
+  the lead is absent; otherwise its power and normalization both participate.
+  Tests cover lead gains 0, 0.5 and 1, with one, two and four harmony voices.
+
+The identical Hide and Seek MIDI window and Si Veo a Tu Mamá vocal passage
+above were rendered again, using `--mode harmony`, both MIDI-only and with
+`--harmony-lead 1`. The frozen `4cf708a` Harmony is also the pre-fix `6cfec92`
+Harmony; its MIDI-only output compares byte-identical to the prior audition.
+New output differs with RMS difference 0.002993 (MIDI-only) / 0.004908 (with
+lead), and neither has quiet gaps in the measured steady region. These numbers
+establish a change, not subjective improvement. Unmatched WAVs and provenance
+are under `audio-lab-results/harmony-audit-2026-11-13-hide-seek*/`; 96 kbps mono
+MP3s use matched whole-file RMS 0.07, about 361 KB per 30-second performance.
+The optional lead A/B plays 30 seconds before, one second pause, then after.
+
+Validation: 59 DSP tests and 153 host-lab tests pass, with strict host Clippy.
+All 19 Cortex-M7 guest cases match host PCM exactly, including the new low
+90 Hz voice and noise-with-lead cases; the injected missing frame is detected.
+The production ARM release links: its last flash load segment ends at
+`0x0801FEDC`, leaving only **292 bytes** of the 128 KiB region. No physical
+flashing, listening acceptance or real-time deadline measurement is claimed.
 
 For a continuous singing audition, add `--window MIDI_START DURATION --legato`.
 The supplied vocal begins at the selected MIDI window and must cover that

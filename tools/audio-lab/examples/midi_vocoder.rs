@@ -32,6 +32,7 @@ struct Options {
     window: Option<(f64, f64)>,
     legato: bool,
     mode: Option<ProcessingMode>,
+    harmony_lead: f32,
 }
 
 fn options(args: &[String]) -> Result<Options> {
@@ -43,6 +44,13 @@ fn options(args: &[String]) -> Result<Options> {
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--legato" => options.legato = true,
+            "--harmony-lead" => {
+                options.harmony_lead = args.next().ok_or("missing harmony lead gain")?.parse()?;
+                if !options.harmony_lead.is_finite() || !(0.0..=1.0).contains(&options.harmony_lead)
+                {
+                    return Err("harmony lead gain must be 0..1".into());
+                }
+            }
             "--mode" => {
                 options.mode = Some(match args.next().map(String::as_str) {
                     Some("vocoder") => ProcessingMode::Vocode,
@@ -239,7 +247,7 @@ fn pcm16(path: &Path, samples: impl IntoIterator<Item = f32>, rate: u32, gain: f
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 4 {
-        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato] [--mode vocoder|pitch|harmony]".into());
+        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato] [--mode vocoder|pitch|harmony] [--harmony-lead 0..1]".into());
     }
     let options = options(&args[4..])?;
     let source = wav::read(Path::new(&args[1]))?;
@@ -290,7 +298,7 @@ fn main() -> Result<()> {
         core::array::from_fn(|_| Oscillator::new(440.0, rate as f32, Waveform::Saw));
     let mut config = vocal_frame::config_for_controls(10, 10);
     config.sample_rate = rate as f32;
-    config.harmony_lead_gain = 0.0;
+    config.harmony_lead_gain = options.harmony_lead;
     let mut settings = MusicalSettings {
         mode: options.mode.unwrap_or(ProcessingMode::Vocode),
         ..Default::default()
@@ -427,7 +435,7 @@ fn main() -> Result<()> {
             .ok_or("missing DSP pin")?;
         report.push_str(&format!("dependency: {dependency}\n"));
     }
-    report.push_str("Original and updated kernels use identical MIDI targets/carriers, input, configuration and buffering.\nNo added dry-voice blend; Harmony uses MIDI voices only.\n80/20 and 90/10 blend NEW/OLD effect output.\nThe source vocal is independent of the MIDI; this does not reproduce the MIDI song's singer or lyrics.\nHost DSP replay, not a physical-board capture or a verified melody transcription.\n");
+    report.push_str("Original and updated kernels use identical MIDI targets/carriers, input, configuration and buffering.\nHarmony's original-voice gain is explicitly recorded in config; revision blends add no further dry voice.\n80/20 and 90/10 blend NEW/OLD effect output.\nThe source vocal is independent of the MIDI; this does not reproduce the MIDI song's singer or lyrics.\nHost DSP replay, not a physical-board capture or a verified melody transcription.\n");
     let difference_rms = (versions[0]
         .1
         .iter()

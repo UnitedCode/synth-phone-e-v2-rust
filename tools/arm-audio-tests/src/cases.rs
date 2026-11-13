@@ -2,7 +2,7 @@
 use crate::constants::SAMPLE_RATE;
 use synthphone_e_vocal_dsp::{MusicalSettings, ProcessingMode};
 
-pub const COUNT: usize = 17;
+pub const COUNT: usize = 19;
 pub const INPUT_SAMPLES: usize = 24_000;
 pub const MAGIC: &[u8; 8] = b"SAEARM01";
 pub const NAMES: [&str; COUNT] = [
@@ -23,6 +23,8 @@ pub const NAMES: [&str; COUNT] = [
     "vocode-dry",
     "vocode-half",
     "vocode-full",
+    "harmony-low-90",
+    "harmony-noise-with-lead",
 ];
 
 pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
@@ -35,13 +37,16 @@ pub fn config(case: usize) -> synthphone_e_vocal_dsp::VocalEffectsConfig {
     if case >= 9 {
         config.harmony_lead_gain = 0.0;
     }
+    if case == 18 {
+        config.harmony_lead_gain = 1.0;
+    }
     config
 }
 
 pub fn settings(case: usize) -> MusicalSettings {
     let mode = match case {
         4 | 13 => ProcessingMode::Dry,
-        5 | 9 | 10 | 11 | 12 => ProcessingMode::Harmony,
+        5 | 9 | 10 | 11 | 12 | 17 | 18 => ProcessingMode::Harmony,
         6 | 14..=16 => ProcessingMode::Vocode,
         _ => ProcessingMode::PitchControl,
     };
@@ -60,7 +65,7 @@ pub fn settings(case: usize) -> MusicalSettings {
             [
                 130.81278, 164.81378, 195.99771, 220.0, 261.62555, 329.62756, 391.99542, 440.0,
             ]
-        } else if case == 9 {
+        } else if matches!(case, 9 | 17 | 18) {
             [220.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         } else {
             [0.0; 8]
@@ -78,7 +83,7 @@ pub fn input(case: usize, index: usize) -> f32 {
     if case == 0 || index >= INPUT_SAMPLES {
         return 0.0;
     }
-    if case == 11 {
+    if case == 11 || case == 18 {
         let mut random = (index as u32)
             .wrapping_mul(0x9e3779b9)
             .wrapping_add(0x12345678);
@@ -86,6 +91,9 @@ pub fn input(case: usize, index: usize) -> f32 {
         random ^= random >> 17;
         random ^= random << 5;
         return random as f32 / u32::MAX as f32 * 0.2 - 0.1;
+    }
+    if case == 17 {
+        return 0.15 * libm::sinf(core::f32::consts::TAU * 90.0 * index as f32 / SAMPLE_RATE);
     }
     if case == 9 || case == 10 || case == 12 {
         let time = index as f32 / SAMPLE_RATE;
