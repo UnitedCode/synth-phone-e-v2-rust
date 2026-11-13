@@ -26,6 +26,36 @@ struct Schedule {
     report: String,
 }
 
+#[derive(Default)]
+struct Options {
+    preview_start: f64,
+    window: Option<(f64, f64)>,
+    legato: bool,
+}
+
+fn options(args: &[String]) -> Result<Options> {
+    let mut options = Options::default();
+    let mut args = args.iter().peekable();
+    if args.peek().is_some_and(|s| !s.starts_with("--")) {
+        options.preview_start = args.next().unwrap().parse()?;
+    }
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--legato" => options.legato = true,
+            "--window" => {
+                let start = args
+                    .next()
+                    .ok_or("--window requires start and duration")?
+                    .parse()?;
+                let duration = args.next().ok_or("--window requires duration")?.parse()?;
+                options.window = Some((start, duration));
+            }
+            _ => return Err(format!("unknown option {flag}").into()),
+        }
+    }
+    Ok(options)
+}
+
 fn schedule(data: &[u8], selected: usize, rate: u32) -> Result<Schedule> {
     let midi = Smf::parse(data).map_err(|e| format!("invalid MIDI: {e:?}"))?;
     if midi.header.format == Format::Sequential {
@@ -133,6 +163,49 @@ fn apply(manager: &mut VoiceManager<8>, message: MidiMessage) {
     }
 }
 
+fn apply_group(manager: &mut VoiceManager<8>, group: &[Event], legato: bool) {
+    if !legato {
+        for event in group {
+            apply(manager, event.message);
+        }
+        return;
+    }
+    // Audition-only legato: keep the last chord through rests, replacing it
+    // with the complete next attack group. This never edits the user's SMF.
+    if group
+        .iter()
+        .any(|e| matches!(e.message, MidiMessage::NoteOn { vel, .. } if vel.as_int() > 0))
+    {
+        manager.all_notes_off(Some(0));
+    }
+    for event in group {
+        match event.message {
+            MidiMessage::NoteOn { vel, .. } if vel.as_int() > 0 => apply(manager, event.message),
+            MidiMessage::PitchBend { .. } => apply(manager, event.message),
+            _ => (),
+        }
+    }
+}
+
+fn longest_quiet_gap(samples: &[f32], rate: u32) -> (f64, f64) {
+    let window = (rate as usize / 100).max(1);
+    let (mut run, mut maximum, mut start, mut offset) = (0, 0, 0, 0);
+    for frame in samples.chunks(window) {
+        offset += frame.len();
+        let energy = frame.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / frame.len() as f64;
+        if energy < 1e-6 {
+            run += frame.len();
+        } else {
+            run = 0;
+        }
+        if run > maximum {
+            maximum = run;
+            start = offset - run;
+        }
+    }
+    (maximum as f64 / rate as f64, start as f64 / rate as f64)
+}
+
 fn pcm16(path: &Path, samples: impl IntoIterator<Item = f32>, rate: u32, gain: f64) -> Result<()> {
     let mut writer = hound::WavWriter::create(
         path,
@@ -156,30 +229,54 @@ fn pcm16(path: &Path, samples: impl IntoIterator<Item = f32>, rate: u32, gain: f
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if !(4..=5).contains(&args.len()) {
-        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS]".into());
+    if args.len() < 4 {
+        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato]".into());
     }
+    let options = options(&args[4..])?;
     let source = wav::read(Path::new(&args[1]))?;
     let rate = source.sample_rate;
     let midi = schedule(&fs::read(&args[0])?, args[3].parse()?, rate)?;
-    let preview_start = args
-        .get(4)
-        .map(|s| s.parse::<f64>())
-        .transpose()?
-        .unwrap_or(0.0);
+    let preview_start = options.preview_start;
+    let (window_start, duration) = options
+        .window
+        .unwrap_or((0.0, midi.samples as f64 / rate as f64));
+    if !window_start.is_finite() || window_start < 0.0 || !duration.is_finite() || duration <= 0.0 {
+        return Err("invalid MIDI window".into());
+    }
+    let window_start = (window_start * rate as f64).round() as usize;
+    let duration = (duration * rate as f64).round() as usize;
+    let window_end = window_start
+        .checked_add(duration)
+        .ok_or("MIDI window overflow")?;
+    if duration == 0 || window_end > midi.samples {
+        return Err("window extends beyond MIDI timeline".into());
+    }
     if !preview_start.is_finite()
         || preview_start < 0.0
-        || preview_start * rate as f64 >= midi.samples as f64
+        || preview_start * rate as f64 >= duration as f64
     {
         return Err("invalid preview start".into());
     }
-    if source.samples.len() < midi.samples {
-        return Err("use a real vocal recording at least as long as the MIDI; no automatic looping or synthetic replacement".into());
+    if source.samples.len() < duration {
+        return Err("use a real vocal recording at least as long as the MIDI window; no automatic looping or synthetic replacement".into());
     }
     let out = Path::new(&args[2]);
     fs::create_dir(out)?;
     let (mut before, mut after) = (Replay::new(), Replay::new());
     let mut manager = VoiceManager::<8>::new(rate as f32);
+    if options.legato {
+        let first = midi
+            .events
+            .iter()
+            .position(|e| matches!(e.message, MidiMessage::NoteOn { vel, .. } if vel.as_int() > 0))
+            .ok_or("no carrier notes")?;
+        let end = first
+            + midi.events[first..]
+                .iter()
+                .take_while(|e| e.sample == midi.events[first].sample)
+                .count();
+        apply_group(&mut manager, &midi.events[first..end], true);
+    }
     let mut oscillators =
         core::array::from_fn(|_| Oscillator::new(440.0, rate as f32, Waveform::Saw));
     let mut config = vocal_frame::config_for_controls(10, 10);
@@ -196,7 +293,7 @@ fn main() -> Result<()> {
         mode: baseline_vocal_dsp::ProcessingMode::Vocode,
         ..Default::default()
     };
-    let total = (midi.samples + FFT_SIZE * 2).div_ceil(BLOCK_SIZE) * BLOCK_SIZE;
+    let total = (window_end + FFT_SIZE * 2).div_ceil(BLOCK_SIZE) * BLOCK_SIZE;
     let (mut old, mut new, mut carrier_audio) = (
         Vec::with_capacity(total),
         Vec::with_capacity(total),
@@ -206,11 +303,16 @@ fn main() -> Result<()> {
     for block in (0..total).step_by(BLOCK_SIZE) {
         for i in block..block + BLOCK_SIZE {
             while next < midi.events.len() && midi.events[next].sample <= i {
-                apply(&mut manager, midi.events[next].message);
-                next += 1;
+                let end = next
+                    + midi.events[next..]
+                        .iter()
+                        .take_while(|e| e.sample == midi.events[next].sample)
+                        .count();
+                apply_group(&mut manager, &midi.events[next..end], options.legato);
+                next = end;
             }
-            let input = if i < midi.samples {
-                source.samples[i]
+            let input = if (window_start..window_end).contains(&i) {
+                source.samples[i - window_start]
             } else {
                 0.0
             };
@@ -251,6 +353,9 @@ fn main() -> Result<()> {
             after.finish_block(&carrier, &config, &settings, None);
         }
     }
+    old.drain(..window_start);
+    new.drain(..window_start);
+    carrier_audio.drain(..window_start);
     // These blends combine the two vocoder algorithms, with NO original voice.
     let blends: Vec<_> = [0.8_f32, 0.9]
         .into_iter()
@@ -269,7 +374,7 @@ fn main() -> Result<()> {
     let mut versions = vec![("original", old), ("updated", new)];
     versions.extend(["new80-old20", "new90-old10"].into_iter().zip(blends));
     let start = (preview_start * rate as f64).round() as usize;
-    let end = (start + rate as usize * 10).min(midi.samples);
+    let end = (start + rate as usize * 10).min(duration);
     let mut common_rms = 0.1_f64;
     for (_, audio) in &versions {
         let m = metrics(&audio[start..end]);
@@ -279,6 +384,20 @@ fn main() -> Result<()> {
         common_rms = common_rms.min(0.9 * m.rms / m.peak as f64);
     }
     let mut report = format!("midi={}\nvocal={}\n{}sample_rate={rate}\npreview_start={preview_start}\npreview_end={}\ncommon_playback_rms={common_rms}\n", args[0], args[1], midi.report, end as f64 / rate as f64);
+    report.push_str(&format!(
+        "midi_window_start={}\nwindow_duration={}\nlegato_audition={}\n",
+        window_start as f64 / rate as f64,
+        duration as f64 / rate as f64,
+        options.legato
+    ));
+    if options.legato {
+        report.push_str("Audition modification: note releases/rests are held through the next attack; no SMF or device policy change.\n");
+    }
+    report.push_str("Quiet-gap check: 10ms RMS windows below 0.001 (-60 dBFS), excluding 2048 startup samples and the DSP tail. Legato auditions reject gaps over 0.2 seconds. This measures audio coverage, not semantic singing recognition.\n");
+    report.push_str(&format!(
+        "input_longest_quiet_gap_seconds={}\n",
+        longest_quiet_gap(&source.samples[..duration], rate).0
+    ));
     for prefix in ["synthphone-e-vocal-dsp =", "baseline-vocal-dsp ="] {
         let dependency = include_str!("../Cargo.toml")
             .lines()
@@ -299,10 +418,16 @@ fn main() -> Result<()> {
             rate,
             gain,
         )?;
-        report.push_str(&format!(
-            "{name}: preview={m:?}; playback_gain={gain}; full={:?}\n",
-            metrics(audio)
-        ));
+        let steady = &audio[(FFT_SIZE * 2).min(duration)..duration];
+        let (gap, gap_start) = longest_quiet_gap(steady, rate);
+        report.push_str(&format!("{name}: preview={m:?}; playback_gain={gain}; full={:?}; longest_quiet_gap_seconds={gap}\n", metrics(audio)));
+        if options.legato && gap > 0.2 {
+            return Err(format!(
+                "{name}: continuous audition has a {gap:.3}s quiet gap at {:.3}s",
+                gap_start + FFT_SIZE as f64 * 2.0 / rate as f64
+            )
+            .into());
+        }
     }
     // Full-song listening files share one constant gain to preserve dynamics.
     let full_gain = 0.8
@@ -342,7 +467,7 @@ fn main() -> Result<()> {
     )?;
     fs::write(out.join("provenance.txt"), &report)?;
     println!(
-        "{}\nWrote complete MIDI renders and matched previews to {}",
+        "{}\nWrote MIDI vocoder audition and matched previews to {}",
         midi.report,
         out.display()
     );
@@ -405,5 +530,42 @@ mod tests {
     #[test]
     fn percussion_cannot_be_selected_as_the_vocal_carrier() {
         assert!(schedule(&fixture(9), 1, 44100).is_err());
+    }
+
+    #[test]
+    fn legato_holds_releases_and_replaces_the_entire_next_chord() {
+        let event = |key, on| Event {
+            sample: 0,
+            message: if on {
+                MidiMessage::NoteOn {
+                    key: midly::num::u7::new(key),
+                    vel: 100.into(),
+                }
+            } else {
+                MidiMessage::NoteOff {
+                    key: midly::num::u7::new(key),
+                    vel: 0.into(),
+                }
+            },
+        };
+        let mut manager = VoiceManager::<8>::new(44100.0);
+        apply_group(&mut manager, &[event(60, true)], true);
+        let held = manager.get_cached_frequencies();
+        apply_group(&mut manager, &[event(60, false)], true);
+        assert_eq!(manager.get_cached_frequencies(), held);
+        apply_group(&mut manager, &[event(64, true), event(67, true)], true);
+        let frequencies = manager.get_cached_frequencies();
+        assert_eq!(frequencies.iter().filter(|&&f| f > 0.0).count(), 2);
+        assert!(!frequencies.contains(&held[0]));
+        apply_group(&mut manager, &[event(64, false), event(67, false)], false);
+        assert!(manager.get_cached_frequencies().iter().all(|&f| f == 0.0));
+    }
+
+    #[test]
+    fn quiet_gap_measurement_detects_a_long_rest_without_counting_zero_crossings() {
+        let mut audio: Vec<_> = (0..44100).map(|i| (i as f32 * 0.1).sin() * 0.1).collect();
+        assert_eq!(longest_quiet_gap(&audio, 44100).0, 0.0);
+        audio[8820..22050].fill(0.0);
+        assert!((longest_quiet_gap(&audio, 44100).0 - 0.3).abs() < 0.011);
     }
 }

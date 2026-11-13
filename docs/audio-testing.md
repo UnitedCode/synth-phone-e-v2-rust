@@ -225,6 +225,25 @@ matched ten-second previews, complete original/updated performances, MIDI-only
 carrier preview and a provenance report are written to the chosen directory.
 The before/after preview plays original, 0.6 seconds of silence, then updated.
 
+For a continuous singing audition, add `--window MIDI_START DURATION --legato`.
+The supplied vocal begins at the selected MIDI window and must cover that
+duration. Legato holds the last note/chord through releases until the next
+attack, keeping original attack timing and replacing the whole next chord.
+It seeds the first chord for leading rests. This is an explicitly modified
+audition, not unchanged SMF playback; the source MIDI and device's normal
+NoteOff behavior stay intact. Both algorithms use the same legato carrier.
+
+The supplied **Si Veo a Tu Mamá** stem provides an uninterrupted one-minute
+passage at source seconds **100..160** (left channel, 0.35 input gain, native
+44,100 Hz). The continuous audition uses HBFS MIDI seconds **43.2..103.2**,
+track 2, with no vocal looping, splicing, resampling or added dry voice.
+In 10 ms RMS windows below -60 dBFS, its input's longest quiet gap is 0.04s;
+old/new vocoder output has at most 0.06s/0.14s, excluding pipeline startup/tail.
+Legato renders reject gaps over 0.2s. This is an audio coverage check, not an
+automatic claim about lyrical content or natural singing quality. The new
+60-second listening files are matched to a common whole-file RMS. Evidence
+is under `audio-lab-results/si-veo-midi-vocoder-2026-11-13/`.
+
 The original DSP is a frozen **host-only dev dependency** at `4cf708a`, with an
 exact exception in the dependency-parity test. Firmware and the ARM guest
 retain only the current DSP. Both kernels use the same replay buffers and hop
