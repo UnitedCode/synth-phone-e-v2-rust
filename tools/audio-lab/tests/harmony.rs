@@ -677,6 +677,46 @@ fn bass_vocal_below_80_hz_stays_on_the_held_midi_note() {
 #[test]
 #[ignore = "Known unresolved low-voice overlap distortion; run explicitly to reproduce (docs/audio-testing.md)"]
 fn overlapping_upper_harmonics_do_not_wobble_a_low_voices_target() {
+    overlapping_upper_harmonics(false);
+}
+
+#[test]
+fn a_longer_window_resolves_overlapping_low_voice_harmonics() {
+    overlapping_upper_harmonics(true);
+}
+
+#[test]
+fn longer_window_preserves_level_and_has_the_declared_extra_delay() {
+    let mut input = vec![0.0; 8192];
+    input[4096] = 0.2;
+    let config = vocal_frame::default_config();
+    let settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    let before = render(&input, &[], &config, &settings).raw;
+    let after = audio_lab::harmony_window::render(&input, &config, &settings);
+    let peak = |audio: &[f32]| {
+        audio
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
+            .unwrap()
+            .0
+    };
+    let a = peak(&before);
+    let b = peak(&after);
+    assert_eq!(b - a, audio_lab::harmony_window::EXTRA_DELAY);
+    assert!(
+        (after[b] / before[a] - 1.0).abs() < 0.002,
+        "long-window overlap normalization changed unity gain"
+    );
+    assert!(after.iter().all(|x| x.is_finite()));
+    let silence = audio_lab::harmony_window::render(&vec![0.0; 8192], &config, &settings);
+    assert!(silence.iter().all(|&x| x == 0.0));
+}
+
+fn overlapping_upper_harmonics(long_window: bool) {
     let rate = 44_100.0;
     let input: Vec<_> = (0..(rate * 3.0) as usize)
         .map(|i| {
@@ -700,10 +740,14 @@ fn overlapping_upper_harmonics_do_not_wobble_a_low_voices_target() {
         ..Default::default()
     };
     settings.midi_frequencies[0] = 350.0;
-    let output = render(&input, &[], &config, &settings);
+    let output = if long_window {
+        audio_lab::harmony_window::render(&input, &config, &settings)
+    } else {
+        render(&input, &[], &config, &settings).raw
+    };
     for (name, samples, fundamental) in [
         ("source control", &input[22_050..110_250], 75.0),
-        ("held harmony", &output.raw[22_050..110_250], 350.0),
+        ("held harmony", &output[22_050..110_250], 350.0),
     ] {
         let energy = samples.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>();
         let mut captured = 0.0;
@@ -727,7 +771,7 @@ fn overlapping_upper_harmonics_do_not_wobble_a_low_voices_target() {
             outside * 100.0
         );
         assert!(
-            outside < 0.05,
+            outside < if long_window { 0.005 } else { 0.05 },
             "{name} created {:.3}% off-grid energy",
             outside * 100.0
         );

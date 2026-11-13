@@ -382,7 +382,7 @@ remain unverified.
 
 ### Remaining roughness around 24 seconds
 
-The current experimental pin is `bc67e84c48952a718823d032554617ab1e5be874`.
+The bass-range experimental pin was `bc67e84c48952a718823d032554617ab1e5be874`.
 Its bass-range correction removes an unintended hard-coded 80 Hz period-search
 floor: the configured lower bound can now reach 50 Hz. The public streaming
 test uses a known 73.6 Hz rich vocal with a held 220 Hz target and an independent
@@ -434,6 +434,65 @@ explicitly ignored unresolved reproduction, and 21 bit-exact Cortex-M7 guest
 cases with missing-frame fault detection. The Git-pinned release fits with
 100 bytes of flash remaining. Work stays on `clankers-experiments`; main and
 the physical phone are unchanged, and the harmony quality issue remains open.
+
+### Continuous longer-window and independent-reference trials
+
+The current pin is `ddb95713b353942e37bf9431518fca713bb8cfeb`. Harmony's
+kernel now supports a generic FFT window; the production entry point still
+selects 1024 samples. The existing 1024-point recording render compares
+byte-for-byte identical with `bc67e84`. No longer window is enabled on the phone.
+
+`midi_vocoder --mode harmony --long-harmony-window` selects the same kernel at
+2048 points in the desktop lab, preserving the 256-sample hop, 2048-sample
+period history and physical envelope-smoothing bandwidth. A private OLA buffer
+normalizes the additional overlap; an impulse test verifies unity gain and
+exactly 1024 extra samples of delay. The audition compensates that delay
+offline before applying the strict MIDI-rest mask. It retains unpitched audio
+and rejects combination with `--voiced-only`.
+
+The known overlapping-harmonic fixture improves from 5.647% off-grid energy
+at 1024 points to approximately 0.005% at 2048, including legitimate modulation
+sidebands. The new long-window regression permits at most 0.5%. Nevertheless,
+the user still hears the real passage as bad. **This trial is not an accepted
+sound-quality fix.** Both matched four-second MP3s remain locally as
+`window-before.mp3` and `window-after.mp3`.
+
+The renderer also exports `harmony-targets.csv`: input-frame end timestamps
+and all eight MIDI frequency/gain pairs, directly from the same VoiceManager.
+The separate Rust desktop tool uses these targets and the existing MIDI-rest
+mask with [world-rs](https://github.com/JamesFysh/world-rs), a Rust port of
+[WORLD](https://github.com/mmorise/World). It performs independent DIO/StoneMask
+pitch analysis, CheapTrick envelope analysis and D4C noise analysis, then
+resynthesizes each active MIDI voice. Its dependencies are isolated from the
+audio-lab/firmware lock-parity test and never linked into the phone.
+
+```sh
+CARGO_TARGET_DIR="$PWD/target" CARGO_INCREMENTAL=0 cargo run --offline --release --locked \
+  --manifest-path tools/harmony-reference/Cargo.toml --target "$LAB_HOST" -- \
+  INPUT.wav HARMONY_TARGETS.csv MIDI_GATE_INTERVALS.csv 20 8 NEW_OUTPUT_DIRECTORY
+```
+
+The reference keeps the native recording rate and unvoiced synthesis. It
+retains an original-pitch resynthesis control and a source-F0 trace alongside
+the MIDI chord output. The known-note test independently measures the requested
+220 Hz line and rejects unchanged-source and subharmonic alternatives. It
+does not equate a passing numerical test with natural vocal tone.
+
+For input seconds 23.82..24.15, the reference identifies 66/67 frames near
+213.62..225.90 Hz, while our tracker finds about 73 Hz. This disagreement is
+not annotated ground truth: a subharmonic interpretation, vocal layering or
+analysis error remains possible. The user's reference verdict is **different,
+but still bad**; the remaining perceptual problem needs clarification before
+selecting another production change. The eight-second analysis uses song
+seconds 20..28, and the 98 KB reference MP3 crops its middle four seconds,
+corresponding to the same 22..26 passage. No voice frames are muted to hide
+roughness; the requested MIDI-rest silence remains exact in the WAV output.
+
+Validation for the current pin: 60 DSP tests plus 12 doctests, 159 passing lab
+tests plus the explicitly ignored 1024-point overlap reproduction, the separate
+WORLD known-note test, strict host Clippy and 21 Cortex-M7 parity cases with
+lost-frame detection. The Git-pinned firmware fits with **84 bytes spare**.
+These desktop trials have not been flashed or accepted as a harmony fix.
 
 ## Replay recordings
 

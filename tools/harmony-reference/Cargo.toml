@@ -1,0 +1,15 @@
+[package]
+name = "harmony-reference"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+audio-lab = { path = "../audio-lab" }
+world-rs = "=0.1.0"
+
+[profile.release]
+opt-level = 2
+codegen-units = 1

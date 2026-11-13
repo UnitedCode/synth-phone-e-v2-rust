@@ -4,6 +4,7 @@ use synthphone_e_vocal_dsp::{dsp::normalize_sample, MusicalSettings, VocalEffect
 #[path = "../../../src/audio/mod.rs"]
 pub mod audio;
 pub mod emulator;
+pub mod harmony_window;
 #[path = "../../../src/midi/notes.rs"]
 pub mod midi_notes;
 #[path = "../../../src/percussion.rs"]

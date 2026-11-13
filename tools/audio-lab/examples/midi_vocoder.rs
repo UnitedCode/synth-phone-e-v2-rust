@@ -35,6 +35,7 @@ struct Options {
     harmony_lead: f32,
     gate_midi: bool,
     voiced_only: bool,
+    long_harmony_window: bool,
 }
 
 fn options(args: &[String]) -> Result<Options> {
@@ -48,6 +49,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--legato" => options.legato = true,
             "--gate-midi" => options.gate_midi = true,
             "--voiced-only" => options.voiced_only = true,
+            "--long-harmony-window" => options.long_harmony_window = true,
             "--harmony-lead" => {
                 options.harmony_lead = args.next().ok_or("missing harmony lead gain")?.parse()?;
                 if !options.harmony_lead.is_finite() || !(0.0..=1.0).contains(&options.harmony_lead)
@@ -80,6 +82,11 @@ fn options(args: &[String]) -> Result<Options> {
     }
     if options.voiced_only && options.mode != Some(ProcessingMode::Harmony) {
         return Err("--voiced-only is a Harmony diagnostic; use --mode harmony".into());
+    }
+    if options.long_harmony_window
+        && (options.mode != Some(ProcessingMode::Harmony) || options.voiced_only)
+    {
+        return Err("--long-harmony-window requires --mode harmony without --voiced-only".into());
     }
     Ok(options)
 }
@@ -258,7 +265,7 @@ fn pcm16(path: &Path, samples: impl IntoIterator<Item = f32>, rate: u32, gain: f
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 4 {
-        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato | --gate-midi] [--mode vocoder|pitch|harmony|dry] [--harmony-lead 0..1] [--voiced-only]".into());
+        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato | --gate-midi] [--mode vocoder|pitch|harmony|dry] [--harmony-lead 0..1] [--voiced-only | --long-harmony-window]".into());
     }
     let options = options(&args[4..])?;
     let source = wav::read(Path::new(&args[1]))?;
@@ -342,6 +349,12 @@ fn main() -> Result<()> {
     let mut gate = Vec::with_capacity(total);
     let mut pitch_history = [0.0; 2048];
     let mut pitch_trace = String::from("input_end_seconds,pitch_hz,muted_unvoiced\n");
+    let mut long_harmony = audio_lab::harmony_window::LongHarmony::default();
+    let mut target_trace = String::from("input_end_seconds");
+    for voice in 0..8 {
+        target_trace.push_str(&format!(",frequency_{voice},gain_{voice}"));
+    }
+    target_trace.push('\n');
     for block in (0..total).step_by(BLOCK_SIZE) {
         for i in block..block + BLOCK_SIZE {
             while next < midi.events.len() && midi.events[next].sample <= i {
@@ -398,6 +411,11 @@ fn main() -> Result<()> {
                 },
             );
             let input_end = (block + BLOCK_SIZE) as f64 / f64::from(rate);
+            target_trace.push_str(&input_end.to_string());
+            for (&frequency, &gain) in frequencies.iter().zip(&gains) {
+                target_trace.push_str(&format!(",{frequency},{gain}"));
+            }
+            target_trace.push('\n');
             after.finish_block_with_kernel(
                 &carrier,
                 None,
@@ -410,17 +428,21 @@ fn main() -> Result<()> {
                     );
                     let mute = options.voiced_only && pitch <= 0.0;
                     pitch_trace.push_str(&format!("{input_end},{pitch},{}\n", u8::from(mute)));
-                    let output = vocal_frame::process_frame(
-                        input,
-                        carrier,
-                        input_phases,
-                        output_phases,
-                        envelope,
-                        inv_envelope,
-                        state,
-                        &config,
-                        &settings,
-                    );
+                    let output = if options.long_harmony_window {
+                        long_harmony.process(input, &config, &settings)
+                    } else {
+                        vocal_frame::process_frame(
+                            input,
+                            carrier,
+                            input_phases,
+                            output_phases,
+                            envelope,
+                            inv_envelope,
+                            state,
+                            &config,
+                            &settings,
+                        )
+                    };
                     // Keep the production state advancing. Only omit its
                     // unvoiced synthesis frame in this offline diagnostic.
                     if mute {
@@ -436,7 +458,15 @@ fn main() -> Result<()> {
     new.drain(..window_start);
     carrier_audio.drain(..window_start);
     gate.drain(..window_start);
+    if options.long_harmony_window {
+        // Offline alignment only: compensate the extra 1024 samples of analysis
+        // history, before applying the strict MIDI-rest mask to the result.
+        let end = new.len();
+        new.copy_within(audio_lab::harmony_window::EXTRA_DELAY.., 0);
+        new[end - audio_lab::harmony_window::EXTRA_DELAY..].fill(0.0);
+    }
     fs::write(out.join("harmony-pitch-routing.csv"), pitch_trace)?;
+    fs::write(out.join("harmony-targets.csv"), target_trace)?;
     if options.gate_midi {
         audio_lab::midi_gate::apply(&mut old, &gate, rate)?;
         audio_lab::midi_gate::apply(&mut new, &gate, rate)?;
@@ -496,6 +526,13 @@ fn main() -> Result<()> {
         report.push_str("Audition modification: note releases/rests are held through the next attack; no SMF or device policy change.\n");
     }
     report.push_str(&format!("voiced_only_diagnostic={}\n", options.voiced_only));
+    report.push_str(&format!(
+        "long_harmony_window={}\n",
+        options.long_harmony_window
+    ));
+    if options.long_harmony_window {
+        report.push_str("Host-only trial: 2048-point Harmony analysis, original 256-sample cadence, original 2048-sample period tracker, same physical envelope bandwidth. Its extra 1024-sample delay is compensated offline before MIDI-rest gating. Original unpitched fallback remains audible. Firmware still uses 1024 points.\n");
+    }
     if options.voiced_only {
         report.push_str("Diagnostic modification: current Harmony frames rejected by the period tracker are muted before overlap-add. Frozen baseline remains unchanged. This removes consonants too; it is not a firmware fix.\n");
     }
