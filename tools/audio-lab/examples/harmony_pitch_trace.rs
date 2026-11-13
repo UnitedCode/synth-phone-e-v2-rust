@@ -6,36 +6,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = vocal_frame::default_config();
     config.sample_rate = SAMPLE_RATE;
     if let Some(path) = std::env::args().nth(1) {
-        let reader = hound::WavReader::open(path)?;
-        if reader.spec().channels != 1
-            || reader.spec().sample_rate != SAMPLE_RATE as u32
-            || reader.spec().sample_format != hound::SampleFormat::Float
-        {
-            return Err("need mono 48014 Hz float WAV".into());
+        let audio = audio_lab::wav::read(std::path::Path::new(&path))?;
+        config.sample_rate = audio.sample_rate as f32;
+        let input = audio.samples;
+        if input.len() < 8192 {
+            return Err("need at least 8192 finite mono samples".into());
         }
-        let input = reader
-            .into_samples::<f32>()
-            .collect::<Result<Vec<_>, _>>()?;
-        if input.len() < 2048 || input.iter().any(|s| !s.is_finite()) {
-            return Err("need at least 2048 finite samples".into());
-        }
-        println!("seconds,coarse_hz,resolved_hz,independent_hz,odd_to_even_energy");
+        let baseline_config = baseline_vocal_dsp::VocalEffectsConfig {
+            sample_rate: config.sample_rate,
+            ..Default::default()
+        };
+        println!("seconds,coarse_after_hz,resolved_before_hz,independent_hz,odd_to_even_energy");
         let mut previous = 0.0;
         let mut unvoiced = 0;
-        for start in (0..input.len()).step_by(HOP_SIZE) {
-            let history: Vec<_> = (start..start + 8192)
-                .map(|i| input[i % input.len()])
-                .collect();
-            let coarse = frequency_analysis::find_pitch_harmony(&history[..2048], &config);
-            let mut frame: [f32; 1024] = history[1024..2048].try_into().unwrap();
+        let (mut absent, mut jumps, mut last) = ([0; 2], [0; 2], [0.0_f32; 2]);
+        let mut frames = 0;
+        for start in (0..=input.len() - 8192).step_by(HOP_SIZE) {
+            let history = &input[start..start + 8192];
+            let coarse = frequency_analysis::find_pitch_harmony(&history[6144..], &config);
+            let old_coarse = baseline_vocal_dsp::dsp::frequency_analysis::find_pitch_harmony(
+                &history[6144..],
+                &baseline_config,
+            );
+            let mut frame: [f32; 1024] = history[7168..].try_into().unwrap();
             for (sample, &window) in frame.iter_mut().zip(Fft1024::get_hann_window()) {
                 *sample *= window;
             }
             let fft = Fft1024::forward_fft(&mut frame);
             let magnitudes: [f32; 512] =
                 core::array::from_fn(|i| (fft[i].re * fft[i].re + fft[i].im * fft[i].im).sqrt());
-            let resolved = frequency_analysis::resolve_harmony_octave_1024(
-                coarse,
+            let resolved = baseline_vocal_dsp::dsp::frequency_analysis::resolve_harmony_octave_1024(
+                old_coarse,
                 &magnitudes,
                 config.sample_rate,
                 previous,
@@ -48,6 +49,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if unvoiced >= 8 {
                     previous = 0.0;
                 }
+            }
+            for (i, pitch) in [resolved, coarse].into_iter().enumerate() {
+                absent[i] += usize::from(pitch == 0.0);
+                if pitch > 0.0 && last[i] > 0.0 {
+                    let ratio = pitch / last[i];
+                    jumps[i] +=
+                        usize::from((1.8..2.2).contains(&ratio) || (0.45..0.55).contains(&ratio));
+                }
+                last[i] = pitch;
             }
             let (mut odd, mut even) = (0.0, 0.0);
             for h in 1..=8 {
@@ -63,11 +73,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!(
                 "{},{coarse},{resolved},{},{}",
-                start as f64 / SAMPLE_RATE as f64,
-                audio_lab::estimate_pitch(&history).unwrap_or(0.0),
+                (start + 8192) as f64 / f64::from(config.sample_rate),
+                if frames % 8 == 0 {
+                    audio_lab::estimate_pitch_at_rate(history, f64::from(config.sample_rate))
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                },
                 odd / even
             );
+            frames += 1;
         }
+        eprintln!("native_rate={}; frames={frames}; no_period_before_after={absent:?}; octave_steps_before_after={jumps:?}", config.sample_rate);
+        eprintln!("Chronological windows without looping. Coarse/legacy-source analysis, not output tuning or an oracle for the singer's intended note; the longer-window independent estimate is sampled every eight hops. Octave steps may be real sung changes.");
         return Ok(());
     }
     println!("source,seconds,legacy_yin,harmony_yin,refined,peak,harmonic,known_mean_hz");

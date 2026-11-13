@@ -249,7 +249,7 @@ are exported with common pre-encode RMS 0.07 under
 
 ### Harmony pitch audit and regression proof
 
-The current DSP pin, shared by firmware, host lab and ARM guest, is
+The first Harmony-audit DSP pin, shared by firmware, host lab and ARM guest, was
 `67205e8a64103018a7972a5c485a1dc91a905761` on `clankers-experiments`.
 Two public streaming audio tests first reproduced defects on the previous pin:
 
@@ -325,6 +325,60 @@ existing dry/wet Vocode Amount control. Preview versions are matched by constant
 whole-file gain; full original/updated files share a common gain. The source
 MIDI, recordings, generated audio and detailed provenance remain local under
 the ignored `audio-lab-results/hbfs-midi-vocoder-2026-11-13/` directory.
+
+### Vowel-dependent warbling and a strictly MIDI-gated audition
+
+The current experimental DSP pin is
+`47cd58cfe7bb3c910c3996b7989399b6b671cd8c`. A new public-stream fixture
+keeps the singer at 150 Hz while changing odd/even harmonic balance at 2 Hz,
+with a held 220 Hz MIDI target. The previous tracker alternated registers;
+82.03% of output energy fell outside the target's harmonic bands, allowing
+the fixture's legitimate amplitude sidebands. The new output has about 0.01%
+outside those bands. A positive control verifies that the source fixture's
+own harmonic bands capture its energy. This is a controlled reproduction,
+not a perceptual score for the song recording.
+
+Period selection now compares interpolated NSDF peak heights with a 99%
+relative gate instead of accepting an early peak at 93%. Streaming Harmony
+also stops overriding the period's register from even/odd spectral strength.
+The shared period detector feeds streaming PitchControl too; its existing
+regressions pass. The pitch-detector sweep now covers every semitone from
+MIDI 40 through 74 at three phases, alongside the earlier off-grid pitches.
+Held-target tests also cover true 150/300/150 Hz octave changes and wide vibrato.
+
+`harmony_pitch_trace INPUT_MONO.wav` now uses the file's native sample clock,
+chronological windows without looping, and a longer past-window reference
+every eight hops. The first 30 seconds of the selected real vocal produce
+5,136 analysis windows: no period in 1,495 before / 1,374 after, and 44 before /
+68 after near-octave steps. Those counts do **not** establish that every jump
+is false or that perceived warbling is resolved; real sung changes, unvoiced
+phonemes and the reference's longer window complicate this recording.
+`source-pitch-trace-final.csv` preserves that diagnostic evidence.
+
+For the requested listening aid, `midi_vocoder --gate-midi` preserves normal
+MIDI releases and forces output to zero whenever no selected MIDI note is
+active, including queued overlap-add tails. Two-ms fades stay entirely inside
+active-note intervals. It rejects combination with `--legato`. This is a host
+audition option, not a change to the phone's default Harmony behavior. Its
+stream test first demonstrates audible tails without the gate, then requires
+exact zero during every rest and audible output during active notes.
+
+The final pair uses the same Hide and Seek MIDI seconds 0..30 and Si Veo a Tu
+Mamá vocal seconds 100..130 as before, with no vocal loops/splices/resampling.
+The previous `67205e8` DSP was rebuilt with the same gate renderer, then all
+manifests and locks were restored to `47cd58c`. Both gate-interval CSVs compare
+identical. About 7.48 seconds of the 30.046-second files are MIDI-rest silence,
+including the drained tail. Matched-level 192 kbps mono MP3s are 722,904 bytes
+each under `audio-lab-results/harmony-warble-2026-11-13/`; unmatched WAVs and
+exact source pins remain in `gated-previous/` and `gated-new/`.
+
+Validation: 59 DSP tests, 156 host tests, strict host Clippy and 20 Cortex-M7
+guest parity cases pass; the injected missing frame is detected. The initial
+`760f06c` firmware exceeded flash by 64 bytes. Algebraically simplifying the
+peak-height calculation in `47cd58c` restores a successful pinned release
+build, with its final flash load ending at `0x0801FF94` (**108 bytes spare**).
+The phone has not been flashed; physical timing and listening acceptance
+remain unverified.
 
 ## Replay recordings
 

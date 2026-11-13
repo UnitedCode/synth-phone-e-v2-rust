@@ -33,6 +33,7 @@ struct Options {
     legato: bool,
     mode: Option<ProcessingMode>,
     harmony_lead: f32,
+    gate_midi: bool,
 }
 
 fn options(args: &[String]) -> Result<Options> {
@@ -44,6 +45,7 @@ fn options(args: &[String]) -> Result<Options> {
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--legato" => options.legato = true,
+            "--gate-midi" => options.gate_midi = true,
             "--harmony-lead" => {
                 options.harmony_lead = args.next().ok_or("missing harmony lead gain")?.parse()?;
                 if !options.harmony_lead.is_finite() || !(0.0..=1.0).contains(&options.harmony_lead)
@@ -69,6 +71,9 @@ fn options(args: &[String]) -> Result<Options> {
             }
             _ => return Err(format!("unknown option {flag}").into()),
         }
+    }
+    if options.gate_midi && options.legato {
+        return Err("--gate-midi requires normal note releases; omit --legato".into());
     }
     Ok(options)
 }
@@ -247,7 +252,7 @@ fn pcm16(path: &Path, samples: impl IntoIterator<Item = f32>, rate: u32, gain: f
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 4 {
-        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato] [--mode vocoder|pitch|harmony] [--harmony-lead 0..1]".into());
+        return Err("usage: midi_vocoder FILE.mid REAL_VOCAL_MONO.wav NEW_OUTPUT_DIRECTORY TRACK_INDEX [PREVIEW_START_SECONDS] [--window MIDI_START_SECONDS DURATION_SECONDS] [--legato | --gate-midi] [--mode vocoder|pitch|harmony] [--harmony-lead 0..1]".into());
     }
     let options = options(&args[4..])?;
     let source = wav::read(Path::new(&args[1]))?;
@@ -326,6 +331,8 @@ fn main() -> Result<()> {
         vec![0.0; total],
     );
     let mut next = 0;
+    let mut midi_active = false;
+    let mut gate = Vec::with_capacity(total);
     for block in (0..total).step_by(BLOCK_SIZE) {
         for i in block..block + BLOCK_SIZE {
             while next < midi.events.len() && midi.events[next].sample <= i {
@@ -335,6 +342,7 @@ fn main() -> Result<()> {
                         .take_while(|e| e.sample == midi.events[next].sample)
                         .count();
                 apply_group(&mut manager, &midi.events[next..end], options.legato);
+                midi_active = manager.get_cached_frequencies().iter().any(|&f| f > 0.0);
                 next = end;
             }
             let input = if (window_start..window_end).contains(&i) {
@@ -344,6 +352,7 @@ fn main() -> Result<()> {
             };
             old.push(before.sample(input));
             new.push(after.sample(input));
+            gate.push(midi_active && (window_start..window_end).contains(&i));
         }
         if after.pending() {
             let (frequencies, gains) = manager.get_harmony_voices(64);
@@ -385,6 +394,25 @@ fn main() -> Result<()> {
     old.drain(..window_start);
     new.drain(..window_start);
     carrier_audio.drain(..window_start);
+    gate.drain(..window_start);
+    if options.gate_midi {
+        audio_lab::midi_gate::apply(&mut old, &gate, rate)?;
+        audio_lab::midi_gate::apply(&mut new, &gate, rate)?;
+        for audio in [&old, &new] {
+            if audio.iter().zip(&gate).any(|(&x, &on)| !on && x != 0.0) {
+                return Err("MIDI gate leaked audio into a rest".into());
+            }
+        }
+        let mut intervals = String::from("start_sample,end_sample,active\n");
+        let mut start = 0;
+        for end in 1..=gate.len() {
+            if end == gate.len() || gate[end] != gate[start] {
+                intervals.push_str(&format!("{start},{end},{}\n", u8::from(gate[start])));
+                start = end;
+            }
+        }
+        fs::write(out.join("midi-gate-intervals.csv"), intervals)?;
+    }
     // These blends combine the two effect revisions, with no added dry voice.
     let blends: Vec<_> = [0.8_f32, 0.9]
         .into_iter()
@@ -414,11 +442,13 @@ fn main() -> Result<()> {
     }
     let mut report = format!("midi={}\nvocal={}\n{}sample_rate={rate}\npreview_start={preview_start}\npreview_end={}\ncommon_playback_rms={common_rms}\n", args[0], args[1], midi.report, end as f64 / rate as f64);
     report.push_str(&format!(
-        "mode={:?}\nconfig={config:?}\nmidi_window_start={}\nwindow_duration={}\nlegato_audition={}\n",
+        "mode={:?}\nconfig={config:?}\nmidi_window_start={}\nwindow_duration={}\nlegato_audition={}\nmidi_output_gate={}\nmidi_rest_seconds={}\n",
         settings.mode,
         window_start as f64 / rate as f64,
         duration as f64 / rate as f64,
-        options.legato
+        options.legato,
+        options.gate_midi,
+        gate.iter().filter(|&&on| !on).count() as f64 / f64::from(rate),
     ));
     if options.legato {
         report.push_str("Audition modification: note releases/rests are held through the next attack; no SMF or device policy change.\n");

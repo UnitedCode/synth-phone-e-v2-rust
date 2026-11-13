@@ -25,6 +25,7 @@ pub mod output_mix;
 pub mod voice_generator;
 pub use audio::drum_synth;
 pub mod levels;
+pub mod midi_gate;
 pub mod recording_levels;
 pub mod vocal_evidence;
 

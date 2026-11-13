@@ -440,7 +440,7 @@ fn backing_pcm_level_stays_constant_when_the_midi_lead_rests() {
 
 #[test]
 fn held_harmony_stays_in_tune_when_the_singer_changes_register() {
-    let sources = [90.0, 130.0, 200.0, 300.0, 440.0, 590.0];
+    let sources = [90.0, 130.0, 200.0, 300.0, 440.0, 590.0, 150.0, 300.0, 150.0];
     let segment = (SAMPLE_RATE * 0.45) as usize;
     let mut phase = 0.0_f64;
     let mut input = Vec::new();
@@ -514,5 +514,101 @@ fn unvoiced_consonants_include_the_lead_in_voice_power_normalization() {
                 "lead {lead}, {count} harmonies: unvoiced gain {ratio}, expected {expected}"
             );
         }
+    }
+}
+
+#[test]
+fn wide_sung_vibrato_does_not_make_a_held_harmony_warble() {
+    let mut phase = 0.0_f64;
+    let input: Vec<_> = (0..(SAMPLE_RATE * 3.0) as usize)
+        .map(|i| {
+            let time = i as f64 / f64::from(SAMPLE_RATE);
+            let source =
+                150.0 * 2_f64.powf(150.0 * (std::f64::consts::TAU * 6.0 * time).sin() / 1200.0);
+            phase += std::f64::consts::TAU * source / f64::from(SAMPLE_RATE);
+            (0.15 * phase.sin()) as f32
+        })
+        .collect();
+    let mut config = vocal_frame::default_config();
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 220.0;
+    let output = render(&input, &[], &config, &settings);
+    let mut worst = 0.0_f64;
+    for start in ((SAMPLE_RATE * 0.5) as usize..(SAMPLE_RATE * 2.7) as usize)
+        .step_by((SAMPLE_RATE * 0.06) as usize)
+    {
+        let end = start + (SAMPLE_RATE * 0.12) as usize;
+        let pitch = audio_lab::estimate_pitch(&output.raw[start..end])
+            .expect("a held monophonic target must remain periodic");
+        worst = worst.max(audio_lab::cents(pitch, 220.0).abs());
+    }
+    eprintln!("wide vibrato worst pitch error: {worst:.2} cents");
+    assert!(
+        worst < 20.0,
+        "held 220 Hz harmony warbles by {worst:.2} cents"
+    );
+}
+
+#[test]
+fn changing_vowel_balance_does_not_create_inharmonic_harmony() {
+    let input: Vec<_> = (0..(SAMPLE_RATE * 3.0) as usize)
+        .map(|i| {
+            let t = i as f64 / f64::from(SAMPLE_RATE);
+            let phase = std::f64::consts::TAU * 150.0 * t;
+            let odd = (0.5 + 0.5 * (std::f64::consts::TAU * 2.0 * t).sin()).powi(2) * 0.15;
+            ((0.005 + odd * 0.2) * phase.sin()
+                + 0.12 * (2.0 * phase).sin()
+                + (0.01 + odd * 0.3) * (3.0 * phase).sin()
+                + 0.08 * (4.0 * phase).sin()
+                + (0.005 + odd * 0.1) * (5.0 * phase).sin()
+                + 0.04 * (6.0 * phase).sin()) as f32
+        })
+        .collect();
+    let mut config = vocal_frame::default_config();
+    config.harmony_lead_gain = 0.0;
+    let mut settings = MusicalSettings {
+        mode: ProcessingMode::Harmony,
+        ..Default::default()
+    };
+    settings.midi_frequencies[0] = 220.0;
+    let output = render(&input, &[], &config, &settings);
+    let region = (SAMPLE_RATE * 0.5) as usize..(SAMPLE_RATE * 2.5) as usize;
+    for (label, samples, fundamental, tolerance) in [
+        ("known input", &input[region.clone()], 150.0, 0.01),
+        ("held harmony", &output.raw[region], 220.0, 0.05),
+    ] {
+        let energy = samples.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>();
+        let mut captured = 0.0;
+        // The known vowel modulation is periodic at 2 Hz. Include its legitimate
+        // amplitude sidebands around each target harmonic, excluding unrelated
+        // tones between the harmonic bands.
+        for harmonic in 1..=12 {
+            for sideband in -5..=5 {
+                let frequency = harmonic as f64 * fundamental + sideband as f64 * 2.0;
+                let angle = std::f64::consts::TAU * frequency / f64::from(SAMPLE_RATE);
+                let (step_s, step_c) = angle.sin_cos();
+                let (mut s, mut c, mut re, mut im) = (0.0, 1.0, 0.0, 0.0);
+                for &sample in samples {
+                    re += f64::from(sample) * c;
+                    im += f64::from(sample) * s;
+                    (s, c) = (s * step_c + c * step_s, c * step_c - s * step_s);
+                }
+                captured += 2.0 * (re * re + im * im) / samples.len() as f64;
+            }
+        }
+        let outside = (1.0 - captured / energy).max(0.0);
+        eprintln!(
+            "changing vowel {label}: {:.2}% outside target bands",
+            outside * 100.0
+        );
+        assert!(
+            outside < tolerance,
+            "{label}: vowel changes generate {:.2}% inharmonic energy",
+            outside * 100.0
+        );
     }
 }

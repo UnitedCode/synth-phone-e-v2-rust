@@ -10,7 +10,7 @@ dependencies = [
  "libm",
  "log",
  "midly",
- "synthphone-e-vocal-dsp 0.1.1 (git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=67205e8a64103018a7972a5c485a1dc91a905761)",
+ "synthphone-e-vocal-dsp 0.1.1 (git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=47cd58cfe7bb3c910c3996b7989399b6b671cd8c)",
  "synthphone-e-vocal-dsp 0.1.1 (git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=4cf708acb2c1744707a316c9fc37bf15b46d8f3e)",
 ]
 
@@ -94,7 +94,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "synthphone-e-vocal-dsp"
 version = "0.1.1"
-source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=67205e8a64103018a7972a5c485a1dc91a905761#67205e8a64103018a7972a5c485a1dc91a905761"
+source = "git+https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git?rev=47cd58cfe7bb3c910c3996b7989399b6b671cd8c#47cd58cfe7bb3c910c3996b7989399b6b671cd8c"
 dependencies = [
  "libm",
  "microfft",
