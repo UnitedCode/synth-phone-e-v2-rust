@@ -3,9 +3,17 @@ use std::time::Instant;
 use synthphone_e_vocal_dsp::{dsp::normalize_sample, MusicalSettings, VocalEffectsConfig};
 #[path = "../../../src/audio/mod.rs"]
 pub mod audio;
+#[path = "../../../src/display_updates.rs"]
+pub mod display_updates;
 pub mod emulator;
+#[path = "../../../src/keypad.rs"]
+pub mod keypad;
+#[path = "../../../src/midi/events.rs"]
+pub mod midi_events;
 #[path = "../../../src/midi/notes.rs"]
 pub mod midi_notes;
+#[path = "../../../src/display/note_font.rs"]
+pub mod note_font;
 #[path = "../../../src/percussion.rs"]
 pub mod percussion;
 pub mod replay;

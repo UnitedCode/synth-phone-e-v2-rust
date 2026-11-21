@@ -25,6 +25,15 @@ pub fn config_for_speed(speed: i8) -> VocalEffectsConfig {
     config
 }
 
+/// Magnitude raises the FFT-bin rejection threshold, independently of volume.
+/// Value 5 preserves the existing 1e-6 threshold; each step changes it tenfold.
+pub fn config_for_menu(speed: i8, magnitude: i8) -> VocalEffectsConfig {
+    const THRESHOLDS: [f32; 10] = [1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1];
+    let mut config = config_for_speed(speed);
+    config.magnitude_threshold = THRESHOLDS[(magnitude.clamp(1, 10) - 1) as usize];
+    config
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn process_frame(
     input: &mut [f32; 1024],

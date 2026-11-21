@@ -1,6 +1,9 @@
 [target.thumbv7em-none-eabihf]
 runner = "probe-rs run --chip STM32H750VBTx"
 rustflags = [
+    # STM32H750 has the Cortex-M7 FPv5 double-precision FPU.
+    "-C",
+    "target-cpu=cortex-m7",
     # LLD (shipped with the Rust toolchain) is used as the default linker
     "-C",
     "link-arg=-Tlink.x",

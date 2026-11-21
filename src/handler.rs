@@ -1,9 +1,9 @@
-use crate::midi::get_midi_queue_status;
+use crate::midi::{get_midi_queue_status, MidiQueueMonitor};
 use crate::percussion::DRUM_CHANNEL;
 use crate::state_machine::{AppEvent, AppState, ProcessingProfile};
 use crate::{constants::*, input::buttons::*};
 use app_lib::output_mix;
-use app_lib::vocal_frame::{config_for_speed, process_frame};
+use app_lib::vocal_frame::{config_for_menu, process_frame};
 use libdaisy::gpio::Daisy1;
 use libdaisy::prelude::Input;
 use libdaisy::{audio, hid};
@@ -20,6 +20,7 @@ pub fn audio_handler(
     buffer: &mut audio::AudioBuffer,
     hangup_button: &mut hid::Switch<Daisy1<Input>>,
     hop_counter: &mut u32,
+    midi_queue_monitor: &mut MidiQueueMonitor,
     sr_hold_counter: &mut i32,
     sr_held_value: &mut f32,
     shared: &mut crate::rtic_app::app::update_handler::SharedResources,
@@ -42,12 +43,7 @@ pub fn audio_handler(
     shared.app_state_machine.lock(|msm| {
         let snapshot = msm.snapshot();
         sr_factor = snapshot.sample_reduction;
-        wave_type = match snapshot.waveform {
-            0 => Waveform::Triangle,
-            1 => Waveform::Square,
-            2 => Waveform::Saw,
-            _ => Waveform::Sine,
-        };
+        wave_type = snapshot.oscillator_waveform();
         bit_depth = snapshot.bit_rate;
         let profile = match snapshot.current_state {
             AppState::Processing(p) | AppState::EffectsProfile(p) | AppState::Menu(_, p) => p,
@@ -67,6 +63,7 @@ pub fn audio_handler(
     });
 
     if audio.get_stereo(buffer) {
+        let mut midi_display_dirty = false;
         for (left, right) in &buffer.as_slice()[..BLOCK_SIZE] {
             let sample = match is_hangup_button_pressed {
                 false => *right,
@@ -100,7 +97,6 @@ pub fn audio_handler(
             shared.midi_events.lock(|events| {
                 if !events.is_empty() {
                     shared.voice_manager.lock(|voice_manager| {
-                        voice_manager.set_waveform(wave_type);
                         // Process up to 2 events per audio frame to maintain real-time performance
                         for _ in 0..2 {
                             if let Some(event) = events.dequeue() {
@@ -138,43 +134,11 @@ pub fn audio_handler(
                                                 msm.set_harmony_backing_from_midi(value);
                                             });
                                         }
-                                        7 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_volume_from_midi(value);
-                                            });
-                                        }
-                                        34..=42 | 44..=46 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_menu_value_from_cc(controller, value);
-                                            });
-                                        }
-                                        43 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.cycle_key_from_midi(value);
-                                            });
-                                            shared.display_needs_update.lock(|flag| *flag = true);
-                                            crate::rtic_app::app::display_update_task::spawn().ok();
-                                        }
-                                        80 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_octave_from_midi(value);
-                                            });
-                                            shared.display_needs_update.lock(|flag| *flag = true);
-                                            crate::rtic_app::app::display_update_task::spawn().ok();
-                                        }
-                                        81 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_formant_from_midi(value);
-                                            });
-                                            shared.display_needs_update.lock(|flag| *flag = true);
-                                            crate::rtic_app::app::display_update_task::spawn().ok();
-                                        }
-                                        82 => {
-                                            shared.app_state_machine.lock(|msm| {
-                                                msm.set_crush_from_midi(value);
-                                            });
-                                            shared.display_needs_update.lock(|flag| *flag = true);
-                                            crate::rtic_app::app::display_update_task::spawn().ok();
+                                        7 | 34..=46 | 80..=82 => {
+                                            midi_display_dirty |=
+                                                shared.app_state_machine.lock(|msm| {
+                                                    msm.apply_midi_control_change(controller, value)
+                                                });
                                         }
                                         _ => {}
                                     },
@@ -183,26 +147,51 @@ pub fn audio_handler(
                                         voice_manager.apply_channel_pitch_bend(channel, bend_ratio);
                                     }
                                     crate::midi::MidiEvent::ProgramChange { channel, program } => {
+                                        midi_display_dirty |=
+                                            shared.app_state_machine.lock(|msm| {
+                                                let redraw =
+                                                    msm.set_waveform_from_midi(channel, program);
+                                                if redraw {
+                                                    wave_type =
+                                                        msm.snapshot().oscillator_waveform();
+                                                }
+                                                redraw
+                                            });
+                                    }
+                                    crate::midi::MidiEvent::QueueOverflow => {
+                                        voice_manager.reset_midi_performance();
+                                        warn!("MIDI queue overflow: notes, sustain and bend reset");
+                                    }
+                                    crate::midi::MidiEvent::UartError => {
+                                        voice_manager.reset_midi_performance();
+                                    }
+                                    crate::midi::MidiEvent::SystemReset => {
+                                        voice_manager.reset_midi_performance();
                                         shared.app_state_machine.lock(|msm| {
-                                            msm.set_waveform_from_midi(channel, program);
+                                            msm.reset_midi_performance();
+                                            wave_type = msm.snapshot().oscillator_waveform();
                                         });
+                                        midi_display_dirty = true;
                                     }
                                     crate::midi::MidiEvent::Other => {
-                                        // MIDI clock / active-sense / reset: discard.
+                                        // Unhandled MIDI messages: discard.
                                     }
                                 }
                             } else {
                                 break;
                             }
                         }
+                        midi_display_dirty |= shared.app_state_machine.lock(|msm| {
+                            msm.set_midi_note_for_display(voice_manager.display_note())
+                        });
                     });
                 }
             });
 
             // ************** ADD MIDI OUTPUT **************
-            let (melody, drums) = shared.voice_manager.lock(|vm| {
-                vm.get_mixed_sources_with_gains(mute_melody_synth, melody_gain, drum_gain)
-            });
+            let (melody, drums) = shared
+                .voice_manager
+                .lock(|vm| vm.render_sources(wave_type, mute_melody_synth, melody_gain, drum_gain));
             out_sample =
                 output_mix::sum_sources(out_sample, melody, drums, wave_type) * master_gain;
 
@@ -239,16 +228,18 @@ pub fn audio_handler(
             }
         }
 
-        // Monitor MIDI queue status periodically using hop_counter
-        if *hop_counter % 4800 == 0 {
-            // Check every ~100ms at 48kHz
-            shared.midi_events.lock(|events| {
-                let (len, capacity) = get_midi_queue_status(events);
-                if len > capacity * 3 / 4 {
-                    // Warn if queue is >75% full
-                    warn!("MIDI queue high: {}/{}", len, capacity);
-                }
-            });
+        // Coalesce the block's MIDI changes into one low-priority redraw.
+        if midi_display_dirty {
+            shared.display_updates.lock(|updates| updates.request());
+            crate::rtic_app::app::display_update_task::spawn().ok();
+        }
+
+        if let Some((len, capacity)) = midi_queue_monitor.on_audio_block(|| {
+            shared
+                .midi_events
+                .lock(|events| get_midi_queue_status(events))
+        }) {
+            warn!("MIDI queue high: {}/{}", len, capacity);
         }
     } else {
         warn!("Error reading data!");
@@ -263,7 +254,7 @@ pub fn interface_handler(
 
     let mut update_state: bool = false;
 
-    let new_matrix_state = scan_button_matrix(
+    let raw_matrix_state = scan_button_matrix(
         local.col_1_pin,
         local.col_2_pin,
         local.col_3_pin,
@@ -273,16 +264,12 @@ pub fn interface_handler(
         local.row_4_pin,
     );
 
-    for row in 0..4 {
-        for col in 0..3 {
-            let was_pressed = shared.old_matrix_state.lock(|oms| oms[row][col]);
-            let is_pressed = new_matrix_state[row][col];
-
-            if is_pressed != was_pressed {
-                shared.old_matrix_state.lock(|oms| {
-                    oms[row][col] = is_pressed;
-                });
-
+    let changes = local
+        .keypad_debounce
+        .update(raw_matrix_state, cortex_m::peripheral::DWT::cycle_count());
+    for (row, columns) in changes.into_iter().enumerate() {
+        for (col, change) in columns.into_iter().enumerate() {
+            if let Some(is_pressed) = change {
                 let actual_col = 2 - col;
                 let key_num = row * 3 + actual_col + 1;
 
@@ -380,7 +367,7 @@ pub fn interface_handler(
 
     if update_state {
         // Set the flag
-        shared.display_needs_update.lock(|flag| *flag = true);
+        shared.display_updates.lock(|updates| updates.request());
 
         // Spawn the display task to run
         crate::rtic_app::app::display_update_task::spawn().ok();
@@ -410,6 +397,7 @@ pub fn handle_vocal_effects(
     let mut key = 0i8;
     let mut pitch_ratio = 1.0f32;
     let mut autotune_speed = 5;
+    let mut magnitude = 5;
     let mut harmony_lead = 1.0;
     let mut harmony_backing = 64;
     let mut wave_type = Waveform::Sine;
@@ -425,6 +413,7 @@ pub fn handle_vocal_effects(
         }
         formant = snapshot.formant;
         autotune_speed = snapshot.autotune_speed;
+        magnitude = snapshot.magnitude;
         harmony_lead = snapshot.harmony_lead as f32 / 127.0;
         harmony_backing = snapshot.harmony_backing;
         synth_gain = output_mix::synth_gain(snapshot.melody_volume);
@@ -435,12 +424,7 @@ pub fn handle_vocal_effects(
         note = snapshot.note;
         // -1/0/+1 octave → 0.5×/1×/2× on the keypad synth note only
         synth_octave_ratio = libm::exp2f(snapshot.synth_octave as f32);
-        wave_type = match snapshot.waveform {
-            0 => Waveform::Triangle,
-            1 => Waveform::Square,
-            2 => Waveform::Saw,
-            _ => Waveform::Sine,
-        };
+        wave_type = snapshot.oscillator_waveform();
         let values = asm.get_values();
         // value 5 → 0.5 / 2.0 to match the previous hardcoded defaults
         formant_male_ratio = values.formant_male as f32 * 0.1;
@@ -545,7 +529,7 @@ pub fn handle_vocal_effects(
         octave_ratio: pitch_ratio,
         mode,
     };
-    let mut config = config_for_speed(autotune_speed);
+    let mut config = config_for_menu(autotune_speed, magnitude);
     config.harmony_lead_gain = harmony_lead;
     let mut input_buffer = [0.0; FFT_SIZE];
     let write_idx = ctx.in_pointer_cached.lock(|in_pointer| *in_pointer);
