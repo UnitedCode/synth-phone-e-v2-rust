@@ -1,5 +1,3 @@
-ENTRY(Reset_Handler)
-
 MEMORY
 {
 	FLASH (RX)    : ORIGIN = 0x08000000, LENGTH = 128K
@@ -24,6 +22,19 @@ SECTIONS
 		. = ALIGN(32);
 		*(.vocal_state)
 		. = ALIGN(32);
+	} > SRAM
+
+	/* RTIC's CPU-owned resources used most of DTCM, leaving only 56 KiB
+	 * for the initialization frame and nested FFT/audio/UI interrupt stacks.
+	 * Place their explicitly initialized, NOLOAD storage in AXI SRAM instead.
+	 * DMA buffers remain in their dedicated D2 section below. */
+	.rtic_state (NOLOAD) :
+	{
+		. = ALIGN(32);
+		_srtic_state = .;
+		*(.uninit .uninit.*)
+		. = ALIGN(32);
+		_ertic_state = .;
 	} > SRAM
 
 	.sram1_bss (NOLOAD) :
@@ -56,3 +67,8 @@ SECTIONS
 
 
 }
+
+/* cortex-m-rt defines __euninit after the remaining DTCM data. Keep a
+ * meaningful lower bound on stack headroom as the firmware grows. */
+ASSERT(ORIGIN(DTCMRAM) + LENGTH(DTCMRAM) - __euninit >= 96K,
+       "Synthphone requires at least 96 KiB of DTCM stack headroom");
