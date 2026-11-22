@@ -231,7 +231,7 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         }
 
         if count > 0 {
-            sum / libm::sqrtf(count as f32)
+            sum / synthphone_e_vocal_dsp::dsp::sqrtf(count as f32)
         } else {
             0.0
         }
