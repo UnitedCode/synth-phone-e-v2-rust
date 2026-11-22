@@ -590,8 +590,8 @@ impl<const MAX_VOICES: usize> VoiceManager<MAX_VOICES> {
         let leads = lead.iter().filter(|&&value| value).count();
         let backs = count - leads;
         let back = backing_level.min(127) as f32 / 127.0;
-        let lead_root = libm::sqrtf(leads.max(1) as f32);
-        let back_root = libm::sqrtf(backs.max(1) as f32);
+        let lead_root = synthphone_e_vocal_dsp::dsp::sqrtf(leads.max(1) as f32);
+        let back_root = synthphone_e_vocal_dsp::dsp::sqrtf(backs.max(1) as f32);
         // The pinned DSP averages voiced parts by their active count. Cancel
         // that attenuation, then budget both groups' summed amplitudes. Keep
         // the lead's share reserved during rests so backing does not jump.
