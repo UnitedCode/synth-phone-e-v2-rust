@@ -22,7 +22,7 @@ log = "0.4.21"
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
 micromath = "2.1.0"
 microfft = "0.6"
-synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "4cf708acb2c1744707a316c9fc37bf15b46d8f3e"}
+synthphone-e-vocal-dsp = {git = "https://github.com/nathansbradshaw/synthphone_e_vocal_dsp.git", rev = "23ec6a94548bd0c57b968aef553ab38c4ddbd3b8"}
 # synthphone-e-vocal-dsp = { path = "../synthphone_e_vocal_dsp/" }
 libm = "0.2.8"
 heapless = "0.8.0"
