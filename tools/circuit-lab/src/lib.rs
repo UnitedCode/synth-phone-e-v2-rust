@@ -1,7 +1,11 @@
 //! Project-owned circuit fixtures with frozen KiCad connectivity and explicit evidence levels.
 pub mod carrier;
+#[cfg(feature = "device")]
+pub mod device;
+pub mod electrical;
 pub mod fixture;
 pub mod netlist;
+pub mod oled;
 pub mod profiles;
 #[cfg(feature = "spice")]
 pub mod spice;
@@ -26,6 +30,8 @@ pub fn sha256(path: &Path) -> Result<String> {
 
 pub fn cli(args: Vec<String>) -> Result<()> {
     match args.first().map(String::as_str) {
+        #[cfg(feature="device")]
+        Some("device")=>return device::run(&args[1..]),
         Some("import") if args.len() == 4 => {
             let graph = netlist::Graph::xml(&fs::read_to_string(&args[1])?)?;
             // Source hash ties the deterministic export to a particular design, not an export date.
