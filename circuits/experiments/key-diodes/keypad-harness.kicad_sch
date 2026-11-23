@@ -1,0 +1,462 @@
+(kicad_sch (version 20250114) (generator "circuit-workbench") (uuid "86205400-1234-4567-8900-000000000000") (paper "A4")
+(lib_symbols (symbol "Device:D_Schottky"
+		(pin_numbers
+			(hide yes)
+		)
+		(pin_names
+			(offset 1.016)
+			(hide yes)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "D"
+			(at 0 2.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "D_Schottky"
+			(at 0 -2.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Schottky diode"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "ki_keywords" "diode Schottky"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "ki_fp_filters" "TO-???* *_Diode_* *SingleDiode* D_*"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(symbol "D_Schottky_0_1"
+			(polyline
+				(pts
+					(xy -1.905 0.635) (xy -1.905 1.27) (xy -1.27 1.27) (xy -1.27 -1.27) (xy -0.635 -1.27) (xy -0.635 -0.635)
+				)
+				(stroke
+					(width 0.254)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+			(polyline
+				(pts
+					(xy 1.27 1.27) (xy 1.27 -1.27) (xy -1.27 0) (xy 1.27 1.27)
+				)
+				(stroke
+					(width 0.254)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+			(polyline
+				(pts
+					(xy 1.27 0) (xy -1.27 0)
+				)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+		)
+		(symbol "D_Schottky_1_1"
+			(pin passive line
+				(at -3.81 0 0)
+				(length 2.54)
+				(name "K"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at 3.81 0 180)
+				(length 2.54)
+				(name "A"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	)
+(symbol "Switch:SW_Push"
+		(pin_numbers
+			(hide yes)
+		)
+		(pin_names
+			(offset 1.016)
+			(hide yes)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "SW"
+			(at 1.27 2.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "SW_Push"
+			(at 0 -1.524 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 0 5.08 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 0 5.08 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Push button switch, generic, two pins"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "ki_keywords" "switch normally-open pushbutton push-button"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(symbol "SW_Push_0_1"
+			(circle
+				(center -2.032 0)
+				(radius 0.508)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+			(polyline
+				(pts
+					(xy 0 1.27) (xy 0 3.048)
+				)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+			(circle
+				(center 2.032 0)
+				(radius 0.508)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+			(polyline
+				(pts
+					(xy 2.54 1.27) (xy -2.54 1.27)
+				)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+			(pin passive line
+				(at -5.08 0 0)
+				(length 2.54)
+				(name "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at 5.08 0 180)
+				(length 2.54)
+				(name "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	))
+(symbol (lib_id "Device:D_Schottky") (at 58.419999999999995 45.72 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000100")
+(property "Reference" "KD1" (at 58.419999999999995 40.72 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 58.419999999999995 50.72 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 58.419999999999995 45.72 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD1") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 43.18 45.72 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000101")
+(property "Reference" "KS1" (at 43.18 40.72 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 43.18 50.72 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 43.18 45.72 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS1") (unit 1)))))
+(wire (pts (xy 48.26 45.72) (xy 54.61 45.72)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000102"))
+(label "col1" (at 38.099999999999994 45.72 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000103"))
+(label "row1" (at 62.23 45.72 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000104"))
+(symbol (lib_id "Device:D_Schottky") (at 134.62 45.72 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000105")
+(property "Reference" "KD2" (at 134.62 40.72 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 134.62 50.72 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 134.62 45.72 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD2") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 119.38 45.72 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000106")
+(property "Reference" "KS2" (at 119.38 40.72 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 119.38 50.72 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 119.38 45.72 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS2") (unit 1)))))
+(wire (pts (xy 124.46 45.72) (xy 130.81 45.72)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000107"))
+(label "col2" (at 114.3 45.72 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000108"))
+(label "row1" (at 138.43 45.72 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000109"))
+(symbol (lib_id "Device:D_Schottky") (at 210.82 45.72 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000110")
+(property "Reference" "KD3" (at 210.82 40.72 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 210.82 50.72 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 210.82 45.72 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD3") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 195.57999999999998 45.72 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000111")
+(property "Reference" "KS3" (at 195.57999999999998 40.72 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 195.57999999999998 50.72 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 195.57999999999998 45.72 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS3") (unit 1)))))
+(wire (pts (xy 200.66 45.72) (xy 207.01 45.72)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000112"))
+(label "col3" (at 190.5 45.72 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000113"))
+(label "row1" (at 214.63 45.72 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000114"))
+(symbol (lib_id "Device:D_Schottky") (at 58.419999999999995 81.28 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000115")
+(property "Reference" "KD4" (at 58.419999999999995 76.28 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 58.419999999999995 86.28 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 58.419999999999995 81.28 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD4") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 43.18 81.28 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000116")
+(property "Reference" "KS4" (at 43.18 76.28 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 43.18 86.28 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 43.18 81.28 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS4") (unit 1)))))
+(wire (pts (xy 48.26 81.28) (xy 54.61 81.28)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000117"))
+(label "col1" (at 38.099999999999994 81.28 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000118"))
+(label "row2" (at 62.23 81.28 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000119"))
+(symbol (lib_id "Device:D_Schottky") (at 134.62 81.28 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000120")
+(property "Reference" "KD5" (at 134.62 76.28 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 134.62 86.28 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 134.62 81.28 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD5") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 119.38 81.28 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000121")
+(property "Reference" "KS5" (at 119.38 76.28 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 119.38 86.28 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 119.38 81.28 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS5") (unit 1)))))
+(wire (pts (xy 124.46 81.28) (xy 130.81 81.28)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000122"))
+(label "col2" (at 114.3 81.28 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000123"))
+(label "row2" (at 138.43 81.28 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000124"))
+(symbol (lib_id "Device:D_Schottky") (at 210.82 81.28 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000125")
+(property "Reference" "KD6" (at 210.82 76.28 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 210.82 86.28 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 210.82 81.28 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD6") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 195.57999999999998 81.28 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000126")
+(property "Reference" "KS6" (at 195.57999999999998 76.28 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 195.57999999999998 86.28 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 195.57999999999998 81.28 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS6") (unit 1)))))
+(wire (pts (xy 200.66 81.28) (xy 207.01 81.28)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000127"))
+(label "col3" (at 190.5 81.28 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000128"))
+(label "row2" (at 214.63 81.28 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000129"))
+(symbol (lib_id "Device:D_Schottky") (at 58.419999999999995 116.84 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000130")
+(property "Reference" "KD7" (at 58.419999999999995 111.84 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 58.419999999999995 121.84 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 58.419999999999995 116.84 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD7") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 43.18 116.84 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000131")
+(property "Reference" "KS7" (at 43.18 111.84 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 43.18 121.84 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 43.18 116.84 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS7") (unit 1)))))
+(wire (pts (xy 48.26 116.84) (xy 54.61 116.84)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000132"))
+(label "col1" (at 38.099999999999994 116.84 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000133"))
+(label "row3" (at 62.23 116.84 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000134"))
+(symbol (lib_id "Device:D_Schottky") (at 134.62 116.84 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000135")
+(property "Reference" "KD8" (at 134.62 111.84 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 134.62 121.84 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 134.62 116.84 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD8") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 119.38 116.84 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000136")
+(property "Reference" "KS8" (at 119.38 111.84 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 119.38 121.84 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 119.38 116.84 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS8") (unit 1)))))
+(wire (pts (xy 124.46 116.84) (xy 130.81 116.84)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000137"))
+(label "col2" (at 114.3 116.84 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000138"))
+(label "row3" (at 138.43 116.84 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000139"))
+(symbol (lib_id "Device:D_Schottky") (at 210.82 116.84 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000140")
+(property "Reference" "KD9" (at 210.82 111.84 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 210.82 121.84 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 210.82 116.84 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD9") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 195.57999999999998 116.84 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000141")
+(property "Reference" "KS9" (at 195.57999999999998 111.84 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 195.57999999999998 121.84 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 195.57999999999998 116.84 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS9") (unit 1)))))
+(wire (pts (xy 200.66 116.84) (xy 207.01 116.84)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000142"))
+(label "col3" (at 190.5 116.84 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000143"))
+(label "row3" (at 214.63 116.84 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000144"))
+(symbol (lib_id "Device:D_Schottky") (at 58.419999999999995 152.4 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000145")
+(property "Reference" "KD10" (at 58.419999999999995 147.4 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 58.419999999999995 157.4 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 58.419999999999995 152.4 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD10") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 43.18 152.4 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000146")
+(property "Reference" "KS10" (at 43.18 147.4 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 43.18 157.4 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 43.18 152.4 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS10") (unit 1)))))
+(wire (pts (xy 48.26 152.4) (xy 54.61 152.4)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000147"))
+(label "col1" (at 38.099999999999994 152.4 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000148"))
+(label "row4" (at 62.23 152.4 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000149"))
+(symbol (lib_id "Device:D_Schottky") (at 134.62 152.4 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000150")
+(property "Reference" "KD11" (at 134.62 147.4 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 134.62 157.4 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 134.62 152.4 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD11") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 119.38 152.4 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000151")
+(property "Reference" "KS11" (at 119.38 147.4 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 119.38 157.4 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 119.38 152.4 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS11") (unit 1)))))
+(wire (pts (xy 124.46 152.4) (xy 130.81 152.4)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000152"))
+(label "col2" (at 114.3 152.4 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000153"))
+(label "row4" (at 138.43 152.4 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000154"))
+(symbol (lib_id "Device:D_Schottky") (at 210.82 152.4 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000155")
+(property "Reference" "KD12" (at 210.82 147.4 0) (effects (font (size 1.27 1.27))))
+(property "Value" "BAT54H" (at 210.82 157.4 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "Diode_SMD:D_SOD-123F" (at 210.82 152.4 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KD12") (unit 1)))))
+(symbol (lib_id "Switch:SW_Push") (at 195.57999999999998 152.4 180) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "86205400-1234-4567-8900-000000000156")
+(property "Reference" "KS12" (at 195.57999999999998 147.4 0) (effects (font (size 1.27 1.27))))
+(property "Value" "SW_Push" (at 195.57999999999998 157.4 0) (effects (font (size 1.27 1.27))))
+(property "Footprint" "" (at 195.57999999999998 152.4 0) (effects (font (size 1.27 1.27)) (hide yes)))
+(instances (project "keypad-harness" (path "/86205400-1234-4567-8900-000000000000" (reference "KS12") (unit 1)))))
+(wire (pts (xy 200.66 152.4) (xy 207.01 152.4)) (stroke (width 0) (type default)) (uuid "86205400-1234-4567-8900-000000000157"))
+(label "col3" (at 190.5 152.4 180) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000158"))
+(label "row4" (at 214.63 152.4 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "86205400-1234-4567-8900-000000000159"))
+(text "Synthphone-E candidate: one BAT54H per key; anode to row, cathode toward switch/column" (at 20 18 0) (effects (font (size 1.27 1.27)) (justify left)) (uuid "86205400-1234-4567-8900-000000000160"))
+(text "External keypad/harness replacement; unchanged main board and firmware. Do not put one diode per shared wire." (at 20 25 0) (effects (font (size 1.27 1.27)) (justify left)) (uuid "86205400-1234-4567-8900-000000000161"))
+(text "Mate to existing J6: pins 1=col3, 2=col2, 3=col1, 4=row4, 5=row3, 6=row2, 7=row1" (at 20 182 0) (effects (font (size 1.27 1.27)) (justify left)) (uuid "86205400-1234-4567-8900-000000000162"))
+(text "Schematic experiment only. Switch mechanics and PCB layout are for the builder; no fabrication files generated." (at 20 189 0) (effects (font (size 1.27 1.27)) (justify left)) (uuid "86205400-1234-4567-8900-000000000163"))
+(sheet_instances (path "/" (page "1"))) (embedded_fonts no))

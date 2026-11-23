@@ -1,0 +1,42 @@
+INFO - Starting system init
+INFO - Set up up DMA RAM in DRAM2...
+INFO - Memory Size 0xe
+INFO - Setting up GPIOs...
+INFO - Setting up SDRAM...
+INFO - SDRAM Memory Size 0x19
+INFO - Set up Audio...
+INFO - Setup up SAI...
+INFO - Setting up AK4556/PCM3060 Audio CODEC...
+INFO - Start audio stream...
+INFO - Audio started!
+INFO - Setup up Audio DMA: input: 0x30000000, output: 0x30004000
+INFO - System init done!
+INFO - Startup done!! yo!
+INFO - Startup complete, transitioning away from splash screen
+INFO - Button pressed - Row: 0, Col: 2, Key: 1
+INFO - In Processing state, sending KeypadPress(1)
+INFO - Button pressed - Row: 0, Col: 1, Key: 2
+INFO - In Processing state, sending KeypadPress(2)
+INFO - Button pressed - Row: 0, Col: 0, Key: 3
+INFO - In Processing state, sending KeypadPress(3)
+INFO - Button pressed - Row: 1, Col: 2, Key: 4
+INFO - In Processing state, sending KeypadPress(4)
+INFO - Button pressed - Row: 1, Col: 1, Key: 5
+INFO - In Processing state, sending KeypadPress(5)
+INFO - Button pressed - Row: 1, Col: 0, Key: 6
+INFO - In Processing state, sending KeypadPress(6)
+INFO - Button pressed - Row: 2, Col: 2, Key: 7
+INFO - In Processing state, sending KeypadPress(7)
+INFO - Button pressed - Row: 2, Col: 1, Key: 8
+INFO - In Processing state, sending KeypadPress(8)
+INFO - Button pressed - Row: 2, Col: 0, Key: 9
+INFO - In Processing state, sending KeypadPress(9)
+INFO - Button pressed - Row: 3, Col: 2, Key: 10
+INFO - In Processing state, sending KeypadPress(10)
+INFO - Button pressed - Row: 3, Col: 1, Key: 11
+INFO - In Processing state, sending KeypadPress(11)
+INFO - Button pressed - Row: 3, Col: 0, Key: 12
+INFO - In Processing state, sending KeypadPress(12)
+INFO - Encoder single press detected!
+INFO - Encoder double press detected!
+INFO - Encoder single press detected!

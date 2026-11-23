@@ -7,6 +7,8 @@ fn main() {
         "src/netlist.rs",
         "src/profiles.rs",
         "src/fixture.rs",
+        "src/improvements.rs",
+        "src/schematics.rs",
         "src/carrier.rs",
         "src/spice.rs",
         "src/electrical.rs",

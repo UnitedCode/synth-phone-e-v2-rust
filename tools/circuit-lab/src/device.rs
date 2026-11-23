@@ -111,7 +111,7 @@ impl Device {
         if scenario == "boot" {
             return;
         }
-        if scenario == "open-hall" {
+        if scenario == "open-hall" || scenario == "filter-step" {
             self.voltage(170, "HE1", 2_200_000);
             self.voltage(220, "HE1", 1_650_000);
             return;
@@ -169,6 +169,13 @@ impl Device {
         if scenario == "contention" {
             self.key(80, 0, 0, true);
             self.key(80, 0, 1, true);
+            return;
+        }
+        if scenario == "chords" {
+            for (r, c) in [(0, 0), (0, 1), (1, 0)] {
+                self.key(80, r, c, true);
+                self.key(140, r, c, false);
+            }
             return;
         }
         if scenario == "open-key" {
@@ -421,9 +428,15 @@ pub fn run(args: &[String]) -> Result<()> {
         return Err("device PROFILE BASELINE FIXTURE ELF BOARD FRESH_OUTPUT SCENARIO".into());
     }
     let profile = &args[0];
-    let kind = if profile == "keyboard-current" {
+    let kind = if [
+        "keyboard-current",
+        crate::improvements::FILTER,
+        crate::improvements::FILTER470,
+    ]
+    .contains(&profile.as_str())
+    {
         "keyboard"
-    } else if profile == "synthphone-v2" {
+    } else if profile == "synthphone-v2" || profile == crate::improvements::DIODES {
         "phone"
     } else {
         return Err("device requires current keyboard or Synthphone-v2 profile".into());
@@ -441,6 +454,8 @@ pub fn run(args: &[String]) -> Result<()> {
         "midi",
         "open-midi",
         "boot",
+        "chords",
+        "filter-step",
     ]
     .contains(&scenario.as_str())
     {
@@ -458,6 +473,12 @@ pub fn run(args: &[String]) -> Result<()> {
     )?;
     let baseline = Graph::parse(&fs::read_to_string(&args[1])?)?;
     let fixture = Fixture::parse(&fs::read_to_string(&args[2])?)?;
+    if kind == "phone"
+        && crate::improvements::diode_harness(&baseline)?
+            != (profile == crate::improvements::DIODES)
+    {
+        return Err("device profile does not match keypad harness".into());
+    }
     let mut metadata=format!("profile={profile}\nscenario={scenario}\nfirmware_sha256={}\nbaseline_sha256={}\nfixture_sha256={}\nvirtual_daisy_revision={SDK}\nPHYSICAL_MEASURED=NOT_RUN\n",sha256(Path::new(&args[3]))?,sha256(Path::new(&args[1]))?,sha256(Path::new(&args[2]))?);
     let device = Device::new(kind, &baseline, &fixture, scenario)?;
     let mut events = String::from("time_ns,change\n");
@@ -895,6 +916,16 @@ fn grade(
         }
         if scenario == "baseline" && !log.contains("Encoder single press detected!") {
             failures.push("encoder input not observed".into());
+        }
+        if scenario == "chords" {
+            let markers = [
+                "Row: 0, Col: 2, Key: 1",
+                "Row: 0, Col: 1, Key: 2",
+                "Row: 1, Col: 2, Key: 4",
+            ];
+            if presses != 3 || markers.iter().any(|m| !log.contains(m)) {
+                failures.push("three-key rectangle has phantom/missing/repeated contacts".into());
+            }
         }
         if scenario == "baseline" {
             for row in 0..4 {
