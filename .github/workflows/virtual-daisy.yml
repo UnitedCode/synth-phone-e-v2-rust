@@ -59,7 +59,9 @@ jobs:
           VIRTUAL_DAISY_FIRMWARE: ${{ env.VIRTUAL_DAISY_ELF }}
           VIRTUAL_DAISY_AUDIO_BOARD: ${{ matrix.board }}
           VIRTUAL_DAISY_AUDIO_OUT: ${{ github.workspace }}/audio-lab-results/daisy/${{ matrix.board }}/rust
-        run: cargo test --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target x86_64-unknown-linux-gnu --test firmware_audio -- --ignored --nocapture
+        run: |
+          mkdir -p "audio-lab-results/daisy/${{ matrix.board }}"
+          cargo test --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target x86_64-unknown-linux-gnu --test firmware_audio -- --ignored --nocapture
       - name: Boot production ELF, process audio, and reject injected faults
         run: cargo run --release --locked --manifest-path tools/virtual-daisy/Cargo.toml --target x86_64-unknown-linux-gnu -- run "$RUNNER_TEMP/renode" "audio-lab-results/daisy/${{ matrix.board }}" --board "${{ matrix.board }}"
       - name: Check maximum-duration flash scenario on ARM

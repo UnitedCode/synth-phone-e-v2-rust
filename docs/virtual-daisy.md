@@ -13,6 +13,7 @@ git submodule update --init tools/virtual-daisy
 cargo build --release --locked
 export VIRTUAL_DAISY_ELF="$PWD/target/thumbv7em-none-eabihf/release/app"
 LAB_HOST=$(rustc -vV | sed -n 's/^host: //p')
+mkdir -p audio-lab-results
 VIRTUAL_DAISY_FIRMWARE="$VIRTUAL_DAISY_ELF" \
 VIRTUAL_DAISY_AUDIO_OUT="$PWD/audio-lab-results/daisy-rust" \
 cargo test --release --locked --manifest-path tools/virtual-daisy/Cargo.toml \
