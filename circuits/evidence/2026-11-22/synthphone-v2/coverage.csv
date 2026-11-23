@@ -1,0 +1,24 @@
+reference,value,scope
+A1,"Electrosmith_Daisy_Seed_Rev4",inventory/connectivity only; no analog device model
+D13,"1N4148",inventory/connectivity only; no analog device model
+J1,"AudioJack4",inventory/connectivity only; no analog device model
+J12,"display_socket",inventory/connectivity only; no analog device model
+J15,"encoder_input",inventory/connectivity only; no analog device model
+J16,"4P4C",inventory/connectivity only; no analog device model
+J2,"AudioJack4",inventory/connectivity only; no analog device model
+J3,"DIN-5",inventory/connectivity only; no analog device model
+J4,"Keypad_column_output",inventory/connectivity only; no analog device model
+J5,"Jack-in",inventory/connectivity only; no analog device model
+J6,"keypad socket",inventory/connectivity only; no analog device model
+J7,"keypad_row_output",inventory/connectivity only; no analog device model
+J8,"jack-out",inventory/connectivity only; no analog device model
+R1,"220",inventory/connectivity only; no analog device model
+R2,"?",unknown value or module internals; analog blocked
+R4,"4.7k",inventory/connectivity only; no analog device model
+R5,"220",schematic resistance; ideal sink output-load test
+RV2,"R_Potentiometer_Trim_US",unknown value or module internals; analog blocked
+RV3,"R_Potentiometer_Trim_US",unknown value or module internals; analog blocked
+SW13,"SW_Wuerth_450301014042",inventory/connectivity only; no analog device model
+SW14,"SW_Push_SPDT",inventory/connectivity only; no analog device model
+U2,"6N138",inventory/connectivity only; no analog device model
+U3,"~",unknown value or module internals; analog blocked
