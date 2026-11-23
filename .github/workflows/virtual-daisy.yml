@@ -18,9 +18,10 @@ jobs:
       fail-fast: false
       matrix:
         board: [rev4, rev5, rev7]
-    # Rev5 also runs the maximum-duration flash suite after its full audio/fault
-    # matrix. The 180-second per-emulator watchdog still detects individual hangs.
-    timeout-minutes: 20
+    # Native capture adds a separate stage to the reference audio/fault matrix.
+    # Rev5 also checks maximum-duration flash. Keep the per-emulator watchdog;
+    # the job budget must cover all of these finite runs and cold builds.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
