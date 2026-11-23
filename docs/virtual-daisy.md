@@ -29,6 +29,12 @@ audio. Set `VIRTUAL_DAISY_AUDIO_BOARD=rev5` to check one board.
 The expected rate comes from the pinned HAL's programmed fractional PLL and
 matches `src/constants.rs`; the test requires agreement within one ppm.
 
+The reference CI uses a 300-second host watchdog per process and a separate
+45-minute job bound. These limits accommodate slower runners; they do not change
+virtual duration, emulated clocks or audio/fault assertions. See the SDK's
+[reference setup](../tools/virtual-daisy/docs/reference-runner.md) before raising
+a local host-time bound.
+
 ## Compare with Renode
 
 The optional previous backend needs the runtime described in the
