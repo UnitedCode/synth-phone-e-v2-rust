@@ -147,13 +147,15 @@ fn inspect(dir: &Path) -> Result<()> {
             || spec.sample_format != hound::SampleFormat::Float
             || pcm.len() % 2 != 0
             || pcm
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .any(|s| !s[0].is_finite() || s[0] != s[1] || s[0].abs() > 0.80001)
             || pcm.len() / 2 < spec.sample_rate as usize * 19 / 10
         {
             return Err("invalid/truncated PCM".into());
         }
-        let mono: Vec<_> = pcm.chunks_exact(2).map(|s| s[0]).collect();
+        let mono: Vec<_> = pcm.as_chunks::<2>().0.iter().map(|s| s[0]).collect();
         let rms = audio_lab::metrics(&mono[spec.sample_rate as usize..]).rms;
         if rms < 0.0001 {
             return Err("inaudible vocal fixture".into());

@@ -227,7 +227,7 @@ fn inspect(out: &Path) -> Result<()> {
         let stereo = reader
             .into_samples::<f32>()
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        if stereo.chunks_exact(2).any(|s| s[0] != s[1]) {
+        if stereo.as_chunks::<2>().0.iter().any(|s| s[0] != s[1]) {
             return Err("native channels differ".into());
         }
         let clock = out.join(format!("{name}.wav.clock.txt"));

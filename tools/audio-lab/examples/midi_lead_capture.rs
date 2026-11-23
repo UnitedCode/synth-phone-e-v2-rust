@@ -155,12 +155,14 @@ fn inspect(dir: &Path) -> Result<()> {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         if stereo.len() % 2 != 0
             || stereo
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .any(|s| !s[0].is_finite() || s[0] != s[1] || s[0].abs() >= 0.79999)
         {
             return Err("invalid, unequal or limited stereo".into());
         }
-        let audio: Vec<_> = stereo.chunks_exact(2).map(|s| s[0]).collect();
+        let audio: Vec<_> = stereo.as_chunks::<2>().0.iter().map(|s| s[0]).collect();
         let stats = dir.join(format!("{name}.wav.stats"));
         let clock = dir.join(format!("{name}.wav.clock.txt"));
         let denominator = number(&clock, "sai_rate_denominator")?;
