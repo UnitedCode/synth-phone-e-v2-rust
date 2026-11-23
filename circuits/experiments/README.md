@@ -26,3 +26,6 @@ design only after reviewing the comparison and its remaining evidence gaps.
 `candidate` creates a new copy; `compare` validates the exact allowed delta before
 running the baseline and candidate checks. `COMPARISON=PASS` means that comparison
 executed successfully. Read the separate design acceptance and measured gates.
+
+- [Receiver load / power study](rx-load-2k2/README.md): separate R5 schematic,
+  bounded thermal cases and [independent verification](../verify-power-thermal.md).

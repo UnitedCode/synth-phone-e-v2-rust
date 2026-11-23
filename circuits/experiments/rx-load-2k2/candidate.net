@@ -1,0 +1,82 @@
+# parent_sha256=bf0081f0c4631211f1b7a7c2eb4b2ad3205ba8044e62386bfcfe77228a3fc33f
+C	A1	Electrosmith_Daisy_Seed_Rev4
+C	D13	1N4148
+C	J1	AudioJack4
+C	J12	display_socket
+C	J15	encoder_input
+C	J16	4P4C
+C	J2	AudioJack4
+C	J3	DIN-5
+C	J4	Keypad_column_output
+C	J5	Jack-in
+C	J6	keypad socket
+C	J7	keypad_row_output
+C	J8	jack-out
+C	R1	220
+C	R2	?
+C	R4	4.7k
+C	R5	2.2k
+C	RV2	R_Potentiometer_Trim_US
+C	RV3	R_Potentiometer_Trim_US
+C	SW13	SW_Wuerth_450301014042
+C	SW14	SW_Push_SPDT
+C	U2	6N138
+C	U3	~
+N	AUDIO_IN_1_4p4c	R2.2	SW13.1	U3.3
+N	AUDIO_IN_1_jack	A1.17	J2.R1	J2.T	J5.1	J5.2
+N	AUDIO_IN_AMP	A1.16	U3.5
+N	AUDIO_OUT_1	A1.18	J1.R1	J8.2
+N	AUDIO_OUT_2	A1.19	J1.T	J8.1
+N	MIDI_in_device	A1.15	R5.1	U2.6
+N	Net-(D13-A)	D13.2	J3.4	U2.3
+N	Net-(D13-K)	D13.1	R1.2	U2.2
+N	Net-(J3-Pad2)	J3.2	R1.1
+N	Net-(SW13-A)	J16.3	SW13.3
+N	Net-(SW13-C)	J16.4	SW13.2
+N	Net-(U2-VO1)	R4.2	U2.7
+N	Net-(U3-R1L)	RV2.3	U3.10
+N	Net-(U3-R1M)	RV2.2	U3.11
+N	Net-(U3-R1R)	RV2.1	U3.12
+N	Net-(U3-R2L)	RV3.3	U3.7
+N	Net-(U3-R2M)	RV3.2	U3.8
+N	Net-(U3-R2R)	RV3.1	U3.9
+N	SCL	A1.12	J12.2
+N	SDA	A1.13	J12.1
+N	channel_selector	A1.2	SW14.2
+N	clk	A1.5	J15.5
+N	col1	A1.26	J6.3	J7.1
+N	col2	A1.27	J6.2	J7.2
+N	col3	A1.28	J6.1	J7.3
+N	dt	A1.4	J15.4
+N	gnd	A1.20	A1.40	J1.S	J12.4	J15.1	J16.1	J16.2	J2.S	J3.3	J5.3	J8.3	R2.1	R4.1	SW14.3	U2.5	U3.2	U3.4	U3.6
+N	row1	A1.22	J4.1	J6.7
+N	row2	A1.23	J4.2	J6.6
+N	row3	A1.24	J4.3	J6.5
+N	row4	A1.25	J4.4	J6.4
+N	sw	A1.3	J15.3
+N	unconnected-(A1-3V3_A-Pad21)	A1.21
+N	unconnected-(A1-DAC_OUT1-Pad30)	A1.30
+N	unconnected-(A1-DAC_OUT2-Pad29)	A1.29
+N	unconnected-(A1-SAI2_FS-Pad34)	A1.34
+N	unconnected-(A1-SAI2_MCLK-Pad31)	A1.31
+N	unconnected-(A1-SAI2_SCK-Pad35)	A1.35
+N	unconnected-(A1-SAI2_SD_A-Pad33)	A1.33
+N	unconnected-(A1-SAI2_SD_B-Pad32)	A1.32
+N	unconnected-(A1-SD_CLK-Pad7)	A1.7
+N	unconnected-(A1-SD_CMD-Pad6)	A1.6
+N	unconnected-(A1-SPI1_CS-Pad8)	A1.8
+N	unconnected-(A1-SPI1_PICO-Pad11)	A1.11
+N	unconnected-(A1-SPI1_POCI-Pad10)	A1.10
+N	unconnected-(A1-SPI1_SCK-Pad9)	A1.9
+N	unconnected-(A1-USART1_TX-Pad14)	A1.14
+N	unconnected-(A1-USB_D_+-Pad37)	A1.37
+N	unconnected-(A1-USB_D_--Pad36)	A1.36
+N	unconnected-(A1-USB_ID-Pad1)	A1.1
+N	unconnected-(A1-VIN-Pad39)	A1.39
+N	unconnected-(J1-PadR2)	J1.R2
+N	unconnected-(J2-PadR2)	J2.R2
+N	unconnected-(J3-Pad1)	J3.1
+N	unconnected-(J3-Pad5)	J3.5
+N	unconnected-(U2-NC-Pad1)	U2.1
+N	unconnected-(U2-NC-Pad4)	U2.4
+N	vcc	A1.38	J12.3	J15.2	R5.2	SW14.1	U2.8	U3.1

@@ -1,0 +1,5 @@
+Receiver output load ONLY, not CTR or switching
+Vrail rail 0 3.168
+Rpull rail rx 2200
+Vsink rx 0 0.2
+.end

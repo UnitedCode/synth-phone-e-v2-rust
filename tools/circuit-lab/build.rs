@@ -1,11 +1,13 @@
 fn main() {
     let files = [
         "Cargo.toml",
+        "Cargo.lock",
         "build.rs",
         "src/lib.rs",
         "src/main.rs",
         "src/netlist.rs",
         "src/profiles.rs",
+        "src/qualification.rs",
         "src/fixture.rs",
         "src/improvements.rs",
         "src/schematics.rs",
