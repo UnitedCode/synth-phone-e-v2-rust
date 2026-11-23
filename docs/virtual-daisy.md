@@ -2,12 +2,14 @@
 
 For production firmware connected to the Synthphone carrier, OLED, controls,
 MIDI and audio, follow the [complete virtual-device tests](../circuits/virtual-devices.md).
-Those tests pin the native Rust SDK independently of this older reference submodule.
+Those tests pin the native Rust SDK independently of this reference submodule.
 
 Virtual Daisy is maintained in [UnitedCode/virtual-daisy](https://github.com/UnitedCode/virtual-daisy).
 This project pins it as a Git submodule at `tools/virtual-daisy`.
-The reference submodule uses v0.2.18, with independently checked half/fixed-point
-conversions, fractional CPU progress and modeled audio-clock startup reports.
+The reference submodule uses v0.2.26. It includes the expanded DSP/extension
+instruction checks, corrected instruction-fetch service, event-driven sleep and
+modeled audio-clock startup reports. Native and reference waveforms still differ;
+physical-device timing remains unverified.
 The carrier circuit lab keeps its own SDK pin.
 
 ## Check the Rust host
