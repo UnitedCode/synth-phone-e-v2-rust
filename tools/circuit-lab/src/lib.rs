@@ -8,11 +8,13 @@ pub mod improvements;
 pub mod netlist;
 pub mod oled;
 pub mod profiles;
+pub mod qualification;
 pub mod schematics;
 #[cfg(feature = "spice")]
 pub mod spice;
 use std::{fs, path::Path, process::Command};
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub const RUNNER_SOURCES: &str = env!("CIRCUIT_WORKBENCH_SOURCES");
 
 pub fn sha256(path: &Path) -> Result<String> {
     let out = Command::new("shasum")
@@ -32,6 +34,12 @@ pub fn sha256(path: &Path) -> Result<String> {
 
 pub fn cli(args: Vec<String>) -> Result<()> {
     match args.first().map(String::as_str) {
+        Some("hall-schematic") if args.len()==3 => return schematics::hall_sensor(Path::new(&args[1]),Path::new(&args[2])),
+        #[cfg(feature="spice")]
+        Some("charge-study") => return qualification::charge_cli(&args[1..]),
+        Some("rx-schematic") if args.len()==3 => return schematics::rx_resistor(Path::new(&args[1]),Path::new(&args[2])),
+        Some("power-study") => return qualification::power_cli(&args[1..]),
+        Some("power-candidate") => return qualification::candidate_cli(&args[1..]),
         Some("schematic") => return schematics::cli(&args[1..]),
         Some("check-schematic") => return schematics::check_cli(&args[1..]),
         Some("candidate") | Some("compare") => return improvements::cli(&args),

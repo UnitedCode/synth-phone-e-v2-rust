@@ -158,3 +158,23 @@ fn exhaustive_candidate_comparison_and_non_clobber() {
     assert!(cli(args).is_err());
     std::fs::remove_dir_all(out).unwrap();
 }
+
+#[test]
+fn receiver_schematic_edit_is_exactly_one_instance_value() {
+    let source =
+        root().join("kicad/synth-phone-e-v2-hardware-v2/synth-phone-e-v2-hardware-v2.kicad_sch");
+    let out = std::env::temp_dir().join(format!("rx-schematic-{}.kicad_sch", std::process::id()));
+    circuit_workbench::schematics::rx_resistor(&source, &out).unwrap();
+    let before = fs::read_to_string(&source).unwrap();
+    let after = fs::read_to_string(&out).unwrap();
+    assert_eq!(after.matches("(property \"Value\" \"2.2k\"").count(), 1);
+    assert_eq!(
+        before,
+        after.replace(
+            "(property \"Value\" \"2.2k\"",
+            "(property \"Value\" \"220\""
+        )
+    );
+    assert!(circuit_workbench::schematics::rx_resistor(&source, &out).is_err());
+    fs::remove_file(out).unwrap();
+}

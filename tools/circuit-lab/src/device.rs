@@ -83,6 +83,26 @@ impl Device {
         } else {
             d.phone_events(scenario);
         }
+        if kind == "keyboard"
+            && g.components.get("HE1").map(String::as_str) == Some(crate::qualification::HALL_PART)
+        {
+            for i in 1..=100 {
+                d.keyboard
+                    .as_mut()
+                    .unwrap()
+                    .set_microvolts(0, &format!("HE{i}"), 1_020_000)?;
+            }
+            for event in &mut d.events {
+                if let Change::Voltage(name, uv) = &mut event.change {
+                    if name.starts_with("HE") {
+                        // Explicit test field fixture: old voltage deltas /31.5mV/mT,
+                        // DRV5053RA nominal -45mV/mT around 1.02V, conservative swing.
+                        *uv = (1_020_000. - (*uv as f64 - 1_650_000.) * (45. / 31.5))
+                            .clamp(200_000., 1_800_000.) as u32;
+                    }
+                }
+            }
+        }
         d.events.sort_by_key(|e| e.at);
         if scenario == "open-hall" {
             d.keyboard.as_mut().unwrap().open_control = Some("HE1".into());
@@ -432,6 +452,7 @@ pub fn run(args: &[String]) -> Result<()> {
         "keyboard-current",
         crate::improvements::FILTER,
         crate::improvements::FILTER470,
+        crate::qualification::HALL,
     ]
     .contains(&profile.as_str())
     {
@@ -473,6 +494,25 @@ pub fn run(args: &[String]) -> Result<()> {
     )?;
     let baseline = Graph::parse(&fs::read_to_string(&args[1])?)?;
     let fixture = Fixture::parse(&fs::read_to_string(&args[2])?)?;
+    if kind == "keyboard" {
+        let any_new = (1..=100).any(|i| {
+            baseline
+                .components
+                .get(&format!("HE{i}"))
+                .map(String::as_str)
+                == Some(crate::qualification::HALL_PART)
+        });
+        let all_new = (1..=100).all(|i| {
+            baseline
+                .components
+                .get(&format!("HE{i}"))
+                .map(String::as_str)
+                == Some(crate::qualification::HALL_PART)
+        });
+        if any_new && !all_new || all_new != (profile == crate::qualification::HALL) {
+            return Err("Hall part model does not match device profile".into());
+        }
+    }
     if kind == "phone"
         && crate::improvements::diode_harness(&baseline)?
             != (profile == crate::improvements::DIODES)
@@ -480,6 +520,9 @@ pub fn run(args: &[String]) -> Result<()> {
         return Err("device profile does not match keypad harness".into());
     }
     let mut metadata=format!("profile={profile}\nscenario={scenario}\nfirmware_sha256={}\nbaseline_sha256={}\nfixture_sha256={}\nvirtual_daisy_revision={SDK}\nPHYSICAL_MEASURED=NOT_RUN\n",sha256(Path::new(&args[3]))?,sha256(Path::new(&args[1]))?,sha256(Path::new(&args[2]))?);
+    if profile == crate::qualification::HALL {
+        metadata.push_str("SENSOR_FIXTURE=1.02V rest; declared +17.4603mT test stroke with -45mV/mT nominal response, clipped0.2-1.8V\nSENSOR_FIDELITY=declared voltage plus legacy RC; vendor output delay/current limit and physical magnets not integrated; corner kernel study separate\n");
+    }
     let device = Device::new(kind, &baseline, &fixture, scenario)?;
     let mut events = String::from("time_ns,change\n");
     for e in &device.events {

@@ -20,3 +20,12 @@ sequencing, rather than merely increasing a number in a simulation fixture.
 
 No PCB layout, Gerbers, manufacturing package or physical build is produced by
 this work. Schematic candidates are inputs for the builder's later PCB work.
+
+## Power / thermal round
+
+The [isolated R5 load candidate](experiments/rx-load-2k2/README.md) reduces a small
+known dissipation term in the ideal-sink model; receiver timing and whole-device
+thermal acceptance remain open. Parametric device/source/thermal cases are now
+reproducible, with a separate [verification guide](verify-power-thermal.md).
+The keyboard study also rejects its offload allocation for promotion after
+power-loss counterexamples; moving heat alone does not remove enclosure heat.
