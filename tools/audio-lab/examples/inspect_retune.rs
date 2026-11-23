@@ -81,7 +81,9 @@ fn verify_native(directory: &Path) -> Result<(), Box<dyn Error>> {
         if metrics(&samples).rms < 0.001
             || samples.len() % 2 != 0
             || samples
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .any(|p| !p[0].is_finite() || p[0] != p[1] || p[0].abs() >= 0.79999)
         {
             return Err("Nonfinite, unequal stereo, or output ceiling hit".into());

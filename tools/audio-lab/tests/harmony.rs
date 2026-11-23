@@ -310,8 +310,8 @@ fn unvoiced_noise_does_not_jump_above_the_polyphonic_voice_power_scale() {
             mode: ProcessingMode::Harmony,
             ..Default::default()
         };
-        for i in 0..count {
-            settings.midi_frequencies[i] = 220.0 + i as f32 * 35.0;
+        for (i, frequency) in settings.midi_frequencies.iter_mut().enumerate().take(count) {
+            *frequency = 220.0 + i as f32 * 35.0;
         }
         let output = render(&input, &[], &config, &settings);
         let rms = audio_lab::metrics(
