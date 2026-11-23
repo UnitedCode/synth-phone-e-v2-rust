@@ -6,6 +6,9 @@ Those tests pin the native Rust SDK independently of this older reference submod
 
 Virtual Daisy is maintained in [UnitedCode/virtual-daisy](https://github.com/UnitedCode/virtual-daisy).
 This project pins it as a Git submodule at `tools/virtual-daisy`.
+The reference submodule uses v0.2.10, including the independently checked floating
+point fixes and within-block instruction-clock regression. The carrier circuit
+lab keeps its own SDK pin.
 
 ## Check the Rust host
 
