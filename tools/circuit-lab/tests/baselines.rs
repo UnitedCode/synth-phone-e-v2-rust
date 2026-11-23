@@ -105,3 +105,56 @@ fn sdk_adapter_exposes_input_changes_and_faults_through_shared_handle() {
     assert!(handle.borrow().fault.is_some());
     assert!(adapter.i2c_write(1, 0x3c, &[0]).is_err());
 }
+
+#[test]
+fn candidate_is_isolated_and_detects_wrong_components_and_diode_orientation() {
+    use circuit_workbench::improvements::{self, DIODES};
+    let base = graph("synthphone-v2");
+    let changed = improvements::candidate(DIODES, &base).unwrap();
+    improvements::validate(DIODES, &base, &changed).unwrap();
+    let mut wrong = changed.clone();
+    wrong.components.insert("R5".into(), "2.2k".into());
+    assert!(improvements::validate(DIODES, &base, &wrong).is_err());
+    wrong = changed.clone();
+    wrong.disconnect("KD12.1");
+    assert!(improvements::diode_harness(&wrong).is_err());
+    let mut reversed = changed.clone();
+    for nodes in reversed.nets.values_mut() {
+        for pin in nodes {
+            if pin == "KD1.1" {
+                *pin = "KD1.2".into();
+            } else if pin == "KD1.2" {
+                *pin = "KD1.1".into();
+            }
+        }
+    }
+    assert!(improvements::diode_harness(&reversed).is_err());
+}
+
+#[test]
+fn exhaustive_candidate_comparison_and_non_clobber() {
+    let out = std::env::temp_dir().join(format!("key-candidate-{}", std::process::id()));
+    let args = vec![
+        "compare".into(),
+        "synthphone-key-diodes".into(),
+        root()
+            .join("circuits/baselines/synthphone-v2.net")
+            .display()
+            .to_string(),
+        root()
+            .join("circuits/experiments/key-diodes/candidate.net")
+            .display()
+            .to_string(),
+        root()
+            .join("circuits/fixtures/reference.fixture")
+            .display()
+            .to_string(),
+        out.display().to_string(),
+    ];
+    cli(args.clone()).unwrap();
+    assert!(std::fs::read_to_string(out.join("report.txt"))
+        .unwrap()
+        .contains("DIGITAL_CONTACT_CASES=12288"));
+    assert!(cli(args).is_err());
+    std::fs::remove_dir_all(out).unwrap();
+}

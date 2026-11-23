@@ -1,0 +1,16 @@
+COMPARISON=PASS
+experiment=synthphone-key-diodes
+ISOLATION=PASS
+parent_sha256=bf0081f0c4631211f1b7a7c2eb4b2ad3205ba8044e62386bfcfe77228a3fc33f
+candidate_sha256=c6bbd387ac981cd4ceeb961e342486bdca97bdd7f16328c3f94d991c608068ca
+fixture_sha256=ed0de487f7be1fad4fb04df75742e86b323572665230ab7f704d090d799d93ea
+PHYSICAL_MEASURED=NOT_RUN
+DIGITAL_CONTACT_CASES=12288
+phantom_or_missing_contacts=0
+baseline_contention_negative=PASS
+reversed_diode_negative=PASS
+ANALOG_MARGINS=PASS (12 bounded DC corners,25C)
+worst_low_row_v=0.365840184149951
+minimum_logic_margin_v=0.5422492601118034
+DESIGN_ACCEPTANCE=VIRTUAL_CANDIDATE (25C bounded model)
+NOT_RUN=temperature extremes; cable capacitance; contact bounce; physical harness

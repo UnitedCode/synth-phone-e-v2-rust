@@ -4,9 +4,11 @@ pub mod carrier;
 pub mod device;
 pub mod electrical;
 pub mod fixture;
+pub mod improvements;
 pub mod netlist;
 pub mod oled;
 pub mod profiles;
+pub mod schematics;
 #[cfg(feature = "spice")]
 pub mod spice;
 use std::{fs, path::Path, process::Command};
@@ -30,6 +32,9 @@ pub fn sha256(path: &Path) -> Result<String> {
 
 pub fn cli(args: Vec<String>) -> Result<()> {
     match args.first().map(String::as_str) {
+        Some("schematic") => return schematics::cli(&args[1..]),
+        Some("check-schematic") => return schematics::check_cli(&args[1..]),
+        Some("candidate") | Some("compare") => return improvements::cli(&args),
         #[cfg(feature="device")]
         Some("device")=>return device::run(&args[1..]),
         #[cfg(feature="device")]

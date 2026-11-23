@@ -1,0 +1,16 @@
+All twelve held; worst bounded diode drop and leakage at 25C
+Vrail rail 0 3.3
+Rdriver col 0 33
+Rp0 rail row0 50000
+Bd0 row0 col I=max(0,(v(row0,col)-0.32)/10)
+Il0 rail row0 4u
+Rp1 rail row1 50000
+Bd1 row1 col I=max(0,(v(row1,col)-0.32)/10)
+Il1 rail row1 4u
+Rp2 rail row2 50000
+Bd2 row2 col I=max(0,(v(row2,col)-0.32)/10)
+Il2 rail row2 4u
+Rp3 rail row3 50000
+Bd3 row3 col I=max(0,(v(row3,col)-0.32)/10)
+Il3 rail row3 4u
+.end

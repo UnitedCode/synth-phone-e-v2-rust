@@ -118,6 +118,7 @@ impl KeyboardCarrier {
 
 pub struct SynthphoneCarrier {
     keys: [[bool; 3]; 4],
+    key_diodes: bool,
     pub oled_writes: u64,
     pub fault: Option<String>,
 }
@@ -138,6 +139,7 @@ impl SynthphoneCarrier {
         }
         Ok(Self {
             keys: [[false; 3]; 4],
+            key_diodes: crate::improvements::diode_harness(graph)?,
             oled_writes: 0,
             fault: None,
         })
@@ -166,10 +168,18 @@ impl SynthphoneCarrier {
                     levels.push(columns[col]);
                 }
             }
-            if levels.contains(&true) && levels.contains(&false) {
+            if levels.contains(&true) && levels.contains(&false) && !self.key_diodes {
                 return Err("keypad row connects opposing push-pull columns".into());
             }
-            if let Some(high) = levels.first() {
+            // Row-anode diodes conduct only toward a LOW column. Inactive HIGH
+            // columns cannot source a row or another column. Analog margins
+            // are separately qualified by the experiment's bounded SPICE suite.
+            let level = if self.key_diodes {
+                levels.contains(&false).then_some(&false)
+            } else {
+                levels.first()
+            };
+            if let Some(high) = level {
                 let (port, pin) = rows[row];
                 inputs[port].0 |= 1 << pin;
                 if *high {
