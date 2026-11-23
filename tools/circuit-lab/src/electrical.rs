@@ -42,6 +42,7 @@ pub fn adc_index(channel: u8) -> Result<usize> {
         .ok_or_else(|| "unconnected ADC channel".into())
 }
 /// Stable closed-form exponential for two passive nodes; no integration timestep is chosen.
+#[allow(clippy::too_many_arguments)] // State, source, circuit values and elapsed time.
 pub fn rc_pair(
     vi: f64,
     va: f64,

@@ -1,0 +1,14 @@
+note_on=0
+note_off=0
+unmatched_releases=0
+held_notes=0
+observed_cc={}
+observed_programs={}
+oled_label_Pitch Ctrl=true
+oled_label_Vocode=true
+oled_label_Synth+Vox=true
+oled_label_Synth+Tune=true
+oled_label_Harmony=true
+oled_label_Percussion=true
+non_finite_audio=0
+peak_audio=0.16242373

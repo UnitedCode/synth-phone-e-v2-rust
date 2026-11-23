@@ -29,6 +29,61 @@ impl Default for Oled {
     }
 }
 impl Oled {
+    /// Match documented effect-page text against the actual GDDRAM, without inspecting firmware state.
+    #[cfg(feature = "device")]
+    pub fn has_profile_label(ram: &[u8; 512], label: &str) -> bool {
+        use embedded_graphics::{
+            mono_font::{ascii::FONT_6X9, MonoTextStyleBuilder},
+            pixelcolor::BinaryColor,
+            prelude::*,
+            text::{Alignment, Text},
+        };
+        struct Match<'a> {
+            ram: &'a [u8; 512],
+            matches: bool,
+            pixels: usize,
+        }
+        impl OriginDimensions for Match<'_> {
+            fn size(&self) -> Size {
+                Size::new(128, 32)
+            }
+        }
+        impl DrawTarget for Match<'_> {
+            type Color = BinaryColor;
+            type Error = core::convert::Infallible;
+            fn draw_iter<I>(&mut self, pixels: I) -> std::result::Result<(), Self::Error>
+            where
+                I: IntoIterator<Item = Pixel<BinaryColor>>,
+            {
+                for Pixel(p, color) in pixels {
+                    self.pixels += 1;
+                    if !(0..128).contains(&p.x) || !(0..32).contains(&p.y) {
+                        self.matches = false;
+                        continue;
+                    }
+                    let on =
+                        self.ram[p.y as usize / 8 * 128 + p.x as usize] & (1 << (p.y % 8)) != 0;
+                    if on != (color == BinaryColor::On) {
+                        self.matches = false;
+                    }
+                }
+                Ok(())
+            }
+        }
+        let mut target = Match {
+            ram,
+            matches: true,
+            pixels: 0,
+        };
+        let style = MonoTextStyleBuilder::new()
+            .font(&FONT_6X9)
+            .text_color(BinaryColor::On)
+            .background_color(BinaryColor::Off)
+            .build();
+        let _ = Text::with_alignment(label, Point::new(79, 29), style, Alignment::Center)
+            .draw(&mut target);
+        target.matches && target.pixels > 0
+    }
     pub fn write(&mut self, packet: &[u8]) -> Result<()> {
         let (&control, payload) = packet.split_first().ok_or("empty OLED write")?;
         if control != 0x00 && control != 0x40 {
@@ -136,6 +191,20 @@ impl Oled {
             }
             out.push('\n');
         }
+        out
+    }
+    pub fn svg(&self) -> String {
+        let mut out=String::from("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 32\" width=\"768\" height=\"192\" shape-rendering=\"crispEdges\"><rect width=\"128\" height=\"32\" fill=\"#09121c\"/><g fill=\"#a8f2ee\">\n");
+        for y in 0..32 {
+            for x in 0..128 {
+                if self.ram[y / 8 * 128 + x] & (1 << (y % 8)) != 0 {
+                    out.push_str(&format!(
+                        "<rect x=\"{x}\" y=\"{y}\" width=\"1\" height=\"1\"/>\n"
+                    ));
+                }
+            }
+        }
+        out.push_str("</g></svg>\n");
         out
     }
 }

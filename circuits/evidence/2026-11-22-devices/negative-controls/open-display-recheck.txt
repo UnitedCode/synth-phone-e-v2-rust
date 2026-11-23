@@ -1,0 +1,5 @@
+NEGATIVE_CONTROL=PASS
+original_report_sha256=6b58509e8b0d6bc7b215c6a17084ffbb1a74851bd833f68071cb14193611da16
+midi_trace_sha256=4feb6896a954430df0b8e1d0f9ff3fb592023ede38fbcc38306c400f1142a7d7
+original_report_preserved=true
+policy=observable-only; no CPU execution or circuit-state changes

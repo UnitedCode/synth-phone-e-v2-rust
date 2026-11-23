@@ -1,0 +1,27 @@
+INFO - Starting system init
+INFO - Set up up DMA RAM in DRAM2...
+INFO - Memory Size 0xe
+INFO - Setting up GPIOs...
+INFO - Setting up SDRAM...
+INFO - SDRAM Memory Size 0x19
+INFO - Set up Audio...
+INFO - Setup up SAI...
+INFO - Setting up AK4556/PCM3060 Audio CODEC...
+INFO - Start audio stream...
+INFO - Audio started!
+INFO - Setup up Audio DMA: input: 0x30000000, output: 0x30004000
+INFO - System init done!
+INFO - Startup done!! yo!
+INFO - Startup complete, transitioning away from splash screen
+INFO - Button pressed - Row: 3, Col: 1, Key: 11
+INFO - In Processing state, sending KeypadPress(11)
+INFO - Button pressed - Row: 3, Col: 1, Key: 11
+INFO - In Processing state, sending KeypadPress(11)
+INFO - Button pressed - Row: 3, Col: 1, Key: 11
+INFO - In Processing state, sending KeypadPress(11)
+INFO - Button pressed - Row: 3, Col: 1, Key: 11
+INFO - In Processing state, sending KeypadPress(11)
+INFO - Button pressed - Row: 3, Col: 1, Key: 11
+INFO - In Processing state, sending KeypadPress(11)
+INFO - Button pressed - Row: 3, Col: 1, Key: 11
+INFO - In Processing state, sending KeypadPress(11)

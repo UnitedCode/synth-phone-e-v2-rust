@@ -32,6 +32,12 @@ pub fn cli(args: Vec<String>) -> Result<()> {
     match args.first().map(String::as_str) {
         #[cfg(feature="device")]
         Some("device")=>return device::run(&args[1..]),
+        #[cfg(feature="device")]
+        Some("device-batch")=>return device::batch(&args[1..]),
+        #[cfg(feature="device")]
+        Some("analyze") if args.len()==2=>{println!("{}",device::analyze(Path::new(&args[1]))?);return Ok(());},
+        #[cfg(feature="device")]
+        Some("recheck") if args.len()==2=>{println!("{}",device::recheck(Path::new(&args[1]))?);return Ok(());},
         Some("import") if args.len() == 4 => {
             let graph = netlist::Graph::xml(&fs::read_to_string(&args[1])?)?;
             // Source hash ties the deterministic export to a particular design, not an export date.

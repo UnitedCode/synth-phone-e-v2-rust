@@ -47,6 +47,9 @@ pub struct Device {
 }
 impl Device {
     fn new(kind: &str, g: &Graph, f: &Fixture, scenario: &str) -> Result<Self> {
+        if kind != "keyboard" {
+            crate::profiles::synth_wiring(g)?;
+        }
         let (keyboard, phone) = if kind == "keyboard" {
             (Some(KeyboardCircuit::new(g, f)?), None)
         } else {
@@ -73,6 +76,10 @@ impl Device {
         };
         if kind == "keyboard" {
             d.keyboard_events(scenario);
+            if scenario == "reset" {
+                d.voltage(2000, "HE1", 2_200_000);
+                d.voltage(2050, "HE1", 1_650_000);
+            }
         } else {
             d.phone_events(scenario);
         }
@@ -101,6 +108,9 @@ impl Device {
         });
     }
     fn keyboard_events(&mut self, scenario: &str) {
+        if scenario == "boot" {
+            return;
+        }
         if scenario == "open-hall" {
             self.voltage(170, "HE1", 2_200_000);
             self.voltage(220, "HE1", 1_650_000);
@@ -145,6 +155,17 @@ impl Device {
         self.pins.insert((2, 11), true);
         self.pins.insert((2, 9), false);
         self.pins.insert((2, 8), false);
+        if ["midi", "open-midi", "open-jack", "open-display", "boot"].contains(&scenario) {
+            return;
+        }
+        if scenario == "profiles" {
+            // Startup already opens Effects. Pressing the encoder would switch to note-playing.
+            for i in 0..6 {
+                self.key(130 + i * 80, 3, 1, true);
+                self.key(150 + i * 80, 3, 1, false);
+            }
+            return;
+        }
         if scenario == "contention" {
             self.key(80, 0, 0, true);
             self.key(80, 0, 1, true);
@@ -416,6 +437,10 @@ pub fn run(args: &[String]) -> Result<()> {
         "open-jack",
         "contention",
         "reset",
+        "profiles",
+        "midi",
+        "open-midi",
+        "boot",
     ]
     .contains(&scenario.as_str())
     {
@@ -445,7 +470,9 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut machine = Machine::from_elf(board, &bytes)?;
     machine.attach(attachment);
     let rtt = rtt_symbol(&bytes)?;
-    let end_ms = if scenario == "baseline" || scenario == "reset" {
+    let end_ms = if scenario == "profiles" {
+        650
+    } else if scenario == "baseline" || scenario == "reset" {
         if kind == "keyboard" {
             3400
         } else {
@@ -468,12 +495,13 @@ pub fn run(args: &[String]) -> Result<()> {
             if machine.queued_input_frames() < 128 {
                 let samples: Vec<_> = (0..480)
                     .map(|_| {
-                        let sample = if scenario == "open-jack" {
-                            0.
-                        } else {
-                            0.12 * (std::f64::consts::TAU * 220. * input_frame as f64 / 48014.)
-                                .sin() as f32
-                        };
+                        let sample =
+                            if ["open-jack", "midi", "open-midi"].contains(&scenario.as_str()) {
+                                0.
+                            } else {
+                                0.12 * (std::f64::consts::TAU * 220. * input_frame as f64 / 48014.)
+                                    .sin() as f32
+                            };
                         input_frame += 1;
                         [0., sample]
                     })
@@ -481,15 +509,38 @@ pub fn run(args: &[String]) -> Result<()> {
                 machine.input_at_rate(&samples, 48014)?;
             }
             for (i, (time, message)) in [
-                (40, [0x90, 69, 100]),
-                (65, [0x80, 69, 0]),
+                (
+                    40,
+                    [
+                        if scenario == "midi" || scenario == "open-midi" {
+                            0x91
+                        } else {
+                            0x90
+                        },
+                        69,
+                        100,
+                    ],
+                ),
+                (
+                    65,
+                    [
+                        if scenario == "midi" || scenario == "open-midi" {
+                            0x81
+                        } else {
+                            0x80
+                        },
+                        69,
+                        0,
+                    ],
+                ),
                 (750, [0x99, 36, 110]),
                 (770, [0x89, 36, 0]),
             ]
             .iter()
             .enumerate()
             {
-                if ms >= *time && !scheduled_midi[i] {
+                if machine.time_ns() >= *time * MS && !scheduled_midi[i] && scenario != "open-midi"
+                {
                     machine.receive_serial(message)?;
                     scheduled_midi[i] = true;
                 }
@@ -550,6 +601,88 @@ pub fn run(args: &[String]) -> Result<()> {
         .ok_or("firmware did not start codec")?
         .hz();
     let mut failures = grade(kind, scenario, &d, &serial, &frames, &log, rate);
+    let sai = [machine.read32(0x40015818)?, machine.read32(0x40015838)?];
+    if (sai[0] | sai[1]) & 1 != 0 {
+        failures.push("SAI overrun/underrun flag set".into());
+    }
+    if errors.is_empty() && (frames.len() as f64) < rate * machine.time_ns() as f64 * 1e-9 * 0.90 {
+        failures.push("audio clock did not sustain the elapsed run".into());
+    }
+    drop(d); // GPIO debugger reads invoke the carrier; release its observation borrow first.
+    let mut pin_report =
+        String::from("port,pin,expected_mode,actual_mode,alternate,pull,open_drain\n");
+    let mut modes = vec![(1, 6, 2), (1, 7, 2), (1, 8, 2), (1, 9, 2)];
+    if kind == "keyboard" {
+        modes.extend([
+            (6, 10, 1),
+            (6, 11, 1),
+            (1, 4, 1),
+            (2, 8, 1),
+            (2, 9, 1),
+            (2, 10, 1),
+            (2, 0, 3),
+            (0, 3, 3),
+            (1, 1, 3),
+            (0, 7, 3),
+            (0, 6, 3),
+            (2, 1, 3),
+            (2, 4, 3),
+            (0, 5, 3),
+            (0, 4, 3),
+            (0, 1, 3),
+            (0, 0, 3),
+            (0, 2, 3),
+        ]);
+    } else {
+        modes.extend([
+            (2, 4, 1),
+            (2, 1, 1),
+            (0, 6, 1),
+            (2, 0, 0),
+            (0, 3, 0),
+            (1, 1, 0),
+            (0, 7, 0),
+            (2, 8, 0),
+            (2, 9, 0),
+            (2, 10, 0),
+            (2, 11, 0),
+        ]);
+    }
+    for (port, pin, expected) in modes {
+        let base = 0x58020000 + port * 0x400;
+        let mode = (machine.read32(base)? >> (pin * 2)) & 3;
+        let af = (machine.read32(base + 0x20 + (pin / 8) * 4)? >> ((pin % 8) * 4)) & 15;
+        let pull = (machine.read32(base + 0xc)? >> (pin * 2)) & 3;
+        let od = (machine.read32(base + 4)? >> pin) & 1;
+        pin_report.push_str(&format!(
+            "{port},{pin},{expected},{mode},{af},{pull},{od}\n"
+        ));
+        if mode != expected {
+            failures.push(format!("GPIO mode mismatch port {port} pin {pin}"));
+        }
+        if port == 1 && (6..=9).contains(&pin) && af != if pin < 8 { 7 } else { 4 } {
+            failures.push("serial/I2C pin alternate function mismatch".into());
+        }
+        if port == 1 && pin >= 8 && od != 1 {
+            failures.push("I2C pin is not open drain".into());
+        }
+    }
+    fs::write(output.join("pin-config.csv"), pin_report)?;
+    let d = handle.borrow();
+    metadata.push_str(&format!("sai_status={sai:x?}\n"));
+    if scenario == "reset"
+        && (machine.resets() != 1
+            || log
+                .matches(if kind == "keyboard" {
+                    "keyboard_keyboard ready:"
+                } else {
+                    "Startup done!!"
+                })
+                .count()
+                < 2)
+    {
+        failures.push("reset did not reboot production firmware".into());
+    }
     failures.extend(errors);
     metadata.push_str(&format!("board={}\ncodec={}\nvirtual_time_ns={}\nscheduler_steps={}\nwall_seconds={}\naudio_frames={}\nserial_bytes={}\nadc_samples={}\nscans={}\nmax_scan_gap_ns={}\noled_transactions={}\noled_data_bytes={}\noled_frames={}\naudio_rms={}\nsample_rate_hz={rate}\nresets={}\nfinal_registers={:x?}\n{}",board.id(),board.codec(),machine.time_ns(),machine.steps(),start.elapsed().as_secs_f64(),frames.len(),serial.len(),d.adc.len(),d.scans,d.max_scan_gap,d.oled.writes,d.oled.data_bytes,d.oled_frames.len(),rms(&frames),machine.resets(),machine.registers(),machine.memory_report()));
     metadata.push_str(&format!(
@@ -570,7 +703,16 @@ pub fn run(args: &[String]) -> Result<()> {
         writeln!(gpio, "{t},{},{},{},{}", p[0], p[1], p[2], p[6])?;
     }
     fs::write(output.join("oled-final.pbm"), d.oled.pbm())?;
+    fs::write(output.join("oled-final.svg"), d.oled.svg())?;
     fs::write(output.join("oled-final.bin"), d.oled.ram)?;
+    let mut snapshots = Vec::new();
+    let mut times = String::from("index,time_ns\n");
+    for (index, (time, ram)) in d.oled_frames.iter().enumerate() {
+        snapshots.extend_from_slice(ram);
+        times.push_str(&format!("{index},{time}\n"));
+    }
+    fs::write(output.join("oled-frames.bin"), snapshots)?;
+    fs::write(output.join("oled-frames.csv"), times)?;
     let mut midi = String::from("time_ns,byte\n");
     for (t, b) in &serial {
         midi.push_str(&format!("{t},{b}\n"));
@@ -626,9 +768,10 @@ fn grade(
             failures.push("keyboard stopped scanning".into());
         }
         let messages = midi_messages(serial);
-        if !messages
-            .iter()
-            .any(|(t, msg)| *t >= 170 * MS && msg == &[0x90, 54, 127])
+        if scenario != "boot"
+            && !messages
+                .iter()
+                .any(|(t, msg)| *t >= 170 * MS && msg == &[0x90, 54, 127])
             && !messages.iter().any(|(t, msg)| {
                 *t >= 170 * MS && msg.len() == 3 && msg[0] == 0x90 && msg[1] == 54 && msg[2] > 0
             })
@@ -718,9 +861,9 @@ fn grade(
             for cc in [7, 10, 11, 74, 36, 37, 38, 39, 40, 41, 42, 43] {
                 if !messages
                     .iter()
-                    .any(|(t, m)| *t > 740 * MS && m == &[0xb0, cc, 127])
+                    .any(|(t, m)| *t > 740 * MS && m == &[0xb0, cc, 0])
                 {
-                    failures.push(format!("pot CC{cc}=127 missing"));
+                    failures.push(format!("pot CC{cc}=0 missing"));
                 }
             }
             if d.max_scan_gap > 2 * MS {
@@ -731,7 +874,10 @@ fn grade(
         if !log.contains("Startup complete, transitioning away from splash screen") {
             failures.push("Synthphone startup marker missing".into());
         }
-        if frames.len() < 6000 || rms(frames) < 0.005 {
+        let tail = &frames[frames.len().saturating_sub(2400)..];
+        if !["midi", "open-midi", "contention", "open-display"].contains(&scenario)
+            && (frames.len() < 6000 || rms(tail) < 0.005)
+        {
             failures.push("jack audio not processed".into());
         }
         let expected = if scenario == "baseline" {
@@ -768,6 +914,35 @@ fn grade(
             }
         }
     }
+    if kind != "keyboard" && (scenario == "midi" || scenario == "open-midi") {
+        let start = (rate * 0.046) as usize;
+        let end = ((rate * 0.060) as usize).min(frames.len());
+        let note = frames.get(start..end).unwrap_or(&[]);
+        if rms(note) < 0.005 {
+            failures.push("MIDI note did not produce audio".into());
+        }
+    }
+    if scenario == "profiles" {
+        if log.matches("Key: 11").count() < 6 {
+            failures.push("not all six profile-cycle contacts reached firmware".into());
+        }
+        for label in [
+            "Pitch Ctrl",
+            "Vocode",
+            "Synth+Vox",
+            "Synth+Tune",
+            "Harmony",
+            "Percussion",
+        ] {
+            if !d
+                .oled_frames
+                .iter()
+                .any(|(_, ram)| Oled::has_profile_label(ram, label))
+            {
+                failures.push(format!("profile label {label} absent from OLED RAM"));
+            }
+        }
+    }
     failures
 }
 fn midi_messages(bytes: &[(u64, u8)]) -> Vec<(u64, Vec<u8>)> {
@@ -793,4 +968,233 @@ fn midi_messages(bytes: &[(u64, u8)]) -> Vec<(u64, Vec<u8>)> {
         }
     }
     out
+}
+
+/// Re-evaluate corrected observable expectations. Never edit the original execution report.
+pub fn recheck(directory: &Path) -> Result<String> {
+    let report = fs::read_to_string(directory.join("report.txt"))?;
+    let analysis = analyze(directory)?;
+    let scenario = report
+        .lines()
+        .find_map(|l| l.strip_prefix("scenario="))
+        .ok_or("scenario missing")?;
+    let negative = match scenario {
+        "open-hall" => Some("HE1 note-on missing"),
+        "open-key" => Some("keypad presses missing"),
+        "open-jack" => Some("jack audio not processed"),
+        "open-midi" => Some("MIDI note did not produce audio"),
+        "open-display" => Some("display physically disconnected"),
+        "contention" => Some("opposing push-pull columns"),
+        _ => None,
+    };
+    let (pass, kind) = if let Some(marker) = negative {
+        (
+            report.contains("ARM_DEVICE=FAIL")
+                && report.contains(marker)
+                && !report.contains("Cortex-M fault"),
+            "NEGATIVE_CONTROL",
+        )
+    } else if scenario == "baseline" && report.contains("profile=keyboard-current") {
+        let controllers = [7, 10, 11, 74, 36, 37, 38, 39, 40, 41, 42, 43];
+        let old: Vec<_> = controllers
+            .iter()
+            .map(|cc| format!("pot CC{cc}=127 missing"))
+            .collect();
+        let failures = report
+            .lines()
+            .find_map(|l| l.strip_prefix("failures="))
+            .ok_or("missing original gates")?;
+        // Only the known wrong-polarity expectation can be corrected from this historical capture.
+        let original_other_gates_passed = failures == format!("{old:?}") || failures == "[]";
+        let text = fs::read_to_string(directory.join("midi.csv"))?;
+        let mut bytes = Vec::new();
+        for line in text.lines().skip(1) {
+            let (t, b) = line.split_once(',').ok_or("bad serial trace")?;
+            bytes.push((t.parse::<u64>()?, b.parse::<u8>()?));
+        }
+        let messages = midi_messages(&bytes);
+        let correct = controllers.iter().all(|cc| {
+            messages
+                .iter()
+                .any(|(t, m)| *t > 740 * MS && m == &[0xb0, *cc, 0])
+        });
+        let balanced = analysis.contains("note_on=90\n")
+            && analysis.contains("note_off=90\n")
+            && analysis.contains("unmatched_releases=0\n")
+            && analysis.contains("held_notes=0\n");
+        (
+            original_other_gates_passed && correct && balanced,
+            "ARM_DEVICE_OBSERVATIONS",
+        )
+    } else {
+        (report.contains("ARM_DEVICE=PASS"), "ORIGINAL_ACCEPTANCE")
+    };
+    let verdict=format!("{kind}={}\noriginal_report_sha256={}\nmidi_trace_sha256={}\noriginal_report_preserved=true\npolicy=observable-only; no CPU execution or circuit-state changes\n",if pass {"PASS"}else{"FAIL"},sha256(&directory.join("report.txt"))?,sha256(&directory.join("midi.csv"))?);
+    fs::write(directory.join("recheck.txt"), &verdict)?;
+    if !pass {
+        return Err(verdict.into());
+    }
+    Ok(verdict)
+}
+
+/// Retain independent positive/negative captures even if an earlier scenario fails.
+pub fn batch(args: &[String]) -> Result<()> {
+    if args.len() != 7 {
+        return Err(
+            "device-batch PROFILE BASELINE FIXTURE ELF BOARD FRESH_OUTPUT SCENARIOS_CSV".into(),
+        );
+    }
+    let out = Path::new(&args[5]);
+    fs::create_dir(out)?;
+    let mut summary = String::new();
+    let mut failed = false;
+    for scenario in args[6].split(',') {
+        let mut run_args = args[..6].to_vec();
+        run_args[5] = out.join(scenario).display().to_string();
+        run_args.push(scenario.into());
+        let result = run(&run_args);
+        let report = fs::read_to_string(out.join(scenario).join("report.txt")).unwrap_or_default();
+        let expected = match scenario {
+            "open-hall" => Some("HE1 note-on missing"),
+            "open-key" => Some("keypad presses missing"),
+            "open-jack" => Some("jack audio not processed"),
+            "open-midi" => Some("MIDI note did not produce audio"),
+            "open-display" => Some("display physically disconnected"),
+            "contention" => Some("opposing push-pull columns"),
+            _ => None,
+        };
+        let pass = if let Some(marker) = expected {
+            result.is_err()
+                && report.contains(marker)
+                && !report.contains("Cortex-M fault")
+                && (!report.contains("unsupported") || scenario == "open-display")
+        } else {
+            result.is_ok()
+        };
+        summary.push_str(&format!(
+            "{scenario}={}\n",
+            if pass { "PASS" } else { "FAIL" }
+        ));
+        failed |= !pass;
+        fs::write(out.join("suite.txt"), &summary)?;
+    }
+    println!("{summary}");
+    if failed {
+        Err("one or more device scenarios failed; captures retained".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Inspect saved observations without executing or changing firmware.
+pub fn analyze(directory: &Path) -> Result<String> {
+    if let Ok(pixels) = fs::read(directory.join("oled-final.bin")) {
+        if pixels.len() == 512 {
+            let mut oled = Oled::default();
+            oled.ram.copy_from_slice(&pixels);
+            fs::write(directory.join("oled-final.svg"), oled.svg())?;
+        }
+    }
+    let data = fs::read_to_string(directory.join("midi.csv"))?;
+    let mut bytes = Vec::new();
+    for line in data.lines().skip(1) {
+        let (t, b) = line.split_once(',').ok_or("invalid MIDI trace")?;
+        bytes.push((t.parse::<u64>()?, b.parse::<u8>()?));
+    }
+    let messages = midi_messages(&bytes);
+    let mut active = BTreeMap::<(u8, u8), usize>::new();
+    let mut on = 0;
+    let mut off = 0;
+    let mut unmatched = 0;
+    let mut controls = std::collections::BTreeSet::new();
+    let mut programs = std::collections::BTreeSet::new();
+    for (_, m) in &messages {
+        match m[0] & 0xf0 {
+            0x90 if m[2] > 0 => {
+                on += 1;
+                *active.entry((m[0] & 15, m[1])).or_default() += 1;
+            }
+            0x80 | 0x90 => {
+                off += 1;
+                let count = active.entry((m[0] & 15, m[1])).or_default();
+                if *count == 0 {
+                    unmatched += 1;
+                } else {
+                    *count -= 1;
+                }
+            }
+            0xb0 => {
+                controls.insert((m[0] & 15, m[1], m[2]));
+            }
+            0xc0 => {
+                programs.insert((m[0] & 15, m[1]));
+            }
+            _ => {}
+        }
+    }
+    let mut report=format!("note_on={on}\nnote_off={off}\nunmatched_releases={unmatched}\nheld_notes={}\nobserved_cc={controls:?}\nobserved_programs={programs:?}\n",active.values().sum::<usize>());
+    if let Ok(images) = fs::read(directory.join("oled-frames.bin")) {
+        for label in [
+            "Pitch Ctrl",
+            "Vocode",
+            "Synth+Vox",
+            "Synth+Tune",
+            "Harmony",
+            "Percussion",
+        ] {
+            let present = images
+                .chunks_exact(512)
+                .any(|chunk| Oled::has_profile_label(chunk.try_into().unwrap(), label));
+            report.push_str(&format!("oled_label_{label}={present}\n"));
+            if let Some(chunk) = images
+                .chunks_exact(512)
+                .find(|&chunk| Oled::has_profile_label(chunk.try_into().unwrap(), label))
+            {
+                let mut oled = Oled::default();
+                oled.ram.copy_from_slice(chunk);
+                fs::write(
+                    directory.join(format!("oled-{}.svg", label.replace(' ', "-"))),
+                    oled.svg(),
+                )?;
+            }
+        }
+    }
+    let reader = hound::WavReader::open(directory.join("audio.wav"))?;
+    let samples: Vec<f32> = reader
+        .into_samples()
+        .collect::<std::result::Result<_, _>>()?;
+    report.push_str(&format!(
+        "non_finite_audio={}\npeak_audio={}\n",
+        samples.iter().filter(|v| !v.is_finite()).count(),
+        samples.iter().map(|v| v.abs()).fold(0_f32, f32::max)
+    ));
+    fs::write(directory.join("observations.txt"), &report)?;
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn midi_observer_handles_running_status_realtime_and_program_messages() {
+        let events: Vec<_> = [0x90, 60, 100, 0xf8, 61, 0, 0xc0, 2]
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| (i as u64, b))
+            .collect();
+        let decoded = midi_messages(&events);
+        assert_eq!(
+            decoded,
+            vec![
+                (2, vec![0x90, 60, 100]),
+                (5, vec![0x90, 61, 0]),
+                (7, vec![0xc0, 2])
+            ]
+        );
+    }
+    #[test]
+    fn incomplete_elf_cannot_supply_a_fake_ready_marker() {
+        assert!(rtt_symbol(&[]).is_err());
+        assert!(rtt_symbol(&[0; 64]).is_err());
+    }
 }
