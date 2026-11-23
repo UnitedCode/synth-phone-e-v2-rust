@@ -1,0 +1,8 @@
+note_on=0
+note_off=0
+unmatched_releases=0
+held_notes=0
+observed_cc={}
+observed_programs={}
+non_finite_audio=0
+peak_audio=0.8000001

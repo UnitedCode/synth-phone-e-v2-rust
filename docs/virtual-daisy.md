@@ -1,5 +1,9 @@
 # Virtual Daisy
 
+For production firmware connected to the Synthphone carrier, OLED, controls,
+MIDI and audio, follow the [complete virtual-device tests](../circuits/virtual-devices.md).
+Those tests pin the native Rust SDK independently of this older reference submodule.
+
 Virtual Daisy is maintained in [UnitedCode/virtual-daisy](https://github.com/UnitedCode/virtual-daisy).
 This project pins it as a Git submodule at `tools/virtual-daisy`.
 

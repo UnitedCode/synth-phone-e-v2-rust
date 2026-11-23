@@ -1,5 +1,8 @@
 # Synthphone-E circuit lab
 
+For the connected production firmware, controls, display, MIDI and audio tests,
+use the [complete virtual-device guide](virtual-devices.md).
+
 Test the existing circuit before redesigning it. Start here:
 
 ```sh
@@ -93,9 +96,10 @@ channel controls are not yet actively stimulated by this adapter.
 `handle.borrow_mut()` / `handle.borrow()`. Change inputs between bounded machine
 runs; do not borrow the handle while executing the machine.
 
-SPICE uses explicit scan stimuli, and the adapter supplies digital contact
-levels. They do **not** run a synchronized CPU/analog feedback loop. Full
-production ARM execution with these adapters is `NOT_RUN` for this baseline.
+The original circuit-only suite uses explicit SPICE stimuli and digital contact
+adapters. The separate [device runner](virtual-devices.md) executes the actual
+ARM firmware against the connected circuit and control models. Historical
+circuit-only reports retain their original `NOT_RUN` labels.
 The existing [firmware emulator](../docs/virtual-daisy.md) and
 [audio lab](../docs/audio-testing.md) remain independently usable.
 

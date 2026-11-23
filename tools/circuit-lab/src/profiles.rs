@@ -97,7 +97,7 @@ pub(crate) fn decoder(g: &Graph, pre_repair: bool) -> Result<()> {
     }
     Ok(())
 }
-fn synth_wiring(g: &Graph) -> Result<()> {
+pub(crate) fn synth_wiring(g: &Graph) -> Result<()> {
     for (pin, net) in [
         (22, "row1"),
         (23, "row2"),

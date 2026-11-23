@@ -9,6 +9,9 @@ fn main() {
         "src/fixture.rs",
         "src/carrier.rs",
         "src/spice.rs",
+        "src/electrical.rs",
+        "src/oled.rs",
+        "src/device.rs",
     ];
     let mut hashes = Vec::new();
     for file in files {
