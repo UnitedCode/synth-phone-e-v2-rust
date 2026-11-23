@@ -59,6 +59,7 @@ jobs:
         env:
           VIRTUAL_DAISY_FIRMWARE: ${{ env.VIRTUAL_DAISY_ELF }}
           VIRTUAL_DAISY_AUDIO_BOARD: ${{ matrix.board }}
+          VIRTUAL_DAISY_EXPECTED_AUDIO_HZ: "48187.487053149"
           VIRTUAL_DAISY_AUDIO_OUT: ${{ github.workspace }}/audio-lab-results/daisy/${{ matrix.board }}/rust
         run: |
           mkdir -p "audio-lab-results/daisy/${{ matrix.board }}"
@@ -90,6 +91,7 @@ jobs:
             audio-lab-results/daisy/${{ matrix.board }}/*.rtt
             audio-lab-results/daisy/${{ matrix.board }}/*.wav
             audio-lab-results/daisy/${{ matrix.board }}/*.stats
+            audio-lab-results/daisy/${{ matrix.board }}/*.f32le
             audio-lab-results/daisy/${{ matrix.board }}/rust/*
             audio-lab-results/daisy/${{ matrix.board }}/*.repl
             audio-lab-results/daisy/${{ matrix.board }}/architecture-probe.bin

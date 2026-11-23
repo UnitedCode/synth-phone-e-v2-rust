@@ -15,6 +15,7 @@ export VIRTUAL_DAISY_ELF="$PWD/target/thumbv7em-none-eabihf/release/app"
 LAB_HOST=$(rustc -vV | sed -n 's/^host: //p')
 mkdir -p audio-lab-results
 VIRTUAL_DAISY_FIRMWARE="$VIRTUAL_DAISY_ELF" \
+VIRTUAL_DAISY_EXPECTED_AUDIO_HZ=48187.487053149 \
 VIRTUAL_DAISY_AUDIO_OUT="$PWD/audio-lab-results/daisy-rust" \
 cargo test --release --locked --manifest-path tools/virtual-daisy/Cargo.toml \
   --target "$LAB_HOST" --test firmware_audio -- --ignored --nocapture
@@ -25,6 +26,8 @@ WAVs and board reports. The test supplies a deterministic input recording and
 an explicit I²C sink at the display address. It checks both audio channels,
 CPU fault flags and SAI FIFO errors; it does not inspect display pixels or play
 audio. Set `VIRTUAL_DAISY_AUDIO_BOARD=rev5` to check one board.
+The expected rate comes from the pinned HAL's programmed fractional PLL and
+matches `src/constants.rs`; the test requires agreement within one ppm.
 
 ## Compare with Renode
 
