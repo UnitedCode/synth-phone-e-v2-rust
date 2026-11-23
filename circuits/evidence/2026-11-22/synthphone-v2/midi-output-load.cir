@@ -1,0 +1,5 @@
+MIDI RX output load only -- not an optocoupler timing model
+Vrail vcc 0 3.3
+Rpull vcc rx 220
+Vsink rx 0 0.2
+.end

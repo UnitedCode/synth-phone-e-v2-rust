@@ -1,0 +1,19 @@
+[package]
+name = "circuit-workbench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = ["spice"]
+spice = []
+daisy = ["dep:virtual-daisy"]
+
+[dependencies]
+virtual-daisy = { git = "https://github.com/UnitedCode/virtual-daisy", rev = "a1c4b61c20355d54d9ca608331f307bae67a4a2e", optional = true }
+
+[[bin]]
+name = "circuit-workbench"
+path = "src/main.rs"

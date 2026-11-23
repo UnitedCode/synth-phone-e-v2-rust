@@ -73,6 +73,9 @@ and musical feel. See the [conformance gaps](docs/daisy-conformance.md).
 
 ## Find your way around
 
+For frozen circuit models, electrical tests and isolated redesign experiments,
+start with the [circuit lab](circuits/README.md).
+
 | Location | Purpose |
 | --- | --- |
 | [src/main.rs](src/main.rs) | RTIC tasks, hardware setup and audio routing |

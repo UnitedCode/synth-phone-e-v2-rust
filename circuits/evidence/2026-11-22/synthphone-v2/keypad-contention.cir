@@ -1,0 +1,8 @@
+Two held keys on same row: actual push-pull scan policy, declared impedances
+Vrail vcc 0 3.3
+Vlow lo 0 0
+Vhigh hi 0 3.3
+Rlo lo row 43
+Rhi hi row 43
+Rpull row vcc 40000
+.end
